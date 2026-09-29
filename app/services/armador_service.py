@@ -378,6 +378,83 @@ def insumo_origen(productos_origen=None, productos_marca=None,
     }
 
 
+# ── Caché del ROP (tanda G, 2026-09-29) ──────────────────────────────────────
+#
+# `rop_dual` lee un año de venta diaria, las existencias, las OCs y los lead
+# times: con el volumen de producción son decenas de segundos, y la bandeja,
+# el porqué de un SKU, el contenedor y la temporada lo piden entero. Se guarda
+# el resultado por proceso, con una clave que cambia apenas cambia algo que el
+# ROP lee (`sello_de_datos_rop`: lecturas de Siesa, existencias, OCs,
+# contenedores, decisiones del comprador, catálogo, variables), o el día. Un
+# techo de horas por si algo escapa del sello. `COMPRAS_CACHE_ROP=false` lo
+# apaga; en los tests nace apagado (cada test arma su mundo).
+CACHE_ROP_HORAS = 6
+_CACHE_ROP = {}
+_ENV_ROP = ('ROP_', 'COMPRAS_', 'DEMANDA_', 'KARDEX_DIAS_FRESCURA', 'TRM_COP_USD',
+            'FACTOR_NACIONALIZACION', 'CONNEKTA_BODEGA')
+
+
+def _cache_rop_activo() -> bool:
+    from app.services.kardex_service import cache_compras_activa
+    return cache_compras_activa()
+
+
+def sello_de_datos_rop() -> tuple:
+    """Lo que cambia cuando cambia algo que el ROP lee. Cada parte la da su
+    dueño (la venta: `fuente_de_demanda`; lo que viene: `sello_en_camino`);
+    acá solo las existencias y el catálogo, que el ROP ya suma. Consultas de
+    agregado: milisegundos."""
+    from sqlalchemy import func
+    from app.models.producto import Producto
+    from app.models.registro_sync import RegistroSync
+    from app.models.stock_siesa import StockSiesa
+    from app.services.compras_fuentes import default_lead_time, sello_en_camino
+    from app.services.demanda_fuentes import fuente_de_demanda
+    q = db.session.query
+    fuente = fuente_de_demanda()
+    partes = [
+        q(func.max(RegistroSync.id)).scalar(),
+        (fuente.get('fuente'), repr(fuente.get('cobertura')), fuente.get('al_dia'),
+         fuente.get('parcial')),
+        q(func.count(StockSiesa.id), func.sum(StockSiesa.existencia),
+          func.sum(StockSiesa.comprometido), func.sum(StockSiesa.salida_sin_conf)).one(),
+        sello_en_camino(),
+        q(func.max(Producto.id), func.count(Producto.origen), func.count(Producto.marca_codigo),
+          func.count(Producto.marca_siesa)).one(),
+        tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith(_ENV_ROP))),
+        tuple(sorted(default_lead_time('NACIONAL').items())),
+        R_CHINA_DIAS,
+    ]
+    return tuple(tuple(x) if hasattr(x, '_fields') else x for x in partes)
+
+
+def _cache_rop_clave(nivel_servicio):
+    if not _cache_rop_activo():
+        return None
+    try:
+        return (float(nivel_servicio), _dia_operativo(), sello_de_datos_rop())
+    except Exception as e:                                    # noqa: BLE001
+        logger.warning('[ARMADOR] sin caché del ROP (no se pudo sellar): %s', e)
+        return None
+
+
+def _cache_rop_leer(clave):
+    if clave is None:
+        return None
+    x = _CACHE_ROP.get(clave)
+    if x is None or (datetime.utcnow() - x[0]).total_seconds() > CACHE_ROP_HORAS * 3600:
+        return None
+    # Copia de primer nivel: quien lo lea no toca el guardado.
+    return dict(x[1], cache={'calculado_utc': x[0].isoformat(), 'de_cache': True})
+
+
+def _cache_rop_guardar(clave, resultado):
+    if clave is None:
+        return
+    _CACHE_ROP.clear()               # uno por proceso: el del día y los datos de hoy
+    _CACHE_ROP[clave] = (datetime.utcnow(), resultado)
+
+
 def _resumen_horizonte(horizonte_por_sku) -> dict:
     """La declaración de la demanda del horizonte para el resultado de
     `rop_dual`: de qué método salió cada SKU, sin recalcular nada."""
@@ -440,6 +517,15 @@ class ArmadorService:
 
         Returns: {nacional: [...], china: [...], sigma_lt_china}
         """
+        # Un resultado por día y por datos (tanda G, 2026-09-29): la bandeja,
+        # el porqué de un SKU, el contenedor y la temporada llaman esto
+        # entero; se recalcula solo cuando cambia algo que el ROP lee
+        # (`sello_de_datos_rop`) o cambia el día.
+        _clave_cache = _cache_rop_clave(nivel_servicio)
+        _hit = _cache_rop_leer(_clave_cache)
+        if _hit is not None:
+            return _hit
+
         from app.services.kardex_service import KardexService
         from app.models.producto import Producto
 
@@ -474,12 +560,16 @@ class ArmadorService:
         # stock, no sobre días calendario. Antes se dividía por 365 con los días
         # agotados aportando cero — el sistema aprendía a comprar poco justo de
         # lo que siempre faltaba.
-        demanda_por_sku = KardexService.demanda_descensurada(
-            ventana_meses=12, nivel='red')
         # De qué fuente salió la demanda y qué decisiones aguanta: la declara
         # `demanda_fuentes` y viaja con el resultado (como `insumo_en_camino`).
+        # UNA lectura de la venta por corrida (P1-F): la demanda de 12 meses y
+        # la del horizonte salen de la misma (`lectura_demanda`).
         from app.services.demanda_fuentes import fuente_de_demanda
+        from app.services.kardex_service import lectura_demanda
         insumo_demanda = fuente_de_demanda()
+        lectura = lectura_demanda(insumo_demanda)
+        demanda_por_sku = KardexService.demanda_descensurada(
+            ventana_meses=12, nivel='red', fuente=insumo_demanda, lectura=lectura)
 
         # Stock actual — existencia VENDIBLE, lo que ya tiene dueño y lo que
         # viene. `posicion_inventario` es la ÚNICA respuesta a «¿cuánto hay y
@@ -556,7 +646,8 @@ class ArmadorService:
             r_hz = R_CHINA_DIAS if es_china else _ciclo_nac['dias']
             horizontes[ref] = _lt_info['lt_dias'] + r_hz
             previos.append((ref, dem, es_china, _lt_info))
-        horizonte_por_sku = demanda_para_horizonte(horizontes, base=demanda_por_sku)
+        horizonte_por_sku = demanda_para_horizonte(horizontes, base=demanda_por_sku,
+                                                   fuente=insumo_demanda, serie=lectura)
 
         for ref, dem, es_china, _lt_info in previos:
             d_hist = dem['d_avg']        # u/día sobre días CON stock (12 meses)
@@ -687,6 +778,9 @@ class ArmadorService:
                 # Las OCs que cuentan (la más atrasada primero) y las que no.
                 'ocs_en_camino': _det.get('lineas_oc') or [],
                 'ocs_no_contadas': _det.get('lineas_no_contadas') or [],
+                # «Ya se pidió» de la bandeja y su estado en `en_camino`
+                # (CUENTA · OC_EN_SIESA · VENCIDO_SIN_OC).
+                'decision_pedido': _det.get('decision_pedido'),
                 'lt_dias': lt,
                 'sigma_lt': sigma_lt,
                 # Procedencia del lead time: de qué nivel salió y con cuántas
@@ -776,7 +870,7 @@ class ArmadorService:
                 'todos como nacionales. `Producto.origen` no tiene escritor.',
                 len(productos_origen))
 
-        return {
+        resultado = {
             'nivel_servicio': nivel_servicio,
             'z_score': round(z, 3),
             'insumo_origen': _insumo,
@@ -836,6 +930,8 @@ class ArmadorService:
                 'items': resultados_chi,
             },
         }
+        _cache_rop_guardar(_clave_cache, resultado)
+        return resultado
 
     @staticmethod
     def armar_contenedor(tipo_contenedor: str = '40STD',

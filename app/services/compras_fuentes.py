@@ -195,7 +195,7 @@ def en_camino(skus=None, bodegas=None) -> dict:
 
       3. `DECISION_WMS` (2026-09-27) — «lo pedí» registrado en la bandeja
          (`compras_decisiones`) mientras la OC no aparezca en el espejo:
-         cuenta `COMPRAS_PEDIDO_EN_CAMINO_DIAS` (7) desde el día de la
+         cuenta hasta lead time + 2σ del proveedor desde el día de la
          decisión. Deja de contarse cuando aparece en el espejo una OC de ese
          SKU del día de la decisión en adelante (o la OC que el comprador
          escribió) — desde ahí la cuenta la fuente 1 —, o cuando vence (y se
@@ -262,7 +262,8 @@ def en_camino(skus=None, bodegas=None) -> dict:
     dec_de = dec['detalle'] if dec else {}
 
     por_sku, detalle = {}, {}
-    for ref in set(por_oc) | set(por_cont) | set(sin_unidad) | set(excluido) | set(por_dec):
+    for ref in (set(por_oc) | set(por_cont) | set(sin_unidad) | set(excluido) | set(por_dec)
+                | set(dec_de)):
         cuenta = ref in por_oc or ref in por_cont or ref in sin_unidad or ref in por_dec
         total = (por_oc.get(ref, Decimal(0)) + por_cont.get(ref, Decimal(0))
                  + por_dec.get(ref, Decimal(0)))
@@ -336,6 +337,29 @@ def en_camino(skus=None, bodegas=None) -> dict:
             'sync_oc': sync,
         },
     }
+
+
+def sello_en_camino() -> tuple:
+    """Cambia cuando cambia algo de lo que `en_camino` y `lead_time` leen: el
+    espejo de OCs, los contenedores, las recepciones, los proveedores y las
+    decisiones del comprador. Para la caché del ROP (tanda G)."""
+    from sqlalchemy import func
+    from app.models.acuerdo_marco import Proveedor
+    from app.models.compras_fuentes import OcLineaSiesa
+    from app.models.importacion import Contenedor, ItemEnTransito
+    from app.models.recepcion import RecepcionMercancia
+    from app.services.compras_decisiones import sello as sello_decisiones
+    q = db.session.query
+    return (
+        tuple(q(func.max(OcLineaSiesa.id), func.max(OcLineaSiesa.vista_en),
+                func.max(OcLineaSiesa.cerrada_en), func.sum(OcLineaSiesa.pendiente_base)).one()),
+        tuple(q(func.max(ItemEnTransito.id), func.count(ItemEnTransito.id)).one()),
+        tuple(tuple(x) for x in q(Contenedor.id, Contenedor.estado,
+                                  Contenedor.fecha_recepcion_cedi).all()),
+        q(func.max(RecepcionMercancia.fecha_confirmacion)).scalar(),
+        q(func.max(Proveedor.id)).scalar(),
+        sello_decisiones(),
+    )
 
 
 def _dias_env(nombre, defecto):
@@ -565,7 +589,8 @@ def _decisiones_en_camino(filtro_skus, pedidas) -> dict:
             info = {'decision_id': p['id'], 'unidades': float(p['unidades'] or 0),
                     'dia': p['dia'].isoformat(), 'oc_siesa': p['oc_siesa'],
                     'usuario_nombre': p['usuario_nombre'],
-                    'vigente_hasta': p['vigente_hasta'].isoformat()}
+                    'vigente_hasta': p['vigente_hasta'].isoformat(),
+                    'vence': p['vigente_hasta'].isoformat()}
             if aparecio:
                 cubiertos += 1
                 detalle[ref] = dict(info, estado='OC_EN_SIESA')
@@ -579,9 +604,10 @@ def _decisiones_en_camino(filtro_skus, pedidas) -> dict:
     dias = cd.dias_pedido_en_camino()
     return {'por_sku': por_sku, 'detalle': detalle, 'cubiertos': cubiertos,
             'vencidos': vencidos, 'dias': dias['dias'],
-            'nota': (f'{vencidos} «lo pedí» de la bandeja pasaron {dias["dias"]} días sin que '
-                     'la orden apareciera en Siesa: ya no se cuentan como en camino. '
-                     'Revise si la orden se hizo.') if vencidos else None}
+            'nota': (f'{vencidos} «ya se pidió» de la bandeja pasaron lo que tarda en llegar '
+                     'sin que la orden apareciera en Siesa: ya no se cuentan como en camino '
+                     'y la línea vuelve marcada. Revise si la orden se hizo.')
+            if vencidos else None}
 
 
 def _contenedores_en_camino(filtro_skus, pedidas, abiertas_citables) -> dict:

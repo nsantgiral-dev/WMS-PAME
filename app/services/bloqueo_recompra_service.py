@@ -124,7 +124,13 @@ class BloqueoRecompraService:
 
         # Velocidad de 12 meses por referencia — la demanda neta de la red.
         demanda = KardexService.demanda_descensurada(12, 'red')
-        con_venta = {ref for ref, d in demanda.items() if d['demanda_neta'] > 0}
+        # La venta de proyecto (licitaciones, contratación) no es demanda
+        # repetible, pero SÍ es venta: un SKU que solo se vende por licitación
+        # no está muerto y no se bloquea (2026-09-29).
+        con_venta = {ref for ref, d in demanda.items()
+                     if d['demanda_neta'] > 0 or (d.get('venta_proyecto') or 0) > 0}
+        solo_proyecto = {ref for ref, d in demanda.items()
+                         if d['demanda_neta'] <= 0 and (d.get('venta_proyecto') or 0) > 0}
 
         # Ya bloqueados (para no duplicar)
         ya_bloqueados_ids = set(
@@ -181,6 +187,8 @@ class BloqueoRecompraService:
             'capital_sin_costo': sin_costo,
             'capital_es_cota_inferior': sin_costo > 0,
             'sin_codigo_siesa_no_evaluados': sin_codigo,
+            # Se venden solo por proyecto: no se bloquean, y se dice.
+            'solo_venta_de_proyecto_no_bloqueados': len(solo_proyecto),
             'velocidad_fuente': 'KardexService.demanda_descensurada (red, 12 meses)',
         }
 
@@ -198,17 +206,29 @@ class BloqueoRecompraService:
         """
         from app.models.producto import Producto
 
+        # UNA consulta para toda la lista (tanda G, 2026-09-29): la bandeja
+        # pregunta por miles de SKU y eran dos consultas por código (12 s a
+        # volumen de producción). Los bloqueos activos son pocos.
+        pedidos = {str(c).strip() for c in items_codigos if c}
+        por_codigo = {}
+        for bloqueo, producto in (
+                db.session.query(ProductoBloqueado, Producto)
+                .join(Producto, ProductoBloqueado.producto_id == Producto.id)
+                .filter(ProductoBloqueado.activo == True)  # noqa: E712
+                .order_by(ProductoBloqueado.id).all()):
+            codigo = (producto.codigo_siesa or '').strip()
+            if codigo in pedidos and codigo not in por_codigo:
+                por_codigo[codigo] = (bloqueo, producto)
+
         bloqueados = []
+        vistos = set()
         for codigo in items_codigos:
-            producto = Producto.query.filter_by(codigo_siesa=codigo).first()
-            if not producto:
+            codigo = str(codigo or '').strip()
+            if codigo in vistos or codigo not in por_codigo:
                 continue
-
-            bloqueo = ProductoBloqueado.query.filter_by(
-                producto_id=producto.id, activo=True
-            ).first()
-
-            if bloqueo and bloqueo.esta_bloqueado():
+            vistos.add(codigo)
+            bloqueo, producto = por_codigo[codigo]
+            if bloqueo.esta_bloqueado():
                 bloqueados.append({
                     'codigo': codigo,
                     'nombre': producto.nombre,

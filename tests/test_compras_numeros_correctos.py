@@ -589,6 +589,22 @@ class TestBloqueoPorVelocidadDelKardex:
         assert r['total_capital_inmovilizado'] == 5000
         assert r['capital_sin_costo'] == 0
 
+    def test_lo_que_solo_se_vende_por_licitacion_no_se_bloquea(self, app, db, monkeypatch):
+        """La venta de proyecto (NS2) no es demanda repetible, pero es venta:
+        un SKU que solo se vende por licitación no está muerto (2026-09-29)."""
+        from app.models.producto_bloqueado import ProductoBloqueado
+        from app.services.bloqueo_recompra_service import BloqueoRecompraService
+        monkeypatch.delenv('DEMANDA_BODEGAS_PROYECTO', raising=False)
+        self._mundo(db)
+        TestCapitalInmovilizado()._bloqueado(db, 'LICIT1', 10)
+        ProductoBloqueado.query.delete()
+        _mov(db, 'LICIT1', _hoy() - timedelta(days=5), 300, bod='NS2')
+        db.session.commit()
+        r = BloqueoRecompraService.poblar_lista_inicial()
+        bloqueados = {b.producto.codigo_siesa for b in ProductoBloqueado.query.all()}
+        assert 'LICIT1' not in bloqueados and 'MUERTO' in bloqueados
+        assert r['solo_venta_de_proyecto_no_bloqueados'] == 1
+
     def test_sin_kardex_de_12_meses_no_se_bloquea_nada(self, app, db):
         from app.models.producto_bloqueado import ProductoBloqueado
         from app.services.bloqueo_recompra_service import BloqueoRecompraService

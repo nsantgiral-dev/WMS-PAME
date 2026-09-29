@@ -162,26 +162,105 @@ class TestCaeAlPromedioYLoDice:
         assert h['metodo'] == 'PROMEDIO' and h['motivo'] == 'POCA_VENTA'
         assert h['texto'].startswith('Vende poco (')
 
-    def test_sin_un_ano_de_ventas(self, app, db, monkeypatch):
+    def test_sin_un_ano_de_ventas_usa_las_ultimas_13_semanas(self, app, db, monkeypatch):
+        """P1-E: sin un año para comparar, las últimas 13 semanas (no el
+        promedio de lo observado, que en septiembre trae el pico de enero)."""
         monkeypatch.delenv('DEMANDA_BODEGAS_PROYECTO', raising=False)
         _cubrir(db, 300)
         _vende(db, 'EST', _serie(_estacional, 1, 300))
         db.session.commit()
-        from app.services.kardex_service import KardexService, demanda_para_horizonte
+        from app.services.kardex_service import demanda_para_horizonte
         h = demanda_para_horizonte(17)['EST']
-        base = KardexService.demanda_descensurada(12, 'red')['EST']
-        assert h['metodo'] == 'PROMEDIO' and h['motivo'] == 'SIN_ANO_ANTERIOR'
-        assert h['d_dia'] == base['d_avg'] and h['sigma_dia'] == base['sigma_d'], \
-            'sin año anterior, el número de siempre: nada inventado'
+        assert h['metodo'] == 'ULTIMAS_SEMANAS' and h['motivo'] == 'SIN_ANO_ANTERIOR'
+        assert h['d_dia'] == pytest.approx((56 * 11 + 35 * 10) / 91, abs=1e-4)
         assert 'Todavía no hay un año de ventas' in h['texto'] and 'hay 300 días' in h['texto']
+        assert 'últimas 13 semanas' in h['texto']
 
-    def test_producto_nuevo_sin_venta_el_ano_pasado(self, app, db):
+    def test_producto_nuevo_no_se_divide_por_los_dias_que_no_existia(self, app, db):
+        """P1-E: vende 10/día hace 120 días. El promedio de 12 meses daba
+        3,34/día (dividía por 360 días en que el producto no existía)."""
         _cubrir(db, 430)
-        _vende(db, 'NUEVO', _serie(lambda d: 5, 1, 200))
+        _vende(db, 'NUEVO', _serie(lambda d: 10, 1, 120))
+        db.session.commit()
+        from app.services.kardex_service import KardexService, demanda_para_horizonte
+        h = demanda_para_horizonte(17)['NUEVO']
+        assert KardexService.demanda_descensurada(12, 'red')['NUEVO']['d_avg'] < 4
+        assert h['metodo'] == 'ULTIMAS_SEMANAS' and h['motivo'] == 'PRODUCTO_NUEVO'
+        assert h['d_dia'] == pytest.approx(10.0)
+        assert h['texto'].startswith('Se vende desde el ')
+
+    def test_producto_nuevo_agotado_se_mide_con_los_dias_que_tuvo(self, app, db):
+        """P1-E con censura: 10/día hace 91 días, con una racha de 10 días en
+        cero en medio: la tasa es la de los días con venta."""
+        _cubrir(db, 430)
+        _vende(db, 'NUEVO2', _serie(lambda d: 0 if 40 <= d < 50 else 10, 1, 91))
         db.session.commit()
         from app.services.kardex_service import demanda_para_horizonte
-        h = demanda_para_horizonte(17)['NUEVO']
-        assert h['metodo'] == 'PROMEDIO' and h['motivo'] == 'SIN_VENTA_EN_ESTAS_FECHAS'
+        h = demanda_para_horizonte(17)['NUEVO2']
+        assert h['d_dia'] == pytest.approx(10.0)
+        assert 'No se cuentan 10 días en que parece haberse agotado' in h['texto']
+
+
+class TestLaCensuraInferida:
+    """Sin `StockDiario` (producción): qué días fueron agotados y cuáles no
+    (validación del 2026-09-27, P1-A/P1-B)."""
+
+    @pytest.fixture
+    def calc(self, app, db, monkeypatch):
+        for v in ('DEMANDA_BODEGAS_PROYECTO', 'DEMANDA_TENDENCIA_PISO', 'DEMANDA_TENDENCIA_TECHO'):
+            monkeypatch.delenv(v, raising=False)
+        _cubrir(db, 430)
+
+        def _c():
+            db.session.commit()
+            from app.services.kardex_service import demanda_para_horizonte
+            return demanda_para_horizonte(17)
+        return _c
+
+    def test_una_racha_larga_es_fuera_de_temporada_no_agotado(self, db, calc):
+        """Vende solo en dos temporadas de 4 semanas; entre ellas 112 días en
+        cero: eso no es un agotado (> 13 semanas) y la demanda de hoy es 0."""
+        _vende(db, 'SOLO_TEMP', _serie(lambda d: 20 if (250 <= d <= 277 or 390 <= d <= 417) else 0))
+        h = calc()['SOLO_TEMP']
+        assert h['censura']['dias'] == 0 and h['d_dia'] == 0
+
+    def test_una_caida_abrupta_se_cuenta_como_agotado(self, db, calc):
+        _vende(db, 'CAE', _serie(lambda d: 1 if 344 <= d <= 350 else 10))
+        h = calc()['CAE']
+        assert any(e['tipo'] == 'CAIDA' for e in h['censura']['eventos'])
+        assert h['d_dia'] == pytest.approx(10.0)
+        assert 'parece haberse agotado ~7 de 28 días' in h['texto']
+
+    def test_un_hueco_en_un_vendedor_lento_no_es_agotado(self, db, calc):
+        """1 u cada 5 días: 10 días sin venta pasan por azar ((0,8)^10 ≈ 11 %)."""
+        _vende(db, 'LENTO', _serie(lambda d: 0 if 340 <= d <= 349 else (1 if d % 5 == 0 else 0)))
+        h = calc()['LENTO']
+        assert h['censura']['dias'] == 0 and 'agot' not in h['texto']
+
+    def test_la_sigma_del_pico_es_al_menos_la_de_la_temporada(self, db, calc):
+        _vende(db, 'PICOV', _serie(lambda d: (20 if d % 2 else 40) if d in EN_VENTANA_LY else 10))
+        h = calc()['PICOV']
+        assert h['sigma_dia'] >= 10
+
+    def test_con_poca_base_la_tendencia_es_uno(self, db, calc):
+        """1 u cada 2 días: 28 u en las 8 semanas del año pasado (< 30)."""
+        _vende(db, 'POCA_BASE', _serie(lambda d: 1 if d % 2 == 0 else 0))
+        h = calc()['POCA_BASE']
+        assert h['tendencia']['factor'] == 1.0 and h['tendencia']['medida'] is None
+        assert 'muy poco para saber' in h['texto']
+
+    def test_nunca_por_debajo_de_su_venta_normal_sin_decirlo(self, db, calc):
+        _vende(db, 'BAJA', _serie(lambda d: 3 if d in EN_VENTANA_LY else 10))
+        h = calc()['BAJA']
+        assert h['d_dia'] == pytest.approx(3.0) and h['base_normal'] == pytest.approx(10.0)
+        assert 'Es menos que su venta normal (10 al día)' in h['texto']
+
+    def test_el_agotado_de_hoy_sin_stock_conocido_no_se_inventa(self, db, calc):
+        """Sin fila de existencias no se sabe si está en cero: la racha final no
+        se cuenta como agotado (Regla 0: el SKU ni entra a la bandeja)."""
+        _vende(db, 'HOY_NS', _serie(lambda d: 0 if d <= 35 else 10))
+        h = calc()['HOY_NS']
+        assert not any(e['tipo'] == 'AGOTADO_HOY' for e in h['censura']['eventos'])
 
 
 class TestDormidoYDejado:

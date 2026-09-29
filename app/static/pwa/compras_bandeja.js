@@ -337,6 +337,13 @@ function cmpDecisionTexto(dec) {
   return `No se pide, decidió ${quien} ${cuando}: ${dec.motivo || 'sin motivo'}`;
 }
 
+/** «Ya se pidió» vencido sin OC: la línea vuelve MARCADA (lo decide el
+ *  servidor; acá solo se dice). */
+function cmpPedidoSinLlegarHtml(dp) {
+  if (!dp) return '';
+  return `<div style="font-size:var(--fs-sm);margin-top:6px;padding:6px 8px;border-radius:8px;background:var(--warn-bg);color:var(--warn-tx);border:1px solid var(--warn-brd);font-weight:700;">Ya se pidió el ${esc(cmpFecha(dp.dia))}${dp.oc_siesa ? ` (OC ${esc(dp.oc_siesa)})` : ' (sin número de OC)'}: ${esc(cmpN(dp.unidades))} u${dp.usuario_nombre ? `, lo registró ${esc(dp.usuario_nombre)}` : ''}. No ha llegado ni aparece en Siesa: confírmelo con el proveedor antes de pedir otra vez.</div>`;
+}
+
 /** Los tres botones (solo si el servidor dice que quien mira puede decidir)
  *  y el hueco del formulario. `k` es la posición en CMP.flat. */
 function cmpBotonesDecision(k) {
@@ -371,7 +378,8 @@ function cmpLineaHtml(l, i, j, k) {
       <span style="font-size:var(--fs-sm);color:var(--tx2);">Alcanza ${esc(cmpDias(l.alcanza_dias))} · llega en ${esc(cmpDias(l.entrega_dias))} (${esc(cmpFecha(l.fecha_entrega_sugerida))})</span>
     </div>
     <div style="font-size:var(--fs-sm);color:var(--tx);margin-top:4px;">${precio}</div>
-    ${l.decision ? `<div style="font-size:var(--fs-sm);margin-top:6px;padding:6px 8px;border-radius:8px;background:var(--info-bg);color:var(--info-tx);border:1px solid var(--info-brd);">${esc(cmpDecisionTexto(l.decision))}${l.decision_escalo ? ' — <b>ahora es urgente: vuelva a mirarlo.</b>' : ''}</div>` : ''}
+    ${l.decision ? `<div style="font-size:var(--fs-sm);margin-top:6px;padding:6px 8px;border-radius:8px;background:var(--info-bg);color:var(--info-tx);border:1px solid var(--info-brd);">${esc(cmpDecisionTexto(l.decision))}${l.decision_escalo ? ` — <b>${esc((l.decision_reaparece || {}).texto || 'vuelva a mirarlo.')}</b>` : ''}</div>` : ''}
+    ${cmpPedidoSinLlegarHtml(l.pedido_sin_llegar)}
     <details id="cmp-pq-${i}-${j}" style="margin-top:6px;">
       <summary style="cursor:pointer;font-size:var(--fs-sm);color:var(--acento-tx);font-weight:600;min-height:44px;display:flex;align-items:center;">¿Por qué esta cantidad?</summary>
       <div style="font-size:var(--fs-sm);color:var(--tx2);line-height:var(--lh-texto);padding:6px 0 2px;">${cmpPorQueHtml(l)}</div>

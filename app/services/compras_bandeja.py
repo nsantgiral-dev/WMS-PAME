@@ -333,6 +333,13 @@ def _porque(fila, pedido, nivel_servicio):
     }
 
 
+def _pedido_sin_llegar(fila):
+    """El «ya se pidió» vencido sin OC de la fila, tal como lo dejó
+    `en_camino` (o None)."""
+    dp = fila.get('decision_pedido') or {}
+    return dp if dp.get('estado') == 'VENCIDO_SIN_OC' else None
+
+
 def _ya_pedido(insumo):
     """La declaración de «en camino» que el comprador tiene que leer: qué no
     se cuenta por viejo y cuánto de lo que se cuenta está vencido."""
@@ -419,15 +426,16 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
     lineas = []
     for f, urg in candidatas:
         ref = f['referencia']
-        dec = decididas.get(ref)
-        escalo = bool(dec and dec['accion'] != compras_decisiones.PEDIDO
-                      and urg == URGENTE and dec.get('urgencia_vista') != URGENTE)
-        if dec and dec['accion'] != compras_decisiones.PEDIDO and not escalo:
-            ocultas.append(ref)
-            continue
         emp = empaques.get(ref) or {}
         pedido = pedido_en_empaques(f.get('deficit') or 0, emp.get('unidades_por_empaque'),
                                     emp.get('moq_empaques'))
+        dec = decididas.get(ref)
+        # Pospuesta o no pedida: fuera de la bandeja, salvo que se haya vuelto
+        # urgente o que lo que falta haya crecido (`reaparece`, la política).
+        vuelve = compras_decisiones.reaparece(dec, urg, pedido['unidades'])
+        if dec and dec['accion'] != compras_decisiones.PEDIDO and not vuelve['reaparece']:
+            ocultas.append(ref)
+            continue
         if not pedido['unidades']:
             continue
         c = costos.get(ref) or {}
@@ -461,7 +469,11 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
             # Lo que alguien ya decidió sobre esta referencia (y si volvió
             # porque se volvió urgente después de posponerla o descartarla).
             'decision': dec,
-            'decision_escalo': escalo,
+            'decision_escalo': vuelve['reaparece'],
+            'decision_reaparece': vuelve,
+            # «Ya se pidió» que pasó lo que tarda en llegar sin que la OC
+            # aparezca en Siesa: la línea vuelve marcada (P1-C).
+            'pedido_sin_llegar': _pedido_sin_llegar(f),
             'porque': _porque(f, pedido, nivel_servicio),
         })
 
@@ -469,12 +481,13 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
     for f in revisar:
         ref = f['referencia']
         dec = decididas.get(ref)
-        if dec and dec['accion'] != compras_decisiones.PEDIDO:
-            ocultas.append(ref)
-            continue
         emp = empaques.get(ref) or {}
         si_no_llega = pedido_en_empaques(f.get('deficit_sin_vencidas') or 0,
                                          emp.get('unidades_por_empaque'), emp.get('moq_empaques'))
+        vuelve = compras_decisiones.reaparece(dec, 'REVISAR_OC', si_no_llega['unidades'])
+        if dec and dec['accion'] != compras_decisiones.PEDIDO and not vuelve['reaparece']:
+            ocultas.append(ref)
+            continue
         ocs = f.get('ocs_en_camino') or []
         revisar_oc.append({
             'referencia': ref, 'nombre': (costos.get(ref) or {}).get('nombre') or None,
@@ -486,6 +499,7 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
             'unidad': emp.get('unidad') or 'UND',
             'alcanza_dias': f.get('cobertura_dias'),
             'decision': dec,
+            'decision_reaparece': vuelve,
         })
 
     grupos = {}
@@ -526,6 +540,8 @@ def bandeja(nivel_servicio: float = NIVEL_SERVICIO) -> dict:
         revisar_oc=revisar_oc,
         # Lo decidido estos días (quién, qué, contra qué número) y lo que la
         # bandeja no muestra por una decisión vigente.
+        # Lo de estos días MÁS toda decisión vigente (P1-D): lo que oculta una
+        # línea siempre se ve y se puede deshacer.
         decisiones={'recientes': compras_decisiones.recientes(DIAS_DECISIONES),
                     'ocultas_por_decision': ocultas,
                     'posponer_hasta_sugerido': compras_decisiones.posponer_hasta_sugerido(),
@@ -582,8 +598,8 @@ def explicar_sku(referencia: str) -> dict:
     from app.services import compras_decisiones
     dec = compras_decisiones.vigentes([ref]).get(ref)
     urg = _urgencia(f)
-    if urg is not None and dec and dec['accion'] != compras_decisiones.PEDIDO and not (
-            urg == URGENTE and dec.get('urgencia_vista') != URGENTE):
+    if urg is not None and dec and dec['accion'] != compras_decisiones.PEDIDO and not \
+            compras_decisiones.reaparece(dec, urg, f.get('deficit'))['reaparece']:
         return {'referencia': ref, 'motivo': 'DECIDIDO', 'decision': dec,
                 'texto': ('Alguien decidió posponerlo o no pedirlo: está en «Ya decidido» '
                           'de la Bandeja.')}

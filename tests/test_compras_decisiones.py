@@ -126,19 +126,45 @@ class TestYaSePidio:
         db.session.commit()
         assert en_camino(['URG'])['detalle']['URG']['decision_pedido']['estado'] == 'OC_EN_SIESA'
 
-    def test_sin_oc_en_7_dias_deja_de_contar_y_lo_dice(self, app, db, client, almacen, mundo):
+    def test_cuenta_hasta_lead_time_mas_dos_sigmas(self, app, db, client, almacen, mundo):
+        """P1-C: con el lead time de este mundo (5 ± 2) cuenta 9 días; no 7
+        fijos. Se calcula al leer: lo que diga la columna no manda."""
         from app.models.decision_compra import DecisionCompra
+        from app.services.compras_decisiones import dias_pedido_en_camino
         from app.services.compras_fuentes import en_camino
+        assert dias_pedido_en_camino()['dias'] == 9
         cab = _cab(app, db, almacen, 'compras')
         _decidir(client, cab, referencia='URG', accion='PEDIDO', cantidad=100)
         d = DecisionCompra.query.one()
-        d.dia = _hoy() - timedelta(days=9)
-        d.vigente_hasta = _hoy() - timedelta(days=3)
+        d.dia = _hoy() - timedelta(days=8)
+        d.vigente_hasta = _hoy() - timedelta(days=5)
+        db.session.commit()
+        assert en_camino(['URG'])['por_sku']['URG'] == 100.0
+
+    def test_vencido_sin_oc_deja_de_contar_y_la_linea_vuelve_marcada(self, app, db, client,
+                                                                    almacen, mundo):
+        from app.models.decision_compra import DecisionCompra
+        from app.services.compras_fuentes import en_camino
+        cab = _cab(app, db, almacen, 'compras')
+        _decidir(client, cab, referencia='URG', accion='PEDIDO', cantidad=100, oc_siesa='OC-77')
+        d = DecisionCompra.query.one()
+        d.dia = _hoy() - timedelta(days=12)
         db.session.commit()
         ec = en_camino(['URG'])
         assert 'URG' not in ec['por_sku'] or ec['por_sku']['URG'] == 0
         dec = ec['declaracion']['fuentes']['DECISION_WMS']
         assert dec['vencidos_sin_oc'] == 1 and 'Revise si la orden se hizo' in dec['nota']
+        l = _lineas(_bandeja())['URG']
+        assert l['pedido_sin_llegar']['oc_siesa'] == 'OC-77'
+        assert l['pedido_sin_llegar']['estado'] == 'VENCIDO_SIN_OC'
+
+    def test_no_pedir_despues_de_pedir_deja_de_contar(self, app, db, client, almacen, mundo):
+        from app.services.compras_fuentes import en_camino
+        cab = _cab(app, db, almacen, 'compras')
+        _decidir(client, cab, referencia='URG', accion='PEDIDO', cantidad=100)
+        assert en_camino(['URG'])['por_sku']['URG'] == 100.0
+        _decidir(client, cab, referencia='URG', accion='DESCARTADO', motivo_codigo='PRECIO')
+        assert en_camino(['URG'])['por_sku'].get('URG', 0) == 0
 
 
 class TestPosponerYNoPedir:
@@ -206,6 +232,44 @@ class TestLaUltimaDecisionManda:
         _decidir(client, cab, referencia='URG', accion='PEDIDO', cantidad=20)
         l = _lineas(_bandeja())['URG']
         assert l['decision']['accion'] == 'PEDIDO'
+
+
+class TestLoDecididoNoSePierde:
+    """P1-D: toda decisión vigente se ve (no solo 14 días) y una pospuesta
+    cuyo faltante crece vuelve marcada."""
+
+    def test_una_pospuesta_vieja_sigue_en_ya_decidido(self, app, db, client, almacen, mundo):
+        from app.models.decision_compra import DecisionCompra
+        cab = _cab(app, db, almacen, 'compras')
+        _decidir(client, cab, referencia='SEM', accion='POSPUESTO',
+                 hasta=(_hoy() + timedelta(days=60)).isoformat())
+        d = DecisionCompra.query.one()
+        d.dia = _hoy() - timedelta(days=30)
+        db.session.commit()
+        b = _bandeja()
+        assert 'SEM' not in _lineas(b)
+        assert [x['referencia'] for x in b['decisiones']['recientes']] == ['SEM']
+        from app.services.compras_bandeja import explicar_sku
+        assert explicar_sku('SEM')['motivo'] == 'DECIDIDO'
+
+    def test_pospuesta_urgente_vuelve_si_el_faltante_crece(self, app, db, client, almacen, mundo):
+        cab = _cab(app, db, almacen, 'compras')
+        antes = _lineas(_bandeja())['URG']
+        _decidir(client, cab, referencia='URG', accion='POSPUESTO', urgencia='URGENTE',
+                 cantidad_propuesta=int(antes['pedir_unidades'] / 3),
+                 hasta=(_hoy() + timedelta(days=5)).isoformat())
+        l = _lineas(_bandeja())['URG']
+        assert l['decision_escalo'] is True
+        assert l['decision_reaparece']['motivo'] == 'FALTANTE_CRECIO'
+        assert 'cuando se decidió faltaban' in l['decision_reaparece']['texto']
+
+    def test_pospuesta_urgente_sin_cambio_no_vuelve(self, app, db, client, almacen, mundo):
+        cab = _cab(app, db, almacen, 'compras')
+        antes = _lineas(_bandeja())['URG']
+        _decidir(client, cab, referencia='URG', accion='POSPUESTO', urgencia='URGENTE',
+                 cantidad_propuesta=antes['pedir_unidades'],
+                 hasta=(_hoy() + timedelta(days=5)).isoformat())
+        assert 'URG' not in _lineas(_bandeja())
 
 
 class TestDeshacerYDobleToque:
@@ -419,3 +483,36 @@ class TestElDetectorMuerde:
                '    # d.anulada_en = 1\n'
                '    return {"cantidad_decidida": 3, "x": d.anulada_en}\n')
         assert _usos(src, 'x.py') == []
+
+
+class TestLaPantallaDiceLoQueVolvio:
+
+    def test_lo_pedido_que_no_llego_vuelve_marcado(self, app, db, client, almacen, mundo,
+                                                   tmp_path):
+        from app.models.decision_compra import DecisionCompra
+        from tests.test_compras_bandeja_js import _json, _limpio, _node
+        cab = _cab(app, db, almacen, 'compras')
+        _decidir(client, cab, referencia='URG', accion='PEDIDO', cantidad=100, oc_siesa='OC-77')
+        d = DecisionCompra.query.one()
+        d.dia = _hoy() - timedelta(days=12)
+        db.session.commit()
+        b = _json(dict(_bandeja(), puede_decidir=True))
+        l = _lineas(b)['URG']
+        import json as _j
+        out = _node(tmp_path, pintar={'html': f'cmpLineaHtml({_j.dumps(l)}, 0, 0, 0)'})
+        t = _limpio(out['html'])
+        assert 'Ya se pidió el ' in t and '(OC OC-77)' in t and '100 u' in t
+        assert 'No ha llegado ni aparece en Siesa: confírmelo con el proveedor' in t
+
+    def test_la_pospuesta_que_crecio_dice_por_que_volvio(self, app, db, client, almacen, mundo,
+                                                         tmp_path):
+        from tests.test_compras_bandeja_js import _json, _limpio, _node
+        cab = _cab(app, db, almacen, 'compras')
+        antes = _lineas(_bandeja())['URG']
+        _decidir(client, cab, referencia='URG', accion='POSPUESTO', urgencia='URGENTE',
+                 cantidad_propuesta=int(antes['pedir_unidades'] / 3),
+                 hasta=(_hoy() + timedelta(days=5)).isoformat())
+        l = _lineas(_json(_bandeja()))['URG']
+        import json as _j
+        t = _limpio(_node(tmp_path, pintar={'html': f'cmpLineaHtml({_j.dumps(l)}, 0, 0, 0)'})['html'])
+        assert 'Pospuesto por compras' in t and 'cuando se decidió faltaban' in t

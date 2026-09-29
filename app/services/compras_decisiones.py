@@ -18,15 +18,21 @@ siguiente volvía sin rastro— y no quedaba quién decidió ni contra qué núm
 | ¿Qué «lo pedí» siguen sin OC? | `pedidos_sin_oc(refs)` — la lee `compras_fuentes.en_camino` (fuente `DECISION_WMS`); nadie más suma lo pedido |
 
 Vigencias (supuestos declarados, el dueño los corrige):
-  · PEDIDO → `COMPRAS_PEDIDO_EN_CAMINO_DIAS` (7): lo que tarda en aparecer la
-    OC en el espejo; si aparece antes, deja de contarse ahí (la cuenta el
-    espejo). Si en 7 días no aparece, deja de contarse y se dice.
+  · PEDIDO → hasta que la OC aparece en el espejo, o hasta que ya debió
+    llegar: lead time + 2σ del proveedor (`compras_fuentes.lead_time`; con el
+    default nacional, 10 + 2 × 5 = 20 días). Se calcula AL LEER, no al
+    registrar: si el lead time se mide después, la vigencia lo sigue. Vencido
+    sin OC, deja de contarse y la línea vuelve MARCADA («ya se pidió el …, no
+    ha llegado ni aparece en Siesa: confirme»). (Antes: 7 días fijos, menos
+    que el lead time — validación del 2026-09-27, P1-C.)
+  · La última decisión de una referencia manda: «No pedir» después de «Ya se
+    pidió» deja de contar lo pedido.
   · POSPUESTO → la fecha elegida (mañana … 90 días).
   · DESCARTADO → un ciclo de compra (`ciclo_pedido_nacional`, 7).
 """
 import json
 import logging
-import os
+import math
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
@@ -37,8 +43,15 @@ logger = logging.getLogger(__name__)
 PEDIDO, POSPUESTO, DESCARTADO = 'PEDIDO', 'POSPUESTO', 'DESCARTADO'
 ACCIONES = (PEDIDO, POSPUESTO, DESCARTADO)
 
-DIAS_PEDIDO_EN_CAMINO_DEFAULT = 7
-ENV_DIAS_PEDIDO = 'COMPRAS_PEDIDO_EN_CAMINO_DIAS'
+#: «Ya se pidió» cuenta como en camino hasta lead time + esto × σ_LT.
+SIGMAS_PEDIDO_EN_CAMINO = 2
+#: Una decisión más vieja que esto no puede estar vigente (posponer ≤ 90).
+VENTANA_DECISIONES_DIAS = 120
+#: Un «ya se pidió» vencido sin OC se sigue diciendo este tiempo.
+DIAS_AVISO_PEDIDO_VENCIDO = 30
+#: Una línea pospuesta o no pedida reaparece si lo que falta creció más que
+#: esto sobre lo que se vio al decidir (supuesto declarado: 50 %).
+CRECIMIENTO_REAPARECE = 0.5
 POSPONER_MAX_DIAS = 90
 POSPONER_SUGERIDO_DIAS = 7
 #: Un mismo gesto repetido en menos de esto (doble toque) devuelve la misma
@@ -74,22 +87,41 @@ def _hoy():
     return dia_operativo()
 
 
-def dias_pedido_en_camino() -> dict:
-    """Cuántos días cuenta un «lo pedí» como en camino, con su procedencia."""
-    crudo = (os.getenv(ENV_DIAS_PEDIDO) or '').strip()
-    if crudo:
-        try:
-            n = int(crudo)
-            if 1 <= n <= 60:
-                return {'dias': n, 'fuente': 'CONFIGURADO', 'nota': None}
-        except ValueError:
-            pass
-        return {'dias': DIAS_PEDIDO_EN_CAMINO_DEFAULT, 'fuente': 'DEFAULT_DECLARADO',
-                'nota': f'{ENV_DIAS_PEDIDO}={crudo!r} no es un número de días entre 1 y 60: '
-                        'se usó el default.'}
-    return {'dias': DIAS_PEDIDO_EN_CAMINO_DEFAULT, 'fuente': 'DEFAULT_DECLARADO',
-            'nota': (f'Un «lo pedí» cuenta como en camino {DIAS_PEDIDO_EN_CAMINO_DEFAULT} días '
-                     'o hasta que la orden aparezca en Siesa (supuesto).')}
+class _Vigencias:
+    """La vigencia de cada decisión, con el lead time de cada proveedor leído
+    una vez por corrida."""
+
+    def __init__(self):
+        self._obs = None
+        self._cache = {}
+
+    def dias_pedido(self, proveedor=None) -> dict:
+        if proveedor not in self._cache:
+            from app.services import compras_fuentes as cf
+            if self._obs is None:
+                self._obs = cf.observaciones_lead_time()
+            lt = cf.lead_time(proveedor=proveedor, origen=cf.ORIGEN_NACIONAL,
+                              observaciones=self._obs)
+            dias = max(1, int(math.ceil(float(lt['lt_dias'])
+                                        + SIGMAS_PEDIDO_EN_CAMINO * float(lt['sigma_lt']))))
+            self._cache[proveedor] = {
+                'dias': dias, 'lt_dias': lt['lt_dias'], 'sigma_lt': lt['sigma_lt'],
+                'fuente': lt['fuente'], 'proveedor': proveedor,
+                'nota': (f'Un «ya se pidió» cuenta como en camino hasta que la orden aparece '
+                         f'en Siesa o hasta {dias} días (lo que tarda en llegar, '
+                         f'{lt["lt_dias"]:g} ± {lt["sigma_lt"]:g}, más dos veces su variación).')}
+        return self._cache[proveedor]
+
+    def vence(self, d):
+        if d.accion == PEDIDO:
+            return d.dia + timedelta(days=self.dias_pedido(d.proveedor_codigo)['dias'] - 1)
+        return d.vigente_hasta
+
+
+def dias_pedido_en_camino(proveedor=None) -> dict:
+    """Cuántos días cuenta un «ya se pidió» como en camino (sin OC en el
+    espejo): lead time + 2σ del proveedor, con su procedencia."""
+    return _Vigencias().dias_pedido(proveedor)
 
 
 def puede_decidir(usuario) -> bool:
@@ -155,7 +187,9 @@ def registrar(usuario, datos) -> dict:
     if accion == PEDIDO:
         if cantidad is None or cantidad <= 0:
             raise DecisionInvalida('Diga cuántas unidades pidió.')
-        vigente = hoy + timedelta(days=dias_pedido_en_camino()['dias'] - 1)
+        # Informativa: la que vale se recalcula al leer (`_Vigencias.vence`).
+        vigente = hoy + timedelta(days=dias_pedido_en_camino(
+            datos.get('proveedor_codigo') or None)['dias'] - 1)
         motivo = motivo_txt
     elif accion == POSPUESTO:
         try:
@@ -246,8 +280,9 @@ def _nombres(refs):
             Producto.query.filter(Producto.codigo_siesa.in_(refs)).all()}
 
 
-def a_dict(d, hoy=None, nombre=None) -> dict:
+def a_dict(d, hoy=None, nombre=None, vence=None) -> dict:
     hoy = hoy or _hoy()
+    vence = vence or d.vigente_hasta
     hace_min = None
     if d.creada_en:
         hace_min = int((datetime.utcnow() - d.creada_en).total_seconds() // 60)
@@ -263,8 +298,8 @@ def a_dict(d, hoy=None, nombre=None) -> dict:
         'oc_siesa': d.oc_siesa, 'proveedor_codigo': d.proveedor_codigo,
         'motivo': d.motivo, 'urgencia_vista': d.urgencia_vista,
         'dia': d.dia.isoformat() if d.dia else None,
-        'vigente_hasta': d.vigente_hasta.isoformat() if d.vigente_hasta else None,
-        'vigente': bool(d.anulada_en is None and d.vigente_hasta and d.vigente_hasta >= hoy),
+        'vigente_hasta': vence.isoformat() if vence else None,
+        'vigente': bool(d.anulada_en is None and vence and vence >= hoy),
         'usuario_nombre': d.usuario_nombre,
         'creada_utc': d.creada_en.isoformat() if d.creada_en else None,
         'hace_min': hace_min,
@@ -274,12 +309,14 @@ def a_dict(d, hoy=None, nombre=None) -> dict:
     }
 
 
-def vigentes(refs=None, hoy=None) -> dict:
-    """{ref: decisión} — la última no anulada cuya vigencia no pasó."""
+def _ultimas(refs=None, hoy=None):
+    """La última decisión no anulada de cada referencia (de las que pueden
+    estar vigentes). La última manda: una vencida tapa a una más vieja."""
     from app.models.decision_compra import DecisionCompra
     hoy = hoy or _hoy()
-    q = DecisionCompra.query.filter(DecisionCompra.anulada_en.is_(None),
-                                    DecisionCompra.vigente_hasta >= hoy)
+    q = DecisionCompra.query.filter(
+        DecisionCompra.anulada_en.is_(None),
+        DecisionCompra.dia >= hoy - timedelta(days=VENTANA_DECISIONES_DIAS))
     if refs is not None:
         refs = list({str(r).strip() for r in refs if r})
         if not refs:
@@ -288,45 +325,85 @@ def vigentes(refs=None, hoy=None) -> dict:
     salida = {}
     for d in q.order_by(DecisionCompra.id).all():
         salida[d.referencia] = d          # la última gana
-    nombres = _nombres(salida)
-    return {r: a_dict(d, hoy, nombres.get(r)) for r, d in salida.items()}
+    return salida
+
+
+def vigentes(refs=None, hoy=None) -> dict:
+    """{ref: decisión} — la última no anulada, si su vigencia no pasó."""
+    hoy = hoy or _hoy()
+    vig = _Vigencias()
+    ult = {r: (d, vig.vence(d)) for r, d in _ultimas(refs, hoy).items()}
+    ult = {r: x for r, x in ult.items() if x[1] and x[1] >= hoy}
+    nombres = _nombres(ult)
+    return {r: a_dict(d, hoy, nombres.get(r), v) for r, (d, v) in ult.items()}
 
 
 def recientes(dias=14, hoy=None) -> list:
-    """Lo decidido en los últimos `dias` (anuladas incluidas, marcadas), lo
-    más nuevo primero."""
+    """«Ya decidido»: lo decidido en los últimos `dias` (anuladas incluidas,
+    marcadas) MÁS toda decisión vigente aunque sea más vieja — una decisión
+    que oculta una línea tiene que poder verse y deshacerse (P1-D). Lo más
+    nuevo primero."""
     from app.models.decision_compra import DecisionCompra
     hoy = hoy or _hoy()
     desde = hoy - timedelta(days=max(1, int(dias)) - 1)
     filas = (DecisionCompra.query.filter(DecisionCompra.dia >= desde)
              .order_by(DecisionCompra.id.desc()).limit(300).all())
+    vig = _Vigencias()
     nombres = _nombres(d.referencia for d in filas)
-    return [a_dict(d, hoy, nombres.get(d.referencia)) for d in filas]
+    salida = {d.id: a_dict(d, hoy, nombres.get(d.referencia), vig.vence(d)) for d in filas}
+    for x in vigentes(None, hoy).values():
+        salida.setdefault(x['id'], x)
+    return sorted(salida.values(), key=lambda x: -x['id'])
+
+
+def reaparece(decision, urgencia_actual, pedir_actual) -> dict:
+    """¿Una línea pospuesta o no pedida vuelve a la bandeja? Sí, marcada, si
+    se volvió URGENTE después de decidir, o si lo que falta creció más de
+    `CRECIMIENTO_REAPARECE` sobre lo que se vio (un pospuesto ya urgente
+    también vuelve si el faltante se dispara). «Ya se pidió» no oculta nada.
+
+    Returns: {'reaparece': bool, 'motivo': SE_VOLVIO_URGENTE | FALTANTE_CRECIO
+              | None, 'texto'}"""
+    if not decision or decision.get('accion') == PEDIDO:
+        return {'reaparece': False, 'motivo': None, 'texto': None}
+    if urgencia_actual == 'URGENTE' and decision.get('urgencia_vista') != 'URGENTE':
+        return {'reaparece': True, 'motivo': 'SE_VOLVIO_URGENTE',
+                'texto': 'ahora es urgente: vuelva a mirarlo.'}
+    vista = decision.get('cantidad_propuesta')
+    if vista and pedir_actual and pedir_actual > vista * (1 + CRECIMIENTO_REAPARECE):
+        return {'reaparece': True, 'motivo': 'FALTANTE_CRECIO',
+                'texto': (f'ahora faltan {int(round(pedir_actual))} y cuando se decidió '
+                          f'faltaban {int(round(vista))}: vuelva a mirarlo.')}
+    return {'reaparece': False, 'motivo': None, 'texto': None}
 
 
 def pedidos_sin_oc(filtro_skus=None, hoy=None) -> list:
-    """Los «lo pedí» vigentes, con lo que hace falta para saber si la OC ya
-    apareció en el espejo. **Solo datos**: qué se suma lo decide
+    """Los «ya se pidió» que son la ÚLTIMA decisión de su referencia, con su
+    vencimiento (lead time + 2σ del proveedor) y lo que hace falta para saber
+    si la OC ya apareció en el espejo. **Solo datos**: qué se suma lo decide
     `compras_fuentes.en_camino` (la única función de «lo que viene»)."""
-    from app.models.decision_compra import DecisionCompra
     hoy = hoy or _hoy()
-    # Los vencidos se miran un mes más (para decir «la OC nunca apareció»);
-    # después ya no son noticia.
-    q = DecisionCompra.query.filter(DecisionCompra.accion == PEDIDO,
-                                    DecisionCompra.anulada_en.is_(None),
-                                    DecisionCompra.vigente_hasta >= hoy - timedelta(days=30))
+    vig = _Vigencias()
     salida = []
-    ultimas = {}
-    for d in q.order_by(DecisionCompra.id).all():
-        if filtro_skus is not None and d.referencia not in filtro_skus:
+    for ref, d in _ultimas(filtro_skus, hoy).items():
+        if d.accion != PEDIDO:
+            continue                      # «no pedir» después de pedir: manda lo último
+        vence = vig.vence(d)
+        if vence < hoy - timedelta(days=DIAS_AVISO_PEDIDO_VENCIDO):
             continue
-        ultimas[d.referencia] = d         # una por referencia: la última
-    for d in ultimas.values():
-        salida.append({'id': d.id, 'referencia': d.referencia, 'dia': d.dia,
-                       'vigente_hasta': d.vigente_hasta, 'unidades': d.cantidad_decidida,
+        salida.append({'id': d.id, 'referencia': ref, 'dia': d.dia,
+                       'vigente_hasta': vence, 'unidades': d.cantidad_decidida,
                        'oc_siesa': d.oc_siesa, 'usuario_nombre': d.usuario_nombre,
-                       'vencida': d.vigente_hasta < hoy})
+                       'vencida': vence < hoy})
     return salida
+
+
+def sello() -> tuple:
+    """Cambia con cada decisión registrada o deshecha (caché del ROP)."""
+    from sqlalchemy import func
+    from app.models.decision_compra import DecisionCompra
+    return tuple(db.session.query(func.max(DecisionCompra.id),
+                                  func.count(DecisionCompra.anulada_en)).one())
 
 
 def consec_de(oc_texto):

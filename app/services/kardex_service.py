@@ -866,17 +866,50 @@ def serie_demanda(desde, hasta, nivel='red', fuente=None, excluir_proyecto=True)
                 _anotar(devol, ref, bod, fecha, cant, -1.0)
 
     def _siesa():
-        """Siesa ya separó venta (501 en salida) y devolución (502 en entrada)."""
+        """Siesa ya separó venta (501 en salida) y devolución (502 en entrada).
+
+        A nivel red la suma por (referencia, día) la hace la BASE (P1-F: con la
+        venta de producción son ~5.500 filas por día × 400 días; traerlas
+        crudas a Python costaba 25 s y 600 MB por lectura). La venta de las
+        bodegas de proyecto sale en su propia columna, con la misma política."""
+        from sqlalchemy import case, literal
         from app.models.demanda_siesa import DemandaDiaSiesa as D
-        for ref, bod, fecha, vend, dev in (
-                db.session.query(D.referencia, D.bodega, D.fecha, D.vendido, D.devuelto)
-                .filter(D.fecha >= desde, D.fecha <= hasta).all()):
-            if not (ref or '').strip():
+        if nivel != 'red':
+            for ref, bod, fecha, vend, dev in (
+                    db.session.query(D.referencia, D.bodega, D.fecha, D.vendido, D.devuelto)
+                    .filter(D.fecha >= desde, D.fecha <= hasta).all()):
+                if not (ref or '').strip():
+                    continue
+                if vend:
+                    _anotar(ventas, ref, bod, fecha, vend)
+                if dev:
+                    _anotar(devol, ref, bod, fecha, dev, -1.0)
+            return
+        if de_proyecto:
+            es_proy = D.bodega.in_(sorted(de_proyecto))
+            v_rep = func.sum(case((es_proy, literal(0)), else_=D.vendido))
+            d_rep = func.sum(case((es_proy, literal(0)), else_=D.devuelto))
+            neto_proy = func.sum(case((es_proy, D.vendido - D.devuelto), else_=literal(0)))
+        else:
+            v_rep, d_rep, neto_proy = func.sum(D.vendido), func.sum(D.devuelto), literal(0)
+        from sqlalchemy import select
+        fechas = {}
+        # Core, no ORM: con ~1 M de filas la carga del ORM costaba más que la
+        # consulta.
+        stmt = (select(D.referencia, D.fecha, v_rep, d_rep, neto_proy)
+                .where(D.fecha >= desde, D.fecha <= hasta)
+                .group_by(D.referencia, D.fecha))
+        for ref, fecha, vend, dev, proy in db.session.connection().execute(stmt):
+            ref = (ref or '').strip()
+            if not ref:
                 continue
+            fecha = fechas.setdefault(fecha, fecha)      # una fecha, un objeto
             if vend:
-                _anotar(ventas, ref, bod, fecha, vend)
+                ventas[ref][fecha] += float(vend)
             if dev:
-                _anotar(devol, ref, bod, fecha, dev, -1.0)
+                devol[ref][fecha] += float(dev)
+            if proy:
+                proyecto[ref] += float(proy)
 
     def _pedidos():
         """Las líneas de factura de la última corrida COMPLETA de cada CO y día.
@@ -910,8 +943,22 @@ def serie_demanda(desde, hasta, nivel='red', fuente=None, excluir_proyecto=True)
         _kardex()
 
     salida = {}
-    for clave in set(ventas) | set(devol):
+    # Las claves que SOLO vendieron por proyecto también salen (con `por_dia`
+    # vacío): quien pregunta «¿se vende?» (el bloqueo de recompra) tiene que
+    # verlas; quien calcula la demanda repetible las ve en cero.
+    solo_proyecto = {c for c, u in proyecto.items() if u > 0}
+    for clave in set(ventas) | set(devol) | solo_proyecto:
         v, d = ventas.get(clave, {}), devol.get(clave, {})
+        if not d:
+            # Sin devoluciones no hay neteo que hacer (la gran mayoría con la
+            # venta de Siesa): se evita ordenar por fecha 1 M de entradas.
+            salida[clave] = {
+                'por_dia': {f: x for f, x in v.items() if x > 1e-9},
+                'bruta': round(sum(v.values()), 4), 'devuelta': 0.0,
+                'devolucion_sin_venta': 0.0,
+                'venta_proyecto': round(max(proyecto.get(clave, 0.0), 0.0), 4),
+            }
+            continue
         neto = {}
         orden = []            # días de venta ya vistos, en orden cronológico
         sin_venta = 0.0
@@ -1161,8 +1208,11 @@ VENTANA_MIN_HORIZONTE = 28
 #: menos historia, las semanas completas que haya, desde 4.
 TENDENCIA_DIAS = 56
 TENDENCIA_DIAS_MIN = 28
-#: Con menos que esto en las semanas del año pasado, la tendencia no se mide.
-TENDENCIA_MIN_UNIDADES = 10
+#: Con menos que esto en las semanas del año pasado, la tendencia no se mide
+#: (10 contra 5 unidades ya es ×0,5: ruido). Y con menos de 14 días
+#: observados (con existencias) en alguna de las dos ventanas, tampoco.
+TENDENCIA_MIN_UNIDADES = 30
+DIAS_OBS_MIN_TENDENCIA = 14
 #: Con menos que esto en el último año, la temporada no se mide: promedio.
 ANO_MIN_UNIDADES = 24
 #: La tendencia se ACOTA (supuesto declarado): una racha no multiplica el
@@ -1175,6 +1225,29 @@ ENV_TENDENCIA_TECHO = 'DEMANDA_TENDENCIA_TECHO'
 
 METODO_MISMO_PERIODO = 'MISMO_PERIODO_ANO_ANTERIOR'
 METODO_PROMEDIO = 'PROMEDIO'
+#: Sin año anterior: las últimas 13 semanas desde la primera venta (P1-E).
+METODO_RECIENTE = 'ULTIMAS_SEMANAS'
+RECIENTE_DIAS = 91
+#: Con menos días con venta que esto en esas 13 semanas, vende de a ratos:
+#: se usa su venta del último año (13 semanas de un SKU grumoso son ruido).
+RECIENTE_MIN_DIAS_CON_VENTA = 8
+
+# ── Censura inferida (2026-09-29, validación de la tanda B) ──────────────────
+# En producción `StockDiario` tiene 0 filas: la censura por existencias no se
+# puede medir hacia atrás. Un agotado de temporada es caro y NO se corrige a
+# tiempo (la temporada pasa), así que la Regla 0 no justifica proponer 0 en el
+# pico: se infiere (`censura_inferida`) y se declara.
+RACHA_MIN_DIAS = 7
+#: Una racha en cero más larga que esto es fuera de temporada o descontinuado.
+RACHA_MAX_DIAS = 91
+#: Una racha de k días en cero es improbable si (1 − p)^k < esto, con p la
+#: fracción de días con venta de las 8 semanas vecinas.
+RACHA_PROB_MAX = 0.01
+VECINDAD_DIAS = 56
+#: Una semana con venta por debajo de esta fracción de sus vecinas (que venden
+#: al menos CAIDA_TASA_MIN por día) es una caída abrupta: se acabó.
+CAIDA_FRACCION = 0.25
+CAIDA_TASA_MIN = 1.0
 
 _MESES = ('ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct',
           'nov', 'dic')
@@ -1228,66 +1301,245 @@ def _semanas(dias):
     return f'{dias} días'
 
 
-def _suma(por_dia, desde, hasta):
-    return sum(v for f, v in por_dia.items() if desde <= f <= hasta)
+def _stock_en_cero(refs=None) -> dict:
+    """{ref: {'en_cero': bool, 'desde': date | None}} — ¿la red de bodegas
+    operadas está hoy en cero para el SKU? Es lo único que el WMS sabe HOY de
+    la censura: Siesa no guarda historia de saldos y `StockDiario` no existe
+    con la fuente de Siesa. `desde` sale de `stock_siesa.ausente_desde` (el
+    frente de existencias lo escribe cuando la fila queda en 0) si toda fila
+    del SKU lo tiene. Un SKU sin ninguna fila no aparece: no se sabe."""
+    from sqlalchemy import func
+    from app.models.stock_siesa import StockSiesa
+    from app.services.inventario_siesa_service import _BODEGAS_PV
+    col_aus = getattr(StockSiesa, 'ausente_desde', None)
+    cols = [StockSiesa.codigo_siesa, func.sum(StockSiesa.existencia), func.count()]
+    if col_aus is not None:
+        cols += [func.max(col_aus), func.count(col_aus)]
+    filas = (db.session.query(*cols).filter(StockSiesa.bodega.in_(_BODEGAS_PV))
+             .group_by(StockSiesa.codigo_siesa).all())
+    filtro = None if refs is None else set(refs)
+    salida = {}
+    for fila in filas:
+        ref = (fila[0] or '').strip()
+        if not ref or (filtro is not None and ref not in filtro):
+            continue
+        d = salida.setdefault(ref, {'existencia': 0.0, 'filas': 0, 'desde': None,
+                                    'con_ausente': 0})
+        d['existencia'] += float(fila[1] or 0)
+        d['filas'] += int(fila[2] or 0)
+        if col_aus is not None:
+            d['con_ausente'] += int(fila[4] or 0)
+            if fila[3] is not None:
+                f = fila[3].date() if hasattr(fila[3], 'date') else fila[3]
+                d['desde'] = f if d['desde'] is None else max(d['desde'], f)
+    return {r: {'en_cero': d['existencia'] <= 0,
+                'desde': (d['desde'] if d['existencia'] <= 0 and d['filas']
+                          and d['con_ausente'] == d['filas'] else None)}
+            for r, d in salida.items()}
 
 
-def _sigma_residual(por_dia, fin):
-    """σ diaria sobre RESIDUALES del último año: cada día contra la media de su
-    bloque de 4 semanas. Así el cambio de nivel de la temporada no se cuenta
-    como variabilidad (la σ de la serie cruda de un año con pico sale inflada
-    todo el año)."""
-    bloques = DIAS_ANO // VENTANA_MIN_HORIZONTE
-    inicio = fin - timedelta(days=DIAS_ANO - 1)
-    s_b = [0.0] * bloques
-    suma_cuad = 0.0
-    for f, v in por_dia.items():
-        if inicio <= f <= fin:
-            b = min((f - inicio).days // VENTANA_MIN_HORIZONTE, bloques - 1)
-            s_b[b] += v
-            suma_cuad += v * v
-    var = (suma_cuad - sum(s * s for s in s_b) / VENTANA_MIN_HORIZONTE) / (DIAS_ANO - bloques)
+def censura_inferida(arr, primera, agotado_hoy=None, agotado_desde=None):
+    """Qué días de la serie diaria de un SKU fueron, con toda probabilidad, días
+    SIN EXISTENCIAS (y no días sin demanda). Hace falta porque en producción
+    `StockDiario` tiene 0 filas: sin esto el «mismo período del año pasado»
+    heredaba el agotado del año pasado —hasta demanda 0 en el pico— y la
+    tendencia leía el agotado de hoy como una caída de la venta.
+
+    Tres señales, cada una declarada en `eventos`:
+      · RACHA_CERO — una racha de ≥ 7 días en cero, con venta antes y después,
+        de ≤ 13 semanas (más larga es fuera de temporada o descontinuado), que
+        sea improbable para su frecuencia de venta: (1 − p)^k < 1 %, con p la
+        fracción de días con venta de las 8 semanas vecinas.
+      · AGOTADO_HOY — la racha final (hasta ayer) cuando la red está HOY en
+        cero (`_stock_en_cero`), con el mismo criterio y ≤ 13 semanas; y desde
+        `ausente_desde` si el frente de existencias lo escribió.
+      · CAIDA — una semana con venta pero por debajo del 25 % de las dos
+        semanas antes y las dos después (que venden ≥ 1/día): se acabó a
+        mitad de semana o quedó un resto.
+
+    Args:
+        arr: venta neta por día (índice 0 = el primer día leído).
+        primera: índice del primer día con venta (antes el SKU no existía).
+    Returns: (mascara bytearray: 1 = censurado, eventos [(tipo, i, j)])."""
+    L = len(arr)
+    cens = bytearray(L)
+    eventos = []
+
+    def _p(lo, hi, i, j):
+        vec = [arr[x] for x in range(max(primera, lo), i)] + [arr[x] for x in range(j, min(L, hi))]
+        return (sum(1 for v in vec if v > 0) / len(vec)) if vec else 0.0
+
+    i = primera
+    while i < L:
+        if arr[i] > 0:
+            i += 1
+            continue
+        j = i
+        while j < L and arr[j] <= 0:
+            j += 1
+        k = j - i
+        final = j == L
+        if RACHA_MIN_DIAS <= k <= RACHA_MAX_DIAS and i > primera:
+            p = _p(i - VECINDAD_DIAS, j + VECINDAD_DIAS, i, j)
+            improbable = p >= 1 or (1 - p) ** k < RACHA_PROB_MAX
+            if improbable and (not final or agotado_hoy):
+                for x in range(i, j):
+                    cens[x] = 1
+                eventos.append(('AGOTADO_HOY' if final else 'RACHA_CERO', i, j))
+        i = j
+    if agotado_desde is not None and 0 <= agotado_desde < L:
+        nuevos = [x for x in range(agotado_desde, L) if not cens[x] and arr[x] <= 0]
+        for x in nuevos:
+            cens[x] = 1
+        if nuevos:
+            eventos.append(('AGOTADO_HOY', agotado_desde, L))
+    # Caídas: semanas alineadas desde el final (la última termina ayer).
+    semanas = [(s, s + 7) for s in range(L - 7, primera - 1, -7)]
+    tasas = {}
+    for s, e in semanas:
+        if not any(cens[s:e]):
+            tasas[s] = sum(arr[s:e]) / 7.0
+    for s, e in semanas:
+        t = tasas.get(s)
+        if t is None or t <= 0:
+            continue
+        vecinas = [tasas[x] for x in (s - 14, s - 7, s + 7, s + 14) if x in tasas]
+        if len(vecinas) < 2:
+            continue
+        ref = sum(vecinas) / len(vecinas)
+        if ref >= CAIDA_TASA_MIN and t < CAIDA_FRACCION * ref:
+            for x in range(s, e):
+                cens[x] = 1
+            eventos.append(('CAIDA', s, e))
+    return cens, eventos
+
+
+def _tasa(arr, obs, a, b):
+    """(unidades, días observados, tasa) de [a, b) sobre los días observados."""
+    a, b = max(0, a), min(len(arr), b)
+    if b <= a:
+        return 0, 0, None
+    tramo = obs[a:b]
+    ceros = tramo.count(0)
+    if ceros == 0:
+        u = sum(arr[a:b])
+        return u, b - a, u / (b - a)
+    if ceros == b - a:
+        return 0, 0, None
+    n = u = 0
+    for x in range(a, b):
+        if obs[x]:
+            n += 1
+            u += arr[x]
+    return u, n, (u / n if n else None)
+
+
+def _desvio(arr, obs, a, b):
+    vals = [arr[x] for x in range(max(0, a), min(len(arr), b)) if obs[x]]
+    n = len(vals)
+    if n < 2:
+        return 0.0
+    m = sum(vals) / n
+    var = sum((v - m) ** 2 for v in vals) / (n - 1)
     return math.sqrt(var) if var > 0 else 0.0
 
 
-def demanda_para_horizonte(horizontes, base=None, hoy=None, fuente=None) -> dict:
+def _sigma_residual(arr, obs, a, b):
+    """σ diaria sobre RESIDUALES de [a, b): cada día observado contra la media
+    de su bloque de 4 semanas. El cambio de nivel de la temporada no se cuenta
+    como variabilidad; los días censurados no entran."""
+    suma_res, n_tot, n_bloques = 0.0, 0, 0
+    for s in range(a, b, VENTANA_MIN_HORIZONTE):
+        vals = [arr[x] for x in range(s, min(b, s + VENTANA_MIN_HORIZONTE)) if obs[x]]
+        if len(vals) < 2:
+            continue
+        m = sum(vals) / len(vals)
+        suma_res += sum((v - m) ** 2 for v in vals)
+        n_tot += len(vals)
+        n_bloques += 1
+    if n_tot - n_bloques <= 0:
+        return 0.0
+    var = suma_res / (n_tot - n_bloques)
+    return math.sqrt(var) if var > 0 else 0.0
+
+
+def _base_no_estacional(arr, obs, a, b):
+    """La venta NORMAL del SKU: la mediana de las tasas de sus bloques de 4
+    semanas del último año (solo días observados, bloques con ≥ 14). Un pico
+    de 3 meses no la mueve; es el piso que la estación no puede perforar sin
+    decirlo."""
+    tasas = []
+    for s in range(a, b, VENTANA_MIN_HORIZONTE):
+        _u, n, t = _tasa(arr, obs, s, min(b, s + VENTANA_MIN_HORIZONTE))
+        if n >= 14 and t is not None:
+            tasas.append(t)
+    if not tasas:
+        return None
+    tasas.sort()
+    m = len(tasas) // 2
+    return tasas[m] if len(tasas) % 2 else (tasas[m - 1] + tasas[m]) / 2.0
+
+
+def _texto_censura(eventos, inicio, a, b):
+    """Los días censurados dentro de [a, b), en palabras."""
+    dias = 0
+    for _t, i, j in eventos:
+        dias += max(0, min(j, b) - max(i, a))
+    return dias
+
+
+def demanda_para_horizonte(horizontes, base=None, hoy=None, fuente=None, serie=None,
+                           stock_en_cero=None) -> dict:
     """LA venta diaria para los próximos días que un pedido tiene que cubrir.
     La leen el punto de pedido y el nivel objetivo (nacional y China).
 
+    La serie diaria de cada SKU se lee UNA vez (la de `lectura_demanda`, o la
+    que pase `rop_dual`) y se limpia de lo que no es demanda: los días que el
+    SKU no existía y los días censurados (`censura_inferida`: sin
+    `StockDiario` —producción— rachas en cero improbables, el agotado de hoy
+    y las caídas abruptas; con `StockDiario`, sus días sin existencias).
+
     Por SKU, con `H` = su horizonte (lead time + ciclo) y `W = max(H, 28)`:
 
-      1. **Mismo período del año pasado** — lo vendido en los W días que
-         empiezan hoy hace 52 semanas, sobre los días que tuvo existencias
-         (`dias_expuestos`, la política de siempre);
-      2. **× la tendencia de este año** — últimas 8 semanas contra las mismas
-         8 del año pasado, ACOTADA (`limites_tendencia`); con poca venta en
-         esas semanas, 1 y dicho;
-      3. σ sobre residuales (`_sigma_residual`), por la misma tendencia.
+      1. **Mismo período del año pasado** — la tasa de los W días que empiezan
+         hoy hace 52 semanas, sobre los días observados. Si ahí hubo días
+         censurados, la ventana corregida no se usa sola: se toma el MAYOR
+         entre ella y la venta normal del SKU (`_base_no_estacional`), y se
+         dice («el año pasado se agotó ~21 de 28 días…»).
+      2. **× la tendencia** — tasa de las últimas 8 semanas contra las mismas
+         del año pasado, ambas sobre días observados, ACOTADA
+         (`limites_tendencia`); con < 30 u o < 14 días observados en alguna
+         de las dos, 1,0 y dicho.
+      3. σ = el mayor entre la de residuales del año y la de la ventana del
+         año pasado, por la tendencia.
 
-    Cae al PROMEDIO de 12 meses (`demanda_descensurada`, lo de antes) — y lo
-    dice en el texto — cuando: la fuente no cubre un año más 4 semanas; el SKU
-    vende menos de `ANO_MIN_UNIDADES` al año (la temporada no se mide con tan
-    poco); o el año pasado no vendió ni en estas fechas ni en las semanas
-    anteriores (no hay temporada que copiar). Regla 0: sin el dato, el número
-    de siempre y declarado, no uno inventado.
+    Sin año anterior (la fuente no cubre 392 días, o el SKU empezó a venderse
+    después del inicio de la ventana del año pasado): la tasa de las últimas
+    13 semanas desde su primera venta, sobre días observados (P1-E). Con
+    < 24 u al año: la tasa del año sobre días observados. Nunca por debajo de
+    su venta normal sin decirlo.
 
     Los días atípicos se topan con `tope_atipicos` (medido sobre el último
     año); la venta de proyecto ya viene apartada por `serie_demanda`.
 
     Args:
         horizontes: días por SKU ({ref: H}) o un número para todos.
-        base: el resultado de `KardexService.demanda_descensurada(12, 'red')`
-            (el promedio y la bandera «sin venta reciente»); si falta, se lee.
+        base: `KardexService.demanda_descensurada(12, 'red')` (la bandera «sin
+            venta reciente» y el último respaldo); si falta, se lee.
+        serie: una `lectura_demanda` ya hecha (una lectura por corrida).
+        stock_en_cero: `_stock_en_cero()` ya leído.
 
     Returns: {ref: {metodo, motivo, d_dia, sigma_dia, horizonte_dias,
-                    ventana_dias, ano_anterior, tendencia, atipicos,
-                    venta_proyecto, vuelve_en_temporada, texto}}
+                    ventana_dias, ano_anterior, tendencia, censura, base_normal,
+                    atipicos, venta_proyecto, vuelve_en_temporada, texto}}
     """
     from app.services import demanda_fuentes as dfu
     hoy = hoy or _dia_operativo()
     fuente = fuente or fuente_elegida(hoy)
+    lectura = serie if serie is not None else lectura_demanda(fuente, hoy)
     if base is None:
-        base = KardexService.demanda_descensurada(ventana_meses=12, nivel='red')
+        base = KardexService.demanda_descensurada(ventana_meses=12, nivel='red',
+                                                  fuente=fuente, lectura=lectura)
     if isinstance(horizontes, dict):
         refs = [r for r in horizontes if r in base]
     else:
@@ -1299,107 +1551,207 @@ def demanda_para_horizonte(horizontes, base=None, hoy=None, fuente=None) -> dict
 
     lim = limites_tendencia()
     proy = bodegas_de_proyecto()
-    primer, fin = (None, None)
-    if fuente.get('fuente') != dfu.FUENTE_NINGUNA:
-        primer, fin = cobertura_demanda(fuente)
-    if fin is not None:
-        # Hoy no está completo: la tendencia y el último año terminan ayer.
-        fin = min(fin, hoy - timedelta(days=1))
-    dias_previos = ((fin - timedelta(days=DIAS_ANO)) - primer).days + 1 if primer and fin else 0
+    if lectura is None or fuente.get('fuente') == dfu.FUENTE_NINGUNA:
+        return {ref: {'metodo': METODO_PROMEDIO, 'motivo': 'SIN_LECTURA',
+                      'd_dia': base[ref]['d_avg'], 'sigma_dia': base[ref]['sigma_d'],
+                      'horizonte_dias': _h(ref), 'ventana_dias': None, 'ano_anterior': None,
+                      'tendencia': None, 'censura': None, 'base_normal': None,
+                      'atipicos': base[ref].get('atipicos'),
+                      'venta_proyecto': base[ref].get('venta_proyecto') or 0.0,
+                      'vuelve_en_temporada': False,
+                      'texto': (f'No se pudo leer la venta diaria: se usa el promedio, '
+                                f'{_num_dia(base[ref]["d_avg"])} al día.')}
+                for ref in refs}
+    inicio = lectura['desde']
+    primer = lectura['primer']
+    fin = min(lectura['fin'], hoy - timedelta(days=1))
+    serie_dict = lectura['serie']
+    L = (fin - inicio).days + 1
+    if L <= 0 or not refs:
+        return {}
+    dias_previos = ((fin - timedelta(days=DIAS_ANO)) - primer).days + 1
     t_dias = min(TENDENCIA_DIAS, 7 * (max(dias_previos, 0) // 7))
     hay_ano = t_dias >= TENDENCIA_DIAS_MIN
-    dias_obs = (fin - primer).days + 1 if primer and fin else 0
+    dias_obs = (fin - primer).days + 1
 
-    def _promedio(ref, motivo, texto):
-        b = base[ref]
-        return {'metodo': METODO_PROMEDIO, 'motivo': motivo,
-                'd_dia': b['d_avg'], 'sigma_dia': b['sigma_d'],
-                'horizonte_dias': _h(ref), 'ventana_dias': None,
-                'ano_anterior': None, 'tendencia': None,
-                'atipicos': b.get('atipicos'),
-                'venta_proyecto': b.get('venta_proyecto') or 0.0,
-                'vuelve_en_temporada': False, 'texto': texto}
+    ix = lambda f: (f - inicio).days          # noqa: E731
+    i_fin = L                                  # exclusivo
+    i_ano = max(0, L - DIAS_ANO)
+    ly_ini = hoy - timedelta(days=DIAS_ANO)
+    i_ly = ix(ly_ini)
+    i_rec = L - t_dias
+    i_lyr_fin = L - DIAS_ANO                   # exclusivo
+    i_lyr = i_lyr_fin - t_dias
+    w_tope = L - i_ly
+
+    en_cero = stock_en_cero if stock_en_cero is not None else _stock_en_cero(refs)
+    tramos = intervalos_con_stock(inicio, fin, 'red')
+    inicio_ord = inicio.toordinal()
 
     salida = {}
-    if not hay_ano:
-        for ref in refs:
-            d = base[ref]['d_avg']
-            salida[ref] = _promedio(
-                ref, 'SIN_ANO_ANTERIOR',
-                f'Todavía no hay un año de ventas para comparar con la misma época '
-                f'(hay {_num(dias_obs)} días; hacen falta {DIAS_ANO + TENDENCIA_DIAS_MIN}): '
-                f'se usa el promedio de lo observado, {_num_dia(d)} al día. '
-                'En temporada puede quedarse corto.')
-        return _con_notas(salida, base, proy)
-
-    # Una lectura para todos: el último año más las semanas de la tendencia
-    # del año anterior y la ventana que viene.
-    ly_ini = hoy - timedelta(days=DIAS_ANO)
-    w_max = max((_h(r) for r in refs), default=VENTANA_MIN_HORIZONTE)
-    w_max = max(w_max, VENTANA_MIN_HORIZONTE)
-    w_tope = (fin - ly_ini).days + 1
-    lect_desde = max(primer, min(fin - timedelta(days=DIAS_ANO + t_dias - 1), ly_ini))
-    serie = serie_demanda(lect_desde, fin, 'red', fuente=fuente)
-    tramos = intervalos_con_stock(
-        ly_ini, ly_ini + timedelta(days=min(w_max, w_tope) - 1), 'red')
-
-    rec_desde = fin - timedelta(days=t_dias - 1)
-    lyr_hasta = fin - timedelta(days=DIAS_ANO)
-    lyr_desde = lyr_hasta - timedelta(days=t_dias - 1)
-    ano_desde = fin - timedelta(days=DIAS_ANO - 1)
-
     for ref in refs:
         b = base[ref]
-        por_dia_crudo = (serie.get(ref) or {}).get('por_dia') or {}
-        ultimo_ano = {f: v for f, v in por_dia_crudo.items() if ano_desde <= f <= fin}
-        por_dia, atip = tope_atipicos(por_dia_crudo, DIAS_ANO, referencia_de=ultimo_ano)
-        ano = _suma(por_dia, ano_desde, fin)
-        w = max(_h(ref), VENTANA_MIN_HORIZONTE)
-        w = min(w, w_tope)
+        por_dia_crudo = (serie_dict.get(ref) or {}).get('por_dia') or {}
+        arr = [0.0] * L
+        for f, v in por_dia_crudo.items():
+            k = f.toordinal() - inicio_ord
+            if 0 <= k < L:
+                arr[k] = v
+        ultimo_ano = {}
+        for k in range(i_ano, L):
+            if arr[k]:
+                ultimo_ano[k] = arr[k]
+        topado, atip = tope_atipicos({k: v for k, v in enumerate(arr) if v},
+                                     DIAS_ANO, referencia_de=ultimo_ano)
+        if atip:
+            for d in atip['dias']:
+                d['fecha'] = (inicio + timedelta(days=int(d['fecha']))).isoformat()
+            for k, v in topado.items():
+                arr[k] = v
+        primera = next((k for k, v in enumerate(arr) if v > 0), L)
+        # Días observados: desde la primera venta, sin los censurados.
+        if ref in tramos:
+            # Con StockDiario: la censura se MIDE (días sin existencias).
+            mascara = bytearray(b'\x01') * L
+            for ini_o, fin_o in tramos[ref]:
+                for k in range(max(0, ini_o - inicio_ord), min(L, fin_o - inicio_ord)):
+                    mascara[k] = 0
+            eventos = []
+        else:
+            ec = en_cero.get(ref) or {}
+            desde_ix = ix(ec['desde']) if ec.get('desde') else None
+            mascara, eventos = censura_inferida(arr, primera, bool(ec.get('en_cero')), desde_ix)
+        con_stock_diario = ref in tramos
+        if con_stock_diario:
+            # Con StockDiario lo observado es lo que tuvo existencias, aunque
+            # sea antes de la primera venta: esos son ceros verdaderos.
+            obs = bytearray(0 if mascara[k] else 1 for k in range(L))
+        elif not eventos and not any(mascara):
+            obs = bytearray(min(primera, L)) + bytearray(b'\x01') * (L - min(primera, L))
+        else:
+            obs = bytearray(1 if (k >= primera and not mascara[k]) else 0 for k in range(L))
+        w = min(max(_h(ref), VENTANA_MIN_HORIZONTE), max(w_tope, 1))
+        base_ne = _base_no_estacional(arr, obs, i_ano, i_fin)
+        u_ano = sum(arr[i_ano:i_fin])
+        comun = {'horizonte_dias': _h(ref), 'atipicos': atip,
+                 'venta_proyecto': b.get('venta_proyecto') or 0.0,
+                 'base_normal': round(base_ne, 4) if base_ne is not None else None,
+                 'censura': {'dias': sum(mascara), 'eventos': [
+                     {'tipo': t, 'desde': (inicio + timedelta(days=i)).isoformat(),
+                      'hasta': (inicio + timedelta(days=j - 1)).isoformat(), 'dias': j - i}
+                     for t, i, j in eventos if t != 'SIN_EXISTENCIAS'][:6]}}
+
+        def _reciente(motivo, intro):
+            a = max(primera, L - RECIENTE_DIAS)
+            dias_con_venta = sum(1 for x in range(a, L) if arr[x] > 0)
+            if dias_con_venta < RECIENTE_MIN_DIAS_CON_VENTA and L - a >= RECIENTE_DIAS:
+                # Vende de a ratos: 13 semanas son ruido; su venta del año.
+                if con_stock_diario:
+                    t, sigma, n = b['d_avg'], b['sigma_d'], b['dias_con_stock']
+                    u = b['demanda_neta']
+                else:
+                    a2 = max(primera, i_ano)
+                    u, n, t = _tasa(arr, obs, a2, L)
+                    t = t if t is not None else b['d_avg']
+                    sigma = _desvio(arr, obs, a2, L)
+                return dict(comun, metodo=METODO_RECIENTE, motivo=motivo, d_dia=round(t, 6),
+                            sigma_dia=round(sigma, 6), ventana_dias=None, ano_anterior=None,
+                            tendencia=None, vuelve_en_temporada=False,
+                            texto=(f'{intro} y vende de a ratos ({dias_con_venta} días con venta '
+                                   f'en las últimas 13 semanas): se usa su venta del último año, '
+                                   f'{_num_dia(t)} al día.'))
+            u, n, t = _tasa(arr, obs, a, L)
+            if t is None:
+                t = b['d_avg']
+            cens_n = sum(mascara[a:L])
+            sigma = _desvio(arr, obs, a, L)
+            texto = (f'{intro} se usa lo que vendió en sus últimas {_semanas(L - a)}: '
+                     f'{_num(u)} en {n} días con existencias, {_num_dia(t)} al día.')
+            if cens_n:
+                texto += f' No se cuentan {cens_n} días en que parece haberse agotado.'
+            return dict(comun, metodo=METODO_RECIENTE, motivo=motivo, d_dia=round(t, 6),
+                        sigma_dia=round(sigma, 6), ventana_dias=L - a, ano_anterior=None,
+                        tendencia=None, vuelve_en_temporada=False, texto=texto)
+
+        if not hay_ano:
+            salida[ref] = _reciente(
+                'SIN_ANO_ANTERIOR',
+                f'Todavía no hay un año de ventas para comparar con la misma época '
+                f'(hay {_num(dias_obs)} días; hacen falta {DIAS_ANO + TENDENCIA_DIAS_MIN}):')
+            continue
+        if primera >= L:
+            salida[ref] = dict(comun, metodo=METODO_PROMEDIO, motivo='SIN_VENTA_LEIDA',
+                               d_dia=b['d_avg'], sigma_dia=b['sigma_d'], ventana_dias=None,
+                               ano_anterior=None, tendencia=None, vuelve_en_temporada=False,
+                               texto=(f'No se leyó venta en el último año: se usa el promedio, '
+                                      f'{_num_dia(b["d_avg"])} al día.'))
+            continue
+        if primera > i_ly:
+            salida[ref] = _reciente(
+                'PRODUCTO_NUEVO',
+                f'Se vende desde el {_fecha_corta(inicio + timedelta(days=primera))}: todavía '
+                'no tiene la misma época del año pasado;')
+            continue
+        if u_ano < ANO_MIN_UNIDADES:
+            u, n, t = _tasa(arr, obs, max(primera, i_ano), L)
+            t = t if t is not None else b['d_avg']
+            salida[ref] = dict(comun, metodo=METODO_PROMEDIO, motivo='POCA_VENTA',
+                               d_dia=round(t, 6),
+                               sigma_dia=round(_desvio(arr, obs, max(primera, i_ano), L), 6),
+                               ventana_dias=None, ano_anterior=None, tendencia=None,
+                               vuelve_en_temporada=False,
+                               texto=(f'Vende poco ({_num(u_ano)} en el último año): no alcanza '
+                                      f'para medir la temporada; se usa su venta del año, '
+                                      f'{_num_dia(t)} al día.'))
+            continue
+
+        # ── Mismo período del año pasado ──
+        a_ly, b_ly = i_ly, i_ly + w
+        ly_u, ly_n, ly_t = _tasa(arr, obs, a_ly, b_ly)
+        ly_bruto = sum(arr[a_ly:b_ly])
+        cens_w = sum(mascara[a_ly:b_ly])
         ly_desde, ly_hasta = ly_ini, ly_ini + timedelta(days=w - 1)
-        ly = _suma(por_dia, ly_desde, ly_hasta)
-        rec = _suma(por_dia, rec_desde, fin)
-        ly_rec = _suma(por_dia, lyr_desde, lyr_hasta)
-
-        if ano < ANO_MIN_UNIDADES:
-            r = _promedio(ref, 'POCA_VENTA',
-                          f'Vende poco ({_num(ano)} en el último año): no alcanza para '
-                          f'medir la temporada; se usa el promedio, {_num_dia(b["d_avg"])} al día.')
-            salida[ref] = r
-            continue
-        if ly <= 0 and ly_rec <= 0:
-            salida[ref] = _promedio(
-                ref, 'SIN_VENTA_EN_ESTAS_FECHAS',
-                f'El año pasado no vendió en estas fechas ni en las {_semanas(t_dias)} '
-                f'anteriores: no hay temporada que copiar; se usa el promedio del año, '
-                f'{_num_dia(b["d_avg"])} al día.')
-            continue
-
-        n_exp, censurado = dias_expuestos(dias_en(tramos.get(ref), ly_desde, ly_hasta), w)
-        tasa = ly / n_exp if n_exp > 0 else 0.0
-        if ly_rec >= TENDENCIA_MIN_UNIDADES:
-            medida = rec / ly_rec
-            factor = min(max(medida, lim['piso']), lim['techo'])
+        partes = []
+        if cens_w:
+            corregida = ly_t
+            if corregida is None:
+                tasa = base_ne or 0.0
+                partes.append(
+                    f'El año pasado, del {_fecha_corta(ly_desde)} al {_fecha_corta(ly_hasta)}, '
+                    f'parece haberse agotado los {w} días: no hay con qué medir la temporada; '
+                    f'se usa su venta normal, {_num_dia(tasa)} al día.')
+                ajuste = 'SIN_DIAS_CON_EXISTENCIAS'
+            else:
+                tasa = max(corregida, base_ne or 0.0)
+                partes.append(
+                    f'El año pasado, del {_fecha_corta(ly_desde)} al {_fecha_corta(ly_hasta)}, '
+                    f'parece haberse agotado ~{cens_w} de {w} días (vendió {_num(ly_bruto)} en '
+                    f'los {ly_n} que tuvo existencias); se estima con esos días: '
+                    f'{_num_dia(corregida)} al día.')
+                if tasa > corregida:
+                    partes.append(f'Como eso es menos que su venta normal '
+                                  f'({_num_dia(base_ne)} al día), se usa la venta normal.')
+                ajuste = 'CORREGIDA_POR_AGOTADO'
         else:
-            medida, factor = None, 1.0
-        d = tasa * factor
-        sigma = _sigma_residual(por_dia, fin) * factor
-        vuelve = bool(b.get('sin_venta_reciente') and ly > 0
-                      and ly_rec < VENTAS_ESPERADAS_MIN_PARA_DESCONTINUAR)
+            tasa = ly_t if ly_t is not None else 0.0
+            partes.append(f'El año pasado, del {_fecha_corta(ly_desde)} al '
+                          f'{_fecha_corta(ly_hasta)}, vendió {_num(ly_bruto)}'
+                          + (f' (con existencias {ly_n} de esos {w} días)' if ly_n < w else '')
+                          + '.')
+            ajuste = None
 
-        # ── El porqué, en palabras del comprador ──
-        partes = [f'El año pasado, del {_fecha_corta(ly_desde)} al {_fecha_corta(ly_hasta)}, '
-                  f'vendió {_num(ly)}'
-                  + (f' (con existencias {n_exp} de esos {w} días)'
-                     if not censurado and n_exp < w else '') + '.']
+        # ── Tendencia sobre días observados ──
+        rec_u, rec_n, rec_t = _tasa(arr, obs, i_rec, L)
+        lyr_u, lyr_n, lyr_t = _tasa(arr, obs, i_lyr, i_lyr_fin)
+        excl = sum(mascara[i_rec:L]) + sum(mascara[max(0, i_lyr):i_lyr_fin])
         semanas_t = _semanas(t_dias)
-        if medida is None:
-            partes.append(f'En esas mismas {semanas_t} del año pasado vendió solo '
-                          f'{_num(ly_rec)}: muy poco para saber si este año va arriba o '
-                          'abajo; se cuenta igual que el año pasado.')
-        else:
+        if (lyr_u >= TENDENCIA_MIN_UNIDADES and rec_n >= DIAS_OBS_MIN_TENDENCIA
+                and lyr_n >= DIAS_OBS_MIN_TENDENCIA and lyr_t):
+            medida = rec_t / lyr_t
+            factor = min(max(medida, lim['piso']), lim['techo'])
             pct_m = round((medida - 1) * 100)
-            comp = (f'(últimas {semanas_t}: {_num(rec)} contra {_num(ly_rec)} el año pasado)')
+            comp = (f'(últimas {semanas_t}: {_num(rec_u)} contra {_num(lyr_u)} el año pasado'
+                    + (f', sin contar {excl} días agotados' if excl else '') + ')')
             if pct_m == 0:
                 partes.append(f'Este año va igual que el año pasado {comp}.')
             else:
@@ -1408,31 +1760,45 @@ def demanda_para_horizonte(horizontes, base=None, hoy=None, fuente=None) -> dict
                 pct_f = round((factor - 1) * 100)
                 partes.append(f'Se cuenta como mucho {abs(pct_f)} % '
                               f'{"arriba" if pct_f > 0 else "abajo"}: el tope declarado.')
+        else:
+            medida, factor = None, 1.0
+            if lyr_n < DIAS_OBS_MIN_TENDENCIA or rec_n < DIAS_OBS_MIN_TENDENCIA:
+                partes.append(f'En las últimas {semanas_t} (o en las mismas del año pasado) casi '
+                              'no tuvo existencias: no se sabe si va arriba o abajo; se cuenta '
+                              'igual que el año pasado.')
+            else:
+                partes.append(f'En esas mismas {semanas_t} del año pasado vendió solo '
+                              f'{_num(lyr_u)}: muy poco para saber si este año va arriba o '
+                              'abajo; se cuenta igual que el año pasado.')
+        d = tasa * factor
+        sigma = max(_sigma_residual(arr, obs, i_ano, i_fin),
+                    _desvio(arr, obs, a_ly, b_ly)) * factor
+        vuelve = bool(b.get('sin_venta_reciente') and ly_bruto > 0
+                      and lyr_u < VENTAS_ESPERADAS_MIN_PARA_DESCONTINUAR)
         partes.append(f'Para las próximas {_semanas(w)} se cuentan {_num_dia(d)} al día.')
+        if base_ne is not None and d < base_ne:
+            partes.append(f'Es menos que su venta normal ({_num_dia(base_ne)} al día): el año '
+                          'pasado en esta época vendió menos.')
         if vuelve:
             partes.append('No ha vendido en los últimos meses, pero el año pasado tampoco '
                           'en esta época y sí en las semanas que vienen: se repone.')
-        salida[ref] = {
-            'metodo': METODO_MISMO_PERIODO, 'motivo': None,
-            'd_dia': round(d, 6), 'sigma_dia': round(sigma, 6),
-            'horizonte_dias': _h(ref), 'ventana_dias': w,
-            'ano_anterior': {'desde': ly_desde.isoformat(), 'hasta': ly_hasta.isoformat(),
-                             'vendido': round(ly, 2), 'dias_con_existencias': n_exp,
-                             'faltan_datos_de_agotados': censurado},
-            'tendencia': {'factor': round(factor, 4),
-                          'medida': round(medida, 4) if medida is not None else None,
-                          'pct': round((factor - 1) * 100),
-                          'pct_medida': round((medida - 1) * 100) if medida is not None else None,
-                          'acotada': medida is not None and factor != medida,
-                          'semanas': t_dias // 7, 'reciente': round(rec, 2),
-                          'ano_anterior': round(ly_rec, 2),
-                          'piso': lim['piso'], 'techo': lim['techo'],
-                          'limites_fuente': lim['fuente']},
-            'atipicos': atip,
-            'venta_proyecto': b.get('venta_proyecto') or 0.0,
-            'vuelve_en_temporada': vuelve,
-            'texto': ' '.join(partes),
-        }
+        salida[ref] = dict(
+            comun, metodo=METODO_MISMO_PERIODO, motivo=ajuste,
+            d_dia=round(d, 6), sigma_dia=round(sigma, 6), ventana_dias=w,
+            ano_anterior={'desde': ly_desde.isoformat(), 'hasta': ly_hasta.isoformat(),
+                          'vendido': round(ly_bruto, 2), 'dias_con_existencias': ly_n,
+                          'dias_agotado': cens_w,
+                          'faltan_datos_de_agotados': bool(cens_w)},
+            tendencia={'factor': round(factor, 4),
+                       'medida': round(medida, 4) if medida is not None else None,
+                       'pct': round((factor - 1) * 100),
+                       'pct_medida': round((medida - 1) * 100) if medida is not None else None,
+                       'acotada': medida is not None and factor != medida,
+                       'semanas': t_dias // 7, 'reciente': round(rec_u, 2),
+                       'ano_anterior': round(lyr_u, 2), 'dias_sin_contar': excl,
+                       'piso': lim['piso'], 'techo': lim['techo'],
+                       'limites_fuente': lim['fuente']},
+            vuelve_en_temporada=vuelve, texto=' '.join(partes))
     return _con_notas(salida, base, proy)
 
 
@@ -1456,6 +1822,81 @@ def _con_notas(salida, base, proy):
             r['texto'] = f'{r["texto"]} {" ".join(extra)}'
     return salida
 
+
+#: Tipos de `registros_sync` que escriben venta (la de Siesa, el relleno de
+#: pedidos, el kardex): una lectura nueva invalida la lectura guardada.
+TIPOS_REGISTRO_DE_VENTA = ('demanda_siesa', 'demanda_pedidos', 'kardex')
+CACHE_LECTURA_HORAS = 6
+_CACHE_LECTURA = {}
+
+
+def cache_compras_activa() -> bool:
+    """¿Se guardan los cálculos pesados de compras en el proceso? Sí, salvo
+    `COMPRAS_CACHE_ROP=false` o en los tests (cada test arma su mundo; los de
+    la caché la encienden con `COMPRAS_CACHE_ROP_EN_TESTS`). Una política: la
+    usan la lectura de la venta y el ROP."""
+    if (os.getenv('COMPRAS_CACHE_ROP') or '').strip().lower() in ('false', '0', 'no'):
+        return False
+    try:
+        from flask import current_app
+        cfg = current_app.config
+    except RuntimeError:
+        return False
+    return not (cfg.get('TESTING') and not cfg.get('COMPRAS_CACHE_ROP_EN_TESTS'))
+
+
+def sello_de_la_venta(fuente) -> tuple:
+    """Cambia cuando llega venta nueva: la cobertura de la fuente, la última
+    lectura registrada de cada tipo que escribe venta y el último movimiento
+    del kardex. La caché de la lectura (tanda G) se invalida con esto; una
+    re-foto de pedidos del mismo día sin registro se cubre con el techo de
+    horas (declarado)."""
+    from sqlalchemy import func
+    from app.models.registro_sync import RegistroSync
+    return (
+        fuente.get('fuente'), repr(fuente.get('cobertura')),
+        db.session.query(func.max(RegistroSync.id))
+        .filter(RegistroSync.tipo.in_(TIPOS_REGISTRO_DE_VENTA)).scalar(),
+        tuple(sorted(bodegas_de_proyecto()['bodegas'])),
+    )
+
+
+def lectura_demanda(fuente=None, hoy=None, nivel='red') -> dict:
+    """UNA lectura de la venta diaria para toda una corrida del motor: la
+    ventana más ancha que piden la demanda de 12 meses y la del horizonte (el
+    último año + las semanas de la tendencia del año anterior). Antes se leía
+    dos veces (P1-F: 24 s y 600 MB con la mitad del volumen de producción).
+
+    Returns: {'desde', 'hasta', 'fin' (último día observado), 'primer'
+              (primer día observado de la fuente), 'serie' (de `serie_demanda`),
+              'fuente'} o None sin fuente."""
+    from app.services import demanda_fuentes as dfu
+    hoy = hoy or _dia_operativo()
+    fuente = fuente or fuente_elegida(hoy)
+    if fuente.get('fuente') == dfu.FUENTE_NINGUNA:
+        return None
+    primer, fin = cobertura_demanda(fuente)
+    if primer is None or fin is None:
+        return None
+    desde_12, hasta_12, _c = ventana_observada(12, hasta=hoy, fuente=fuente)
+    desde = max(primer, fin - timedelta(days=DIAS_ANO + TENDENCIA_DIAS - 1))
+    if desde_12 is not None:
+        desde = min(desde, desde_12)
+    hasta = max(fin, hasta_12 or fin)
+    # Guardada por proceso hasta que llegue venta nueva (tanda G): el sync
+    # de OCs y el refresco de existencias no la invalidan.
+    clave = None
+    if cache_compras_activa():
+        clave = (desde, hasta, nivel, sello_de_la_venta(fuente))
+        x = _CACHE_LECTURA.get(clave)
+        if x is not None and (datetime.utcnow() - x[0]).total_seconds() < CACHE_LECTURA_HORAS * 3600:
+            return x[1]
+    lectura = {'desde': desde, 'hasta': hasta, 'fin': fin, 'primer': primer,
+               'serie': serie_demanda(desde, hasta, nivel, fuente=fuente), 'fuente': fuente}
+    if clave is not None:
+        _CACHE_LECTURA.clear()
+        _CACHE_LECTURA[clave] = (datetime.utcnow(), lectura)
+    return lectura
 
 class KardexService:
 
@@ -2248,7 +2689,8 @@ class KardexService:
 
     @staticmethod
     def demanda_descensurada(ventana_meses: int = 12, nivel: str = 'red',
-                             incluir_sin_venta: bool = False) -> dict:
+                             incluir_sin_venta: bool = False, fuente=None,
+                             lectura=None) -> dict:
         """
         LA demanda diaria descensurada por SKU, con su sigma. Única en el sistema.
 
@@ -2282,14 +2724,22 @@ class KardexService:
                           factor_censura, censurado, ventas_recientes,
                           dias_stock_recientes, sin_venta_reciente, desde, hasta}}
         """
-        fuente = fuente_elegida(None, ventana_meses)
+        fuente = fuente or fuente_elegida(None, ventana_meses)
         desde, hasta, _cob = ventana_observada(ventana_meses, fuente=fuente)
         if desde is None:
             return {}
         nivel = 'red' if nivel == 'red' else 'bodega'
         dias_ventana = (hasta - desde).days + 1
 
-        serie = serie_demanda(desde, hasta, nivel, fuente=fuente)
+        recortar = False
+        if lectura is not None and nivel == 'red' and lectura['desde'] <= desde \
+                and lectura['hasta'] >= hasta:
+            # UNA lectura por corrida (`lectura_demanda`, P1-F): se recorta
+            # clave por clave (sin copiar la serie entera: memoria).
+            serie = lectura['serie']
+            recortar = lectura['desde'] < desde or lectura['hasta'] > hasta
+        else:
+            serie = serie_demanda(desde, hasta, nivel, fuente=fuente)
         tramos = intervalos_con_stock(desde, hasta, nivel)
 
         n_rec = dias_sin_venta()
@@ -2303,11 +2753,14 @@ class KardexService:
         salida = {}
         for key in claves:
             s = serie.get(key) or {'por_dia': {}, 'bruta': 0.0, 'devuelta': 0.0}
+            pd = s['por_dia']
+            if recortar:
+                pd = {f: x for f, x in pd.items() if desde <= f <= hasta}
             # Un día fuera de toda proporción se cuenta hasta su tope
             # (`tope_atipicos`, la misma del horizonte) y se declara.
-            por_dia, atipicos = tope_atipicos(s['por_dia'], dias_ventana)
+            por_dia, atipicos = tope_atipicos(pd, dias_ventana)
             suma = sum(por_dia.values())
-            if suma <= 0 and not incluir_sin_venta:
+            if suma <= 0 and not incluir_sin_venta and not s.get('venta_proyecto'):
                 continue
             suma_cuad = sum(v * v for v in por_dia.values())
 
