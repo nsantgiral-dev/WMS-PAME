@@ -63,7 +63,7 @@ def _ruta(db, almacen, conductor, paradas, estado='ENTREGADA', financiero='PENDI
     for est, fp, monto, vf in paradas:
         t = TareaPacking(codigo=f'PK-{uuid.uuid4().hex[:6]}', estado='DESPACHADO',
                          almacen_id=almacen.id, tipo_docto_pedido_siesa='PD',
-                         consec_docto_pedido_siesa=1, numero_pedido_siesa=f'PD{uuid.uuid4().hex[:4]}',
+                         consec_docto_pedido_siesa=1, numero_pedido_siesa=f'PD{uuid.uuid4().hex[:10]}',
                          cliente='Cliente <b>X</b>', valor_factura=vf,
                          cond_pago='C02', cobro_contraentrega=True, dias_credito=1,
                          clasif_origen='MAESTRO')
