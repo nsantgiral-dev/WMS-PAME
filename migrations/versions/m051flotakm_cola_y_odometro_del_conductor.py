@@ -1,7 +1,7 @@
 """Flota — la cola del conductor no pierde nada, y el odómetro no se envenena (T2 y T3, 2026-09-27)
 
 Revision ID: m051flotakm
-Revises: m050inv2
+Revises: m051flotalegal
 Create Date: 2026-09-27
 
 Aditiva, sin backfill.
@@ -30,7 +30,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = 'm051flotakm'
-down_revision = 'm050inv2'
+down_revision = 'm051flotalegal'
 branch_labels = None
 depends_on = None
 
