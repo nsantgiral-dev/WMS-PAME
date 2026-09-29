@@ -407,6 +407,25 @@ class TestElHistorico:
         assert t3['consulta'] not in [x['consulta'] for x in dfu.ventanas_pendientes(hoy)]
         assert date(2026, 9, 25) in dfu.cobertura_siesa(con_dias=True)['dias_cubiertos']
 
+    def test_registrada_de_nuevo_sin_ventas_nuevas_igual_se_relee(self, app, db):
+        """Los días del hueco no tuvieron venta: la consulta registrada de nuevo
+        trae las mismas filas (mismo total, misma ancla). Solo el `hasta`
+        distinto dice que hay que releer — y cubrir esos días en cero."""
+        from app.models.demanda_siesa import DemandaDiaCubierto
+        from app.services import demanda_fuentes as dfu
+        hoy = date(2026, 10, 20)
+        t3 = dfu.ventanas_historicas(hoy)[1]
+        a_medias = date(2026, 9, 20)
+        filas = _filas(t3['desde'], a_medias, refs=('A',), bodegas=('NB1',))
+        gw = SiesaVentas({t3['consulta']: (filas, t3['desde'], a_medias)})
+        dfu.descargar_ventana(t3, gateway=gw, pausa_s=0, reloj=gw.reloj, hoy=hoy)
+        for d in _dias(date(2026, 10, 1), hoy - timedelta(days=1)):
+            db.session.add(DemandaDiaCubierto(fecha=d))
+        db.session.commit()
+        gw.registrar(t3['consulta'], filas, t3['desde'], t3['fin'])
+        dfu.descargar_historico(gateway=gw, pausa_s=0, reloj=gw.reloj, hoy=hoy)
+        assert date(2026, 9, 25) in dfu.cobertura_siesa(con_dias=True)['dias_cubiertos']
+
     def test_el_periodo_en_curso_no_se_registra_ni_se_lee(self, app, db):
         from app.services import demanda_fuentes as dfu
         hoy = _hoy()

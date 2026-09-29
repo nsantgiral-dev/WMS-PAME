@@ -89,9 +89,10 @@ class TestElRefrescoDeExistencias:
         with patch('threading.Thread') as T, patch('threading.Timer') as Tm:
             iss.iniciar_refresh_periodico(app)
             arranque = T.call_args.kwargs['target']
-            with patch.object(iss, '_descargar_una_pasada_custom',
-                              side_effect=AssertionError('el arranque leyó Siesa')):
+            # Un espía, no una excepción: el arranque atrapa y loguea errores.
+            with patch.object(iss, '_descargar_una_pasada_custom') as lectura:
                 arranque()
+            lectura.assert_not_called()
         # Dos lecturas + la carga física de las 7:00.
         assert Tm.call_count == 3
         assert [h.strftime('%H:%M') for h in iss.horas_de_lectura()] == ['04:30', '23:30']
