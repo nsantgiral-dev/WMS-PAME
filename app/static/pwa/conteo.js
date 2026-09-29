@@ -498,6 +498,8 @@ function _bloqueoAjusteHtml(s) {
 function _aprobacionAjusteHtml(s) {
   if (s.estado !== 'DESCUADRE' || s.bloqueo_ajuste) return '';
   const partes = [];
+  // VAL-12: la foto era la fila en cero de un ítem que Siesa no tenía en la bodega.
+  if (s.sin_fila_en_siesa) partes.push('Siesa no tenía este producto en la bodega: la entrada la aprueba el admin (revise si falta una entrada de compra o un traslado).');
   if (s.ajuste_por_tolerancia) partes.push('Diferencia dentro de tolerancia: se aceptó con el primer conteo, sin segundo conteo.');
   if (s.no_sale_solo && s.no_sale_solo.mensaje) partes.push(`No salió solo: ${s.no_sale_solo.mensaje}.`);
   if (s.valor_ajuste != null) partes.push(`Valor del ajuste: $${Number(s.valor_ajuste).toLocaleString('es-CO', { maximumFractionDigits: 0 })}.`);

@@ -590,6 +590,8 @@ def orden_de_reparto() -> tuple:
 #: estables: las estadísticas agrupan por ellos, no por la prosa.
 SIN_COSTO = 'SIN_COSTO'
 SUPERA_TOPE = 'SUPERA_TOPE'
+#: La entrada de un ítem sin fila en la bodega de Siesa (VAL-12): la firma el admin.
+SIN_FILA_EN_SIESA = 'SIN_FILA_EN_SIESA'
 
 
 def pesos(valor) -> str:

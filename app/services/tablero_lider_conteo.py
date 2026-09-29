@@ -311,6 +311,7 @@ def _ajustes(almacen_id, rol: str = None, usuario_id: int = None) -> dict:
             unidades=abs(dif) if dif is not None else None,
             costo_unitario=costo,
             valor=valor,
+            sin_fila_en_siesa=bool(s.sin_fila_en_siesa),
             dia_conteo=(dia_operativo_de(s.foto_siesa_at).isoformat()
                         if s.foto_siesa_at else None),
             # Por qué QUIEN MIRA no aprueba ESTE ajuste (el tope del jefe es

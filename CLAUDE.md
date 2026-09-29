@@ -7990,6 +7990,8 @@ en una comparación) **y no la clase**:
 |---|---|---|
 | **VAL-1** | Sin foto de Siesa, `registrar_conteo` comparaba el TOTAL contado contra `UbicacionProducto` de UN hueco (`filter_by(ubicacion_id=sesion_pre.ubicacion_id)`): multi-hueco nunca daba MATCH | Contra `existencia_wms_del_sku` |
 | **VAL-2** | El job `AJUSTE_CONTEO` (dos copias: normal y recuperación de AJUSTANDO) aplicaba el delta del total a un hueco con `max(0, …)`: GENERAL 10 + CROSS-DOCK 90, contados 60 → el WMS quedaba en 90, y la carga de las 7:00 **no** lo corrige (GENERAL = max(0, Siesa − huecos reales)) | `ConteoService.aplicar_ajuste_al_wms`: el SKU queda en lo contado; AJ-SAL descuenta primero lo que no es un lugar, después el hueco de la sesión, después el resto, lo reservado al final; un `MovimientoInventario` AJUSTE_CONTEO por hueco; lo que no cabe se dice (`sin_descontar`), nunca un piso 0 callado |
+| **VAL-11** | Un conteo que **cuadraba con Siesa** no tocaba el WMS: con Siesa en 0 (sin fila) y el estante vacío, MATCH en 0 y las unidades fantasma seguían (9 SKUs de NB1 en CROSS-DOCK, 4.052 und) | `ConteoService.cuadrar_wms_con_lo_contado` en todo MATCH con foto: el WMS del SKU queda en lo contado + el POS que Siesa no acumuló (así la carga de las 7:00 no lo deshace), con la misma regla de reparto y un `MovimientoInventario` `CUADRE_CONTEO` por hueco. Siesa no se toca |
+| **VAL-12** | La entrada contra la fila en cero de af2e2f2d salía **sin costo** (el tope no aplicaba) y la firmaba un supervisor de cualquier monto | La sesión guarda `sin_fila_en_siesa` (visible en la tarjeta y el tablero). Esa entrada **nunca sale sola** y **la firma el admin**. El **costo** es la política de David (f74ff44e, `costo_service.costo_entrada_ajuste`: en vivo al aprobar; sin costo, 409 pidiéndolo); para los topes vale el costo de la foto: sin costo, sin valor |
 | **VAL-3** | `/editar` reescribía la cifra de una raíz ya verificada por el doble ciego (o la llevaba a MATCH, sin firma) y quien editó la aprobaba | La cifra confirmada por un 2º conteo **no se corrige** (se recuenta o se cancela); en un 1er conteo sin verificar, quien corrige queda en `cantidad_corregida_por_id` (m051conteo) y **no aprueba** ese ajuste; corregir hasta la cifra de Siesa (cerrar sin firma) se niega |
 
 Compatible con las dos reglas de David ya en qa: «Siesa no tiene fila» =
@@ -8006,9 +8008,15 @@ inventario de 1— y exige que la rama `AJUSTE_CONTEO` del job no escriba
 job a `conteo_service` (1). Los tres xfail del validador, en verde en
 `tests/test_val_conteo_c123.py`.
 
-**Lo que NO cubre:** VAL-4..VAL-9 (P2/P3) siguen abiertos: los SKUs sin fila en
-Siesa ahora los resuelve la regla de af2e2f2d, pero `ultimo_conteo_por_sku` no
-mira `fuente_existencia`; «no cuente lo empacado» mezcla lo remisionado con lo
-que Siesa todavía cuenta; con un solo admin, un CC3 > $100.000 que él contó no
-lo aprueba nadie (salida: cancelar); re-encadenar `m051conteo` detrás de
-`m051asignacion` al integrar.
+De los P2, solo el barato: con **un único admin** que contó un CC3 por encima
+del tope, el mensaje dice que no hay otro admin y qué hacer (recontar con otra
+persona, cancelar, o subir `CONTEO_TOPE_AUTOAPROBACION`).
+
+**Lo que NO cubre:** En un DESCUADRE el WMS recibe el delta de Siesa (contado − teórico): si el WMS
+ya difería del teórico al contar, esa diferencia queda (solo el MATCH lleva el
+WMS a lo contado). P2 abiertos: `ultimo_conteo_por_sku` no mira
+`fuente_existencia`; «no cuente lo empacado» mezcla lo remisionado con lo que
+Siesa todavía cuenta; cifras ocultas a toda supervisión (VAL-6); la auditoría
+de picking manda el total del WMS como conteo (VAL-8). `m051conteo` quedó
+encadenada detrás de `m051flotalegal`; al integrar v3, re-encadenar con
+`m051asignacion`.

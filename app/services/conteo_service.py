@@ -466,6 +466,13 @@ class ConteoService:
         diferencia = ConteoService._diferencia_del_ajuste(sesion)
         if not diferencia:
             return None
+        raiz = ConteoService._raiz_de(sesion)
+        if (sesion.sin_fila_en_siesa or raiz.sin_fila_en_siesa) and diferencia > 0:
+            # VAL-12: la entrada de un ítem que Siesa no tenía en la bodega
+            # nunca sale sola: la firma el admin (`_motivo_ajuste_propio`).
+            return {'codigo': politica.SIN_FILA_EN_SIESA, 'mensaje': (
+                'Siesa no tenía este producto en la bodega: esta entrada no sale sola, '
+                'la aprueba el admin')}
         return politica.motivo_tope_autoajuste(diferencia, sesion.costo_prom_uni_siesa)
 
     @staticmethod
@@ -573,20 +580,49 @@ class ConteoService:
         dentro = valor is not None and valor <= tope
         cuanto = (f'vale {politica.pesos(valor)}' if valor is not None
                   else 'no tiene costo en la foto de Siesa (no se sabe cuánto vale)')
-        autor = ConteoService.autores_del_ajuste(raiz).get(getattr(usuario, 'id', None))
+        autores = ConteoService.autores_del_ajuste(raiz)
+        autor = autores.get(getattr(usuario, 'id', None))
         if autor == 'OMITIO':
             return ('Usted saltó la verificación de este conteo: el ajuste lo aprueba '
                     'otra persona.')
         if autor == 'CORRIGIO':
             return ('Usted corrigió a mano la cantidad de este conteo: el ajuste lo '
                     'aprueba otra persona.')
+        dif = ConteoService._diferencia_del_ajuste(raiz)
+        if raiz.sin_fila_en_siesa and (dif or 0) > 0 and usuario.rol != Roles.ADMIN:
+            # VAL-12: una ENTRADA sobre un ítem que Siesa no tenía en la bodega
+            # (fila en cero). Suele ser mercancía que entró sin su documento
+            # (recepción sin EntradaOC, traslado sin ETS): la firma el admin.
+            return ('Siesa no tenía este producto en la bodega: esta entrada la aprueba '
+                    'el admin (revise antes si falta una entrada de compra o un traslado).')
+        otro_admin = ConteoService._hay_admin_que_no_conto(autores)
         if autor == 'CONTO' and not dentro:
+            if usuario.rol == Roles.ADMIN and not otro_admin:
+                # VAL-7: con un solo admin que contó, nadie puede firmarlo.
+                return (f'Usted contó este producto y el ajuste {cuanto}: por encima de '
+                        f'{politica.pesos(tope)} lo tiene que aprobar otra persona, y no hay '
+                        f'otro admin. Recuéntelo con otra persona o cancele la cadena '
+                        f'(o el dueño sube CONTEO_TOPE_AUTOAPROBACION).')
             return (f'Usted contó este producto y el ajuste {cuanto}: por encima de '
                     f'{politica.pesos(tope)} lo aprueba otra persona (el admin).')
         if ConteoService.definido_por_cc3(raiz) and not dentro and usuario.rol != Roles.ADMIN:
+            if not otro_admin:
+                return (f'Este ajuste lo definió el conteo definitivo y {cuanto}: por encima '
+                        f'de {politica.pesos(tope)} lo aprueba el admin, y no hay ninguno '
+                        f'que no lo haya contado. Recuéntelo o cancele la cadena.')
             return (f'Este ajuste lo definió el conteo definitivo y {cuanto}: por encima '
                     f'de {politica.pesos(tope)} lo aprueba el admin.')
         return None
+
+    @staticmethod
+    def _hay_admin_que_no_conto(autores: dict) -> bool:
+        """¿Hay un admin activo que no contó, omitió ni corrigió esta cadena?"""
+        from app.models.usuario import Usuario
+        from app.routes._auth_helpers import Roles
+        q = Usuario.query.filter(Usuario.rol == Roles.ADMIN, Usuario.activo.is_(True))
+        if autores:
+            q = q.filter(~Usuario.id.in_(list(autores)))
+        return q.first() is not None
 
     @staticmethod
     def cifras_ocultas(sesion: SesionConteo):
@@ -947,7 +983,7 @@ class ConteoService:
 
     @staticmethod
     def aplicar_ajuste_al_wms(sesion: SesionConteo, motivo_codigo: str, cantidad: int,
-                              *, documento: str = None) -> dict:
+                              *, documento: str = None, tipo: str = 'AJUSTE_CONTEO') -> dict:
         """Refleja en el WMS el ajuste que Siesa aceptó: **el SKU en el almacén
         queda en lo contado** (VAL-2, 2026-09-29). La única que mueve el stock
         del WMS por un ajuste de conteo (la llama el job `AJUSTE_CONTEO`).
@@ -980,9 +1016,11 @@ class ConteoService:
             movimientos.append({'ubicacion_id': fila.ubicacion_id, 'cantidad': delta})
             db.session.add(MovimientoInventario(
                 producto_id=sesion.producto_id, ubicacion_id=fila.ubicacion_id,
-                almacen_id=sesion.almacen_id, tipo='AJUSTE_CONTEO', cantidad=delta,
+                almacen_id=sesion.almacen_id, tipo=tipo, cantidad=delta,
                 saldo_antes=antes, saldo_despues=fila.cantidad,
-                motivo=f'Ajuste de conteo {sesion.codigo} ({motivo_codigo}) aceptado por Siesa'[:200],
+                motivo=(f'Ajuste de conteo {sesion.codigo} ({motivo_codigo}) aceptado por Siesa'
+                        if tipo == 'AJUSTE_CONTEO' else
+                        f'Conteo {sesion.codigo} cuadró con Siesa: el WMS queda en lo contado')[:200],
                 numero_documento=(documento or sesion.codigo)[:50],
                 # Reflejo de un documento que Siesa ya aceptó: nada que enviar.
                 siesa_sync='OMITIDO'))
@@ -1027,6 +1065,31 @@ class ConteoService:
                 'el WMS tenía menos del SKU que Siesa. Nada se inventa; lo corrige '
                 'la carga de existencias.', sesion.codigo, cantidad, pendiente)
         return {'movimientos': movimientos, 'sin_descontar': pendiente}
+
+    @staticmethod
+    def cuadrar_wms_con_lo_contado(sesion: SesionConteo) -> dict:
+        """Un conteo que **cuadró con Siesa** deja el WMS del SKU en lo contado,
+        en todos sus lugares, sin tocar Siesa (VAL-11, 2026-09-29).
+
+        Antes un MATCH no tocaba el WMS: con Siesa en 0 (sin fila) y el hueco
+        vacío de verdad, el conteo cerraba en 0 y el WMS seguía con las
+        unidades fantasma (9 SKUs de NB1 en CROSS-DOCK, 4.052 und) — y el FEFO
+        mandaba al picker a buscarlas. El objetivo es lo contado más el POS que
+        Siesa todavía no acumuló (`cant_pos_siesa`): el WMS refleja la
+        existencia de Siesa, que lo incluye, y así la carga de las 7:00 no lo
+        deshace. La diferencia se aplica con `aplicar_ajuste_al_wms` (misma
+        regla de reparto, mismo rastro por hueco).
+        """
+        if sesion.cantidad_fisica is None or sesion.teorico_siesa is None:
+            return {'movimientos': [], 'sin_descontar': 0}
+        objetivo = int(sesion.cantidad_fisica) + int(sesion.cant_pos_siesa or 0)
+        delta = objetivo - ConteoService.existencia_wms_del_sku(sesion.producto_id,
+                                                                  sesion.almacen_id)
+        if delta == 0:
+            return {'movimientos': [], 'sin_descontar': 0}
+        return ConteoService.aplicar_ajuste_al_wms(
+            sesion, 'AJ-ENT' if delta > 0 else 'AJ-SAL', abs(delta),
+            documento=sesion.codigo, tipo='CUADRE_CONTEO')
 
     @staticmethod
     def nueva_raiz(*, producto, almacen_id: int, tipo: str, codigo: str,
@@ -1711,6 +1774,10 @@ class ConteoService:
                         raiz.estado = EstadoConteo.MATCH
                         raiz.fecha_cierre = datetime.utcnow()
                         logger.info(f'[CONTEO] CC{"3" if es_tercer else "2"} MATCH — raíz {raiz.codigo} → MATCH')
+            if _fuente_existencia == 'SIESA':
+                # VAL-11: el conteo cuadró con Siesa; el WMS del SKU también
+                # queda en lo contado (sin tocar Siesa).
+                ConteoService.cuadrar_wms_con_lo_contado(sesion)
             try:
                 db.session.commit()
             except Exception as e_commit:
@@ -2163,6 +2230,9 @@ class ConteoService:
             **valores,
             'comprometida': comprometida,
             'costo_prom_uni': ConteoService._costo_de_fila(fila),
+            # La fila en cero de un ítem que Siesa no tiene en la bodega
+            # (af2e2f2d): la sesión lo guarda y lo muestra (VAL-12).
+            'sin_fila': bool(fila.get(ConteoService.SIN_FILA_EN_SIESA)),
             'teorico': ConteoService.teorico(valores['existencia'], valores['cant_pos']),
             'leido_at': datetime.utcnow(),
         }
@@ -2204,6 +2274,7 @@ class ConteoService:
             sesion.teorico_siesa = None
             sesion.foto_siesa_at = None
             sesion.costo_prom_uni_siesa = None
+            sesion.sin_fila_en_siesa = None
             return
         sesion.existencia_siesa = foto['existencia']
         sesion.cant_pos_siesa = foto['cant_pos']
@@ -2213,6 +2284,10 @@ class ConteoService:
         # `.get`: una foto armada sin costo (los stubs de los tests, o una
         # versión vieja de la foto) es una foto sin costo, no una foto rota.
         sesion.costo_prom_uni_siesa = foto.get('costo_prom_uni')
+        # VAL-12: la foto es la fila en cero de un ítem que Siesa no tiene en
+        # la bodega (af2e2f2d). Visible, y esa entrada la firma el admin. El
+        # COSTO de la entrada lo resuelve `_costo_de_la_entrada` al aprobar.
+        sesion.sin_fila_en_siesa = bool(foto.get('sin_fila'))
 
     @staticmethod
     def _copiar_observacion(destino: SesionConteo, origen: SesionConteo) -> None:
@@ -2239,6 +2314,7 @@ class ConteoService:
         # diferencia de otro — el mismo defecto que esta función existe para
         # cerrar, trasladado a la plata.
         destino.costo_prom_uni_siesa = origen.costo_prom_uni_siesa
+        destino.sin_fila_en_siesa = origen.sin_fila_en_siesa
         # Y la foto de inicio: el bloqueo del ajuste de la raíz se decide sobre
         # la apertura y el cierre del conteo que resolvió, no sobre los de CC1.
         destino.existencia_inicio_siesa = origen.existencia_inicio_siesa

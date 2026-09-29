@@ -346,8 +346,9 @@ class TestSinFilaEnSiesaEsCero:
 
     def test_el_sobrante_llega_al_ajuste_contra_siesa(self, db, siesa, tienda):
         """21 contados dos veces contra un Siesa en cero: AJ-ENT 21, no +11
-        contra los 10 del WMS. Sin costo en la foto no sale solo: lo aprueba
-        un supervisor."""
+        contra los 10 del WMS. No sale solo, y desde VAL-12 (2026-09-29) la
+        entrada de un ítem que Siesa no tenía en la bodega la aprueba el admin,
+        no un supervisor."""
         from app.models.conteo import SesionConteo
         from app.services.conteo_service import ConteoService
         siesa.fila = None
@@ -361,8 +362,17 @@ class TestSinFilaEnSiesaEsCero:
         assert raiz.fuente_existencia == 'SIESA'
         assert (raiz.existencia_siesa, raiz.teorico_siesa, raiz.diferencia) == (0, 0, 21)
         assert _jobs(cc1_id) == []
+        with pytest.raises(PermissionError, match='la aprueba el admin'):
+            ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        db.session.rollback()
+        from app.models.usuario import Usuario
+        admin = Usuario(nombre='adm-sin-fila', email='adm-sin-fila@test.com', rol='admin',
+                        password_hash=generate_password_hash('x'), activo=True,
+                        almacen_id=tienda['almacen'].id)
+        db.session.add(admin)
+        db.session.commit()
         siesa.otras_bodegas = [('FC1', 0, 1044)]
-        ConteoService.confirmar_ajuste(cc1_id, tienda['supervisor'].id)
+        ConteoService.confirmar_ajuste(cc1_id, admin.id)
         p = _un_job(cc1_id)
         assert (p['motivo_codigo'], p['cantidad']) == ('AJ-ENT', 21)
         assert p['costo_unitario'] == 1044, 'sin fila, la entrada lleva costo'

@@ -145,6 +145,7 @@ ETIQUETAS = {
     # por qué un ajuste aprobable no salió solo (`motivo_no_sale_solo`)
     'SUPERA_TOPE': 'superan el tope automático',
     'SIN_COSTO': 'sin costo en la foto',
+    'SIN_FILA_EN_SIESA': 'entradas de ítems que Siesa no tenía en la bodega',
     'FIRMA_DEL_PROCESO': 'los firma el proceso (definitivo o saltado)',
     # lo que el picker reportó al abrir una auditoría (diagnóstico, no ajuste)
     'FALTANTE': 'faltante',

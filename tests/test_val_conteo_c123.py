@@ -6,6 +6,9 @@ Validación crítica de la tanda C1-C3 de conteo (2026-09-27, `val-conteo-c123`
 - VAL-1: sin foto de Siesa, el TOTAL contado se comparaba contra UN hueco.
 - VAL-2: el ajuste del WMS aplicaba el delta del total a un hueco con piso 0.
 - VAL-3: `/editar` dejaba a una persona definir la cifra y firmarla.
+- VAL-11: un conteo que cuadraba con Siesa no corregía el WMS (fantasmas).
+- VAL-12: la entrada contra una fila sintética en cero (af2e2f2d) salía sin
+  costo y la firmaba un supervisor de cualquier monto.
 """
 import json
 
@@ -38,12 +41,9 @@ class TestFallbackSinFotoComparaContraUnHueco:
 
     def test_sin_foto_el_total_contado_se_compara_con_el_total_wms(
             self, db, siesa, dos_huecos, monkeypatch):
-        # Siesa no respondió: foto None → fallback al WMS. Se stubea la foto (y no
-        # la fila) a propósito: desde af2e2f2d «Siesa contestó que no hay fila»
-        # es existencia 0, no «no sé»; lo que cae al WMS es Siesa caído.
-        from app.services.conteo_service import ConteoService
-        monkeypatch.setattr(ConteoService, 'consultar_foto_siesa',
-                            staticmethod(lambda **kw: None))
+        # Siesa caída: foto None → fallback al WMS. Desde af2e2f2d «Siesa
+        # contestó que no hay fila» es existencia 0, no «no sé».
+        siesa.caida = True
         s = _raiz_manual(dos_huecos)
         _svc().obtener_tarea_operario(s.id, dos_huecos['a'].id)
         # El WMS lo tiene en POS-UB 10 + CROSS-DOCK 90; quien cuenta suma 100.
@@ -147,3 +147,107 @@ class TestEditarLaCifraEsDefinirLa:
         db.session.commit()
         with pytest.raises(ValueError, match='sin que nadie firme'):
             _svc().corregir_cantidad(raiz, 10, usuario_id=tienda['supervisor'].id)
+
+
+class TestLaCosturaConSinFilaEsCero:
+    """af2e2f2d («Siesa no tiene fila» = existencia 0) sobre la cadena SKU × almacén.
+    Producción: 9 SKUs de NB1 en CROSS-DOCK (4.052 und), sin recepción, sin
+    traslado y sin un solo movimiento de inventario que los explique."""
+
+    def test_match_en_cero_deja_el_wms_en_cero(self, db, siesa, dos_huecos):
+        siesa.fila = None                      # Siesa contesta «no hay registros»
+        siesa.en_maestro = True                # y el ítem existe → existencia 0
+        s = _raiz_manual(dos_huecos)
+        _svc().obtener_tarea_operario(s.id, dos_huecos['a'].id)
+        r = contar_primero(s.id, dos_huecos['a'].id, 0, cero_confirmado=True)
+        assert r['resultado'] == 'MATCH', r
+        assert _svc().existencia_wms_del_sku(
+            dos_huecos['producto'].id, dos_huecos['almacen'].id) == 0
+        from app.models.inventario import MovimientoInventario
+        assert {m.tipo for m in MovimientoInventario.query.all()} == {'CUADRE_CONTEO'}
+
+    def test_match_con_siesa_normal_tambien_cuadra_el_wms(self, db, siesa, dos_huecos):
+        """El WMS tenía 100 (10 + 90), Siesa y el estante 70: el MATCH lo deja en
+        70 y no toca Siesa (no hay job)."""
+        from app.models.siesa_job import SiesaJob
+        siesa.poner(existencia=70)
+        s = _raiz_manual(dos_huecos)
+        _svc().obtener_tarea_operario(s.id, dos_huecos['a'].id)
+        assert contar_primero(s.id, dos_huecos['a'].id, 70)['resultado'] == 'MATCH'
+        assert _svc().existencia_wms_del_sku(
+            dos_huecos['producto'].id, dos_huecos['almacen'].id) == 70
+        assert SiesaJob.query.filter_by(tipo='AJUSTE_CONTEO').count() == 0
+
+    def test_con_pos_pendiente_el_wms_queda_en_la_existencia(self, db, siesa, dos_huecos):
+        """En tienda: contados 90 = existencia 100 − POS 10. El WMS refleja la
+        existencia de Siesa (la carga de las 7:00 no lo deshace): 100."""
+        siesa.poner(existencia=100, pos=10)
+        s = _raiz_manual(dos_huecos)
+        _svc().obtener_tarea_operario(s.id, dos_huecos['a'].id)
+        assert contar_primero(s.id, dos_huecos['a'].id, 90)['resultado'] == 'MATCH'
+        assert _svc().existencia_wms_del_sku(
+            dos_huecos['producto'].id, dos_huecos['almacen'].id) == 100
+
+    def _entrada_sin_fila(self, db, siesa, dos_huecos, cantidad=100):
+        from app.models.conteo import SesionConteo
+        siesa.fila = None
+        siesa.en_maestro = True
+        s = _raiz_manual(dos_huecos)
+        _svc().obtener_tarea_operario(s.id, dos_huecos['a'].id)
+        r1 = contar_primero(s.id, dos_huecos['a'].id, cantidad)
+        _svc().obtener_tarea_operario(r1['segundo_conteo_id'], dos_huecos['b'].id)
+        _svc().registrar_conteo(r1['segundo_conteo_id'], dos_huecos['b'].id, cantidad)
+        return db.session.get(SesionConteo, s.id)
+
+    def test_la_entrada_de_un_item_sin_existencia_no_la_firma_un_supervisor(
+            self, db, siesa, dos_huecos):
+        raiz = self._entrada_sin_fila(db, siesa, dos_huecos)
+        assert (raiz.estado, raiz.motivo_codigo, raiz.diferencia) == ('DESCUADRE', 'AJ-ENT', 100)
+        assert raiz.sin_fila_en_siesa is True and raiz.to_dict()['sin_fila_en_siesa'] is True
+        assert 'la aprueba el admin' in (_svc().motivo_no_puede_aprobar(
+            dos_huecos['supervisor'], raiz) or '')
+
+    def test_ni_una_unidad_sale_sola(self, db, siesa, dos_huecos):
+        raiz = self._entrada_sin_fila(db, siesa, dos_huecos, cantidad=1)
+        assert raiz.estado == 'DESCUADRE'
+        assert (_svc().motivo_no_sale_solo(raiz) or {}).get('codigo') == 'SIN_FILA_EN_SIESA'
+
+    def test_el_admin_la_firma_y_el_costo_llega_al_142951(self, db, siesa, dos_huecos):
+        """La firma es de VAL-12 (el admin); el COSTO es la política de David
+        (f74ff44e, `costo_entrada_ajuste`: en vivo contra InvFecha de las otras
+        bodegas al aprobar). Sin foto de costo, el tope no la valoriza."""
+        from werkzeug.security import generate_password_hash
+        from app.models.siesa_job import SiesaJob
+        from app.models.usuario import Usuario
+        admin = Usuario(nombre='adm-sf', email='adm-sf@test.com', rol='admin', activo=True,
+                        password_hash=generate_password_hash('x'),
+                        almacen_id=dos_huecos['almacen'].id)
+        db.session.add(admin)
+        db.session.commit()
+        raiz = self._entrada_sin_fila(db, siesa, dos_huecos, cantidad=10)
+        assert _svc().valor_del_ajuste(raiz) is None, 'sin costo en la foto, sin valor'
+        siesa.otras_bodegas = [('FC1', 5, 250)]
+        _svc().confirmar_ajuste(raiz.id, admin.id)
+        job = SiesaJob.query.filter_by(tipo='AJUSTE_CONTEO', referencia_id=raiz.id).one()
+        assert json.loads(job.payload)['costo_unitario'] == 250
+
+
+class TestUnSoloAdmin:
+    """VAL-7 (lo barato): el único admin que contó un CC3 caro sabe qué hacer."""
+
+    def test_el_mensaje_dice_que_no_hay_otro_admin(self, db, siesa, tienda):
+        from werkzeug.security import generate_password_hash
+        from app.models.usuario import Usuario
+        from tests.test_conteo_pool_sin_dueno import _cadena_con_cc3
+        admin = Usuario(nombre='unico', email='unico-adm@test.com', rol='admin', activo=True,
+                        password_hash=generate_password_hash('x'), almacen_id=tienda['almacen'].id)
+        db.session.add(admin)
+        db.session.commit()
+        cc1, _, cc3 = _cadena_con_cc3(tienda, siesa)
+        siesa.poner(existencia=10, pos=0, costo=200000.0)
+        _svc().obtener_tarea_operario(cc3, admin.id)
+        _svc().registrar_conteo(cc3, admin.id, 9)
+        from app.models.conteo import SesionConteo
+        raiz = db.session.get(SesionConteo, cc1)
+        assert 'no hay otro admin' in _svc().motivo_no_puede_aprobar(admin, raiz)
+        assert 'no hay ninguno' in _svc().motivo_no_puede_aprobar(tienda['supervisor'], raiz)

@@ -299,6 +299,12 @@ class SesionConteo(db.Model):
     #: cancelar, omitir y reasignar.
     cantidad_corregida_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'),
                                           nullable=True)
+    #: **Siesa no tenía fila del ítem en la bodega** (VAL-12, 2026-09-29): la
+    #: foto es la fila en cero que arma `_fila_en_cero_si_el_item_existe`
+    #: (af2e2f2d). Visible en la pantalla: el ajuste que sale de acá es una
+    #: ENTRADA sobre un ítem que Siesa daba por agotado, y la firma el admin.
+    #: Su costo lo resuelve `costo_service.costo_entrada_ajuste` al aprobar.
+    sin_fila_en_siesa = db.Column(db.Boolean, nullable=True)
 
     # Relaciones
     ubicacion = db.relationship('Ubicacion', backref='sesiones_conteo', lazy=True)
@@ -574,6 +580,7 @@ class SesionConteo(db.Model):
             'tolerancia_primer_conteo': self.tolerancia_primer_conteo,
             'ajuste_por_tolerancia': bool(self.ajuste_por_tolerancia),
             'motivo_bloqueo': self.motivo_bloqueo,
+            'sin_fila_en_siesa': bool(self.sin_fila_en_siesa),
             'verificacion_omitida_por_id': self.verificacion_omitida_por_id,
             'verificacion_omitida_motivo': self.verificacion_omitida_motivo,
             # Datos del segundo conteo (hijo) embebidos para evitar N+1.

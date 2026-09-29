@@ -1,7 +1,7 @@
 """Conteo: la unidad contra Siesa es SKU × almacén; quién omitió la verificación
 
 Revision ID: m051conteo
-Revises: m050inv2
+Revises: m051flotalegal (re-encadenada sobre qa el 2026-09-29; se escribió sobre m050inv2)
 Create Date: 2026-09-27
 
 Índice parcial único `ix_sesion_conteo_sku_activa_unica` sobre
@@ -22,13 +22,14 @@ una persona, no un deploy.
 saltó el 2º conteo de una cadena, por qué y cuándo
 (`ConteoService.omitir_verificacion`). Quien omitió no aprueba ese ajuste.
 `cantidad_corregida_por_id`: quién corrigió a mano la cifra (`/editar`); tampoco
-lo aprueba.
+lo aprueba. `sin_fila_en_siesa`: la foto era la fila en cero de un ítem que
+Siesa no tenía en la bodega (esa entrada la firma el admin).
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = 'm051conteo'
-down_revision = 'm050inv2'
+down_revision = 'm051flotalegal'
 branch_labels = None
 depends_on = None
 
@@ -78,6 +79,7 @@ def upgrade():
                                sa.ForeignKey('usuarios.id',
                                              name='fk_sesion_conteo_corregida_por'),
                                nullable=True))
+        b.add_column(sa.Column('sin_fila_en_siesa', sa.Boolean(), nullable=True))
     op.create_index(
         'ix_sesion_conteo_sku_activa_unica',
         'sesiones_conteo',
@@ -91,6 +93,7 @@ def upgrade():
 def downgrade():
     op.drop_index('ix_sesion_conteo_sku_activa_unica', table_name='sesiones_conteo')
     with op.batch_alter_table('sesiones_conteo') as b:
+        b.drop_column('sin_fila_en_siesa')
         b.drop_constraint('fk_sesion_conteo_corregida_por', type_='foreignkey')
         b.drop_column('cantidad_corregida_por_id')
         b.drop_constraint('fk_sesion_conteo_omitida_por', type_='foreignkey')
