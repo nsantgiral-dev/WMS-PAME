@@ -76,6 +76,10 @@ REGISTRADOS = {
     # Soltar lo asignado a quien no está, cada 15 min (m051asignacion,
     # 2026-09-27). Esencial: su silencio deja trabajo pegado a un ausente.
     'asignacion': 'init_scheduler',
+    # La demanda de compras calculada por el worker (m052comprasg, 2026-09-29).
+    # Nace encendido (`COMPRAS_ROP_CRON=false` lo apaga): solo lee la BD, no
+    # escribe en Siesa ni mueve inventario — calcula y guarda.
+    'compras_rop': 'init_scheduler',
 }
 
 #: Fuera de `app/services/`. El barrido de vencimientos de flota vivía sin

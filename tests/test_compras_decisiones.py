@@ -451,16 +451,54 @@ def _todos():
     return salida, n
 
 
+#: Quién escribe `.anulada_en` de OTRO modelo que también la tiene. El escáner
+#: mira el nombre del atributo, no el tipo: estas escrituras se le parecen y no
+#: tocan una decisión de compra. Solo encoge; cada entrada dice por qué, y el
+#: archivo NO puede nombrar `DecisionCompra` (si lo nombra, deja de ser ajeno).
+ANULAN_OTRO_MODELO = {
+    ('app/services/presencia.py', 'anular_ausencia'):
+        'AusenciaUsuario.anulada_en (m051asignacion): cerrar una ausencia declarada '
+        'cuando la persona vuelve. No es una decisión de compra.',
+}
+
+
+def _nombra_decision_compra(archivo):
+    arbol = ast.parse((RAIZ / archivo).read_text(encoding='utf-8'))
+    return any((isinstance(n, ast.Name) and n.id == 'DecisionCompra')
+               or (isinstance(n, ast.alias) and n.name.split('.')[-1] == 'DecisionCompra')
+               or (isinstance(n, ast.ImportFrom) and (n.module or '').endswith('decision_compra'))
+               for n in ast.walk(arbol))
+
+
+def _permitido(u):
+    if (u[0], u[1]) in PERMITIDOS[u[2]]:
+        return True
+    return u[2] == 'anula' and (u[0], u[1]) in ANULAN_OTRO_MODELO
+
+
 class TestUnaDecisionUnDueno:
 
     def test_solo_su_dueno_crea_anula_y_suma(self):
         usos, _n = _todos()
-        malos = sorted({u for u in usos if (u[0], u[1]) not in PERMITIDOS[u[2]]})
+        malos = sorted({u for u in usos if not _permitido(u)})
         assert not malos, (f'{malos}: crean o anulan una decisión de compra, o suman lo '
                            'pedido, fuera de compras_decisiones / en_camino.')
 
     def test_el_inventario_solo_encoge(self):
         assert sum(len(v) for v in PERMITIDOS.values()) <= 6
+        assert len(ANULAN_OTRO_MODELO) <= 1
+        assert all(len(m) >= 40 for m in ANULAN_OTRO_MODELO.values())
+
+    def test_lo_ajeno_es_ajeno_de_verdad(self):
+        """Una entrada de ANULAN_OTRO_MODELO sigue anulando (si no, sáquela) y
+        su archivo no nombra DecisionCompra (si lo nombra, no es ajeno)."""
+        usos, _n = _todos()
+        anulan = {(a, f) for a, f, forma in usos if forma == 'anula'}
+        assert set(ANULAN_OTRO_MODELO) <= anulan, set(ANULAN_OTRO_MODELO) - anulan
+        for archivo, _f in ANULAN_OTRO_MODELO:
+            assert not _nombra_decision_compra(archivo), archivo
+        assert _nombra_decision_compra('app/services/compras_decisiones.py'), \
+            'piso: el detector de «nombra DecisionCompra» tiene que ver al dueño'
 
     def test_piso(self):
         usos, n = _todos()
