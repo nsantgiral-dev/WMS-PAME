@@ -2718,6 +2718,17 @@ no responde». 5 mutaciones, las 5 rojas.
 no mira `fuente_existencia`). Un conteo cerrado **antes** de este cambio no
 se corrige solo: se recuenta.
 
+**Y el conteo manual ya no rechaza un ítem sin ubicación (2026-09-29).** El
+stock de la bodega lo arma el sync de Siesa: si Siesa no tiene fila, el WMS
+tampoco le da ubicación, y `crear_conteo_manual` decía «El producto no tiene
+stock registrado en este almacén» — justo la mercancía en el estante que
+ninguno de los dos conoce. Medido en QA: de 4.841 SKUs con ubicación en NB1,
+**cero** sin fila en Siesa. Ahora, sin ubicación en el almacén, la sesión nace
+en su `SIESA-GENERAL` (`_get_o_crear_ubicacion_general`, el mismo bucket donde
+el sync pondrá lo que ajuste el conteo; el operario ve «búscalo en toda la
+bodega»). Con ubicación, nada cambia. Tests:
+`tests/test_conteo_service.py::TestCrearConteoManual::test_sin_ubicacion_*`.
+
 ---
 
 ## Conteo: «no lo encontré» no es un cero (2026-09-23)

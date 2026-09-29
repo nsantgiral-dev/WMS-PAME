@@ -228,6 +228,55 @@ class TestCrearConteoManual:
         ).count()
         assert total == 1
 
+    def test_sin_ubicacion_se_cuenta_en_siesa_general(self, db, almacen, producto):
+        """Mercancía en el estante que ni Siesa ni el WMS conocen (caso QA
+        2026-09-29, PAPELSP7877): el conteo no se rechaza, nace en el bucket
+        `SIESA-GENERAL` del almacén — lo crea si no existe."""
+        from app.services.conteo_service import ConteoService
+        from app.models.conteo import SesionConteo
+        from app.models.ubicacion import Ubicacion
+
+        assert Ubicacion.query.filter_by(
+            codigo=Ubicacion.CODIGO_GENERAL, almacen_id=almacen.id).first() is None
+
+        result = ConteoService.crear_conteo_manual(almacen.id, producto.codigo)
+
+        assert result['tareas_creadas'] == 1
+        general = Ubicacion.query.filter_by(
+            codigo=Ubicacion.CODIGO_GENERAL, almacen_id=almacen.id).one()
+        sesion = SesionConteo.query.filter_by(codigo=result['codigos'][0]).one()
+        assert sesion.ubicacion_id == general.id
+        assert sesion.almacen_id == almacen.id
+        assert sesion.ubicacion.es_fisica is False
+
+    def test_sin_ubicacion_reusa_el_general_existente_y_no_duplica(self, db, almacen, producto):
+        from app.services.conteo_service import ConteoService
+        from app.models.ubicacion import Ubicacion
+
+        general = Ubicacion(codigo=Ubicacion.CODIGO_GENERAL, almacen_id=almacen.id,
+                            zona='GENERAL', tipo='estanteria', activo=True)
+        db.session.add(general)
+        db.session.commit()
+
+        primero = ConteoService.crear_conteo_manual(almacen.id, producto.codigo)
+        segundo = ConteoService.crear_conteo_manual(almacen.id, producto.codigo)
+
+        assert primero['tareas_creadas'] == 1
+        assert segundo['tareas_creadas'] == 0
+        assert segundo['omitidas_ya_activas'] == 1
+        assert Ubicacion.query.filter_by(
+            codigo=Ubicacion.CODIGO_GENERAL, almacen_id=almacen.id).count() == 1
+
+    def test_con_ubicacion_no_toca_siesa_general(self, db, almacen, producto, ub_picking, inv_picking):
+        """El fallback es solo para el ítem sin ubicación: con stock ubicado se
+        cuenta donde está, como siempre."""
+        from app.services.conteo_service import ConteoService
+        from app.models.ubicacion import Ubicacion
+
+        ConteoService.crear_conteo_manual(almacen.id, producto.codigo)
+        assert Ubicacion.query.filter_by(
+            codigo=Ubicacion.CODIGO_GENERAL, almacen_id=almacen.id).first() is None
+
     def test_crear_conteo_manual_reclama_pendiente_al_forzar_operario(
         self, db, almacen, producto, ub_picking, inv_picking, usuario,
     ):
