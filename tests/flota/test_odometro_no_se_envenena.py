@@ -126,6 +126,16 @@ class TestLaCorreccionAnulaUnaSola:
             dom.validar_lectura(self.SERIE, _corr(250, 72, None, anula=3, motivo=''))
 
 
+class TestLaPreguntaEsUna:
+
+    def test_una_anulada_no_cuenta_aunque_se_pregunte_suelta(self):
+        """`cuenta_en_la_serie` la llaman también quienes no pasan por
+        `lecturas_que_cuentan` (el preventivo, el rendimiento)."""
+        l = _l(1000, 0, 7)
+        assert dom.cuenta_en_la_serie(l, set())
+        assert not dom.cuenta_en_la_serie(l, {7})
+
+
 class TestLaTardiaNoMueveElOdometro:
 
     def test_ni_el_odometro_ni_el_ritmo(self):
@@ -355,6 +365,16 @@ class TestUnGastoNoSePierdePorElKm:
         tq = _tanquear(mundo, 5000, date(2026, 9, 4))
         assert tq.gasto.lectura_id != mala.id
         assert tq.gasto.lectura.serie == 'cuenta'
+
+    def test_no_se_cuelga_de_un_salto_con_el_mismo_numero(self, mundo):
+        """La última lectura es un salto con ese mismo km: el gasto no se
+        cuelga de ELLA (sería de otra hora y otro autor); nace la suya, y el
+        dominio la juzga."""
+        _lectura(mundo, 1000, 0)
+        salto = _lectura(mundo, 12000, 24)
+        assert salto.serie == 'salto'
+        tq = _tanquear(mundo, 12000, date(2026, 9, 4))
+        assert tq.gasto.lectura_id != salto.id
 
     def test_un_dano_con_km_menor_sigue_rechazado(self, mundo):
         """La tardía es solo para el gasto (hay plata detrás): el km de un daño
