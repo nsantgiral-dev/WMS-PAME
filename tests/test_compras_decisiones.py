@@ -164,7 +164,10 @@ class TestYaSePidio:
         _decidir(client, cab, referencia='URG', accion='PEDIDO', cantidad=100)
         assert en_camino(['URG'])['por_sku']['URG'] == 100.0
         _decidir(client, cab, referencia='URG', accion='DESCARTADO', motivo_codigo='PRECIO')
-        assert en_camino(['URG'])['por_sku'].get('URG', 0) == 0
+        ec = en_camino(['URG'])
+        assert ec['por_sku'].get('URG', 0) == 0
+        # Y no queda como «ya se pidió» en ninguna parte: manda lo último.
+        assert 'decision_pedido' not in (ec['detalle'].get('URG') or {})
 
 
 class TestPosponerYNoPedir:

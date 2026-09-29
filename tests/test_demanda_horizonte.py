@@ -189,6 +189,18 @@ class TestCaeAlPromedioYLoDice:
         assert h['d_dia'] == pytest.approx(10.0)
         assert h['texto'].startswith('Se vende desde el ')
 
+    def test_producto_nuevo_de_pocas_ventas_no_dice_trece_semanas(self, app, db):
+        """Existe hace 42 días y vendió 6 veces: no tiene 13 semanas, así que
+        no es «vende de a ratos en las últimas 13 semanas»; se mide sobre los
+        días que existe."""
+        _cubrir(db, 430)
+        _vende(db, 'NUEVO3', _serie(lambda d: 10 if d % 7 == 0 else 0, 1, 42))
+        db.session.commit()
+        from app.services.kardex_service import demanda_para_horizonte
+        h = demanda_para_horizonte(17)['NUEVO3']
+        assert h['motivo'] == 'PRODUCTO_NUEVO'
+        assert 'de a ratos' not in h['texto'] and h['ventana_dias'] < 91
+
     def test_producto_nuevo_agotado_se_mide_con_los_dias_que_tuvo(self, app, db):
         """P1-E con censura: 10/día hace 91 días, con una racha de 10 días en
         cero en medio: la tasa es la de los días con venta."""
@@ -254,6 +266,18 @@ class TestLaCensuraInferida:
         h = calc()['BAJA']
         assert h['d_dia'] == pytest.approx(3.0) and h['base_normal'] == pytest.approx(10.0)
         assert 'Es menos que su venta normal (10 al día)' in h['texto']
+
+    def test_con_agotado_nunca_menos_que_la_venta_normal(self, db, calc):
+        """El año pasado la primera semana de la ventana vendió 3/día (se
+        estaba acabando, sin llegar a ser una caída) y las otras 21 en cero:
+        los días con existencias dan 3/día, menos que su venta normal (10). Con
+        censura la tasa es el mayor de los dos (P1-A), y se dice."""
+        _vende(db, 'AG_BAJO', _serie(lambda d: 3 if 358 <= d <= 364
+                                     else (0 if 337 <= d <= 357 else 10)))
+        h = calc()['AG_BAJO']
+        assert h['motivo'] == 'CORREGIDA_POR_AGOTADO'
+        assert h['d_dia'] == pytest.approx(10.0)
+        assert 'se usa la venta normal' in h['texto']
 
     def test_el_agotado_de_hoy_sin_stock_conocido_no_se_inventa(self, db, calc):
         """Sin fila de existencias no se sabe si está en cero: la racha final no
