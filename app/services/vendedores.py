@@ -97,28 +97,54 @@ def nombres_por_nit() -> dict:
 class EstadoVendedor:
     """Qué se sabe del vendedor de un pedido. **Un solo vocabulario**; la
     pantalla solo lo traduce a palabras."""
-    CONOCIDO = 'CONOCIDO'          # hay nombre
-    SIN_VENDEDOR = 'SIN_VENDEDOR'  # el pedido no trae, o trae el «Genérico»
-    CARGANDO = 'CARGANDO'          # la lista todavía no llegó a este proceso
-    DESCONOCIDO = 'DESCONOCIDO'    # la lista llegó y ese NIT no está
+    CONOCIDO = 'CONOCIDO'            # hay nombre
+    SIN_VENDEDOR = 'SIN_VENDEDOR'    # el pedido no trae, o trae el «Genérico»
+    CARGANDO = 'CARGANDO'            # la lista todavía no llegó a este proceso
+    NO_DISPONIBLE = 'NO_DISPONIBLE'  # la lectura FALLÓ y no hay lista previa
+    DESCONOCIDO = 'DESCONOCIDO'      # la lista llegó y ese NIT no está
 
 
 def _es_generico(vendedor_id) -> bool:
     return str(vendedor_id or '').strip().lower() in ('generico', 'genérico')
 
 
-def resolver(vendedor_id, nombres: dict) -> tuple:
+def lectura_fallida() -> bool:
+    """¿El último intento de leer la lista falló? Solo importa sin lista:
+    con nombres ya cargados, un fallo posterior no los invalida."""
+    with _lock:
+        return bool(_fallo_at) and _fallo_at >= _cargado_at
+
+
+def resolver(vendedor_id, nombres: dict, fallida: bool = False) -> tuple:
     """`(estado, nombre)` del vendedor de un pedido. `nombres` es lo que
     devolvió `nombres_por_nit()`: vacío significa que la lista no ha llegado
-    (la consulta real trae decenas; un maestro vacío no es un caso)."""
+    (la consulta real trae decenas; un maestro vacío no es un caso).
+    `fallida` distingue «todavía no» de «falló»: el 2026-09-28 un error 500
+    de Siesa se vio media hora como «cargando…» — decía que esperaba cuando
+    ya había fallado."""
     if not str(vendedor_id or '').strip() or _es_generico(vendedor_id):
         return EstadoVendedor.SIN_VENDEDOR, None
     if not nombres:
-        return EstadoVendedor.CARGANDO, None
+        return (EstadoVendedor.NO_DISPONIBLE if fallida else EstadoVendedor.CARGANDO), None
     nombre = nombres.get(normalizar_nit(vendedor_id))
     if nombre:
         return EstadoVendedor.CONOCIDO, nombre
     return EstadoVendedor.DESCONOCIDO, None
+
+
+def refrescar_ahora() -> dict:
+    """Relee la lista YA, esperando la respuesta y sin la pausa tras un
+    fallo. Para el administrador después de corregir la consulta en Siesa.
+    **Solo refresca el proceso que atiende la llamada**: Gunicorn corre dos,
+    cada uno con su caché. Por eso devuelve el `pid`."""
+    import os
+    global _refrescando
+    with _lock:
+        _refrescando = True
+    _refrescar()
+    with _lock:
+        return {'pid': os.getpid(), 'vendedores': len(_por_nit),
+                'ok': bool(_por_nit) and _cargado_at > _fallo_at}
 
 
 def precalentar():

@@ -1499,6 +1499,7 @@ function pedidoVendedorTexto(p) {
     case 'CONOCIDO':     return p.vendedor_nombre || '';
     case 'SIN_VENDEDOR': return 'Sin vendedor';
     case 'CARGANDO':     return 'cargando…';
+    case 'NO_DISPONIBLE': return 'no disponible';
     case 'DESCONOCIDO':  return `Desconocido (NIT ${p.vendedor_id || '—'})`;
     default:             return p.vendedor_nombre || '';
   }
