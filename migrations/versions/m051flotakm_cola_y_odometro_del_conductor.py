@@ -45,7 +45,7 @@ def _en(columna, valores):
 _MSG_MONOTONIA = 'flota: el odometro no puede decrecer sin origen=correccion'
 _MSG_APPEND_ONLY = 'flota: lectura_odometro es append-only — se corrige con un registro nuevo'
 _CUENTA_SQL = ("(COALESCE(l.serie, 'cuenta') = 'cuenta' OR "
-               "(l.serie = 'salto' AND l.confianza = 'verificada'))")
+               "(l.serie IN ('salto', 'contradice') AND l.confianza = 'verificada'))")
 
 _INMUTABLES_VIEJAS = ('id', 'vehiculo_id', 'valor_km', 'ts', 'origen', 'foto_id',
                       'autor_usuario_id', 'motivo_correccion', 'motivo_dudosa')
@@ -68,7 +68,7 @@ END; $$ LANGUAGE plpgsql"""
 _MONOTONIA_NUEVA = f"""
 CREATE OR REPLACE FUNCTION flota_odometro_monotonia() RETURNS trigger AS $$
 BEGIN
-  IF NEW.origen <> 'correccion' AND COALESCE(NEW.serie, 'cuenta') <> 'tardia'
+  IF NEW.origen <> 'correccion' AND COALESCE(NEW.serie, 'cuenta') NOT IN ('tardia', 'contradice')
      AND EXISTS (
       SELECT 1 FROM flota_lectura_odometro l
       WHERE l.vehiculo_id = NEW.vehiculo_id AND l.valor_km > NEW.valor_km
@@ -149,7 +149,7 @@ def upgrade():
         b.add_column(sa.Column('serie', sa.String(10), nullable=True))
         b.create_check_constraint(
             'ck_flota_lectura_serie',
-            "serie IS NULL OR serie IN ('cuenta', 'salto', 'tardia')")
+            "serie IS NULL OR serie IN ('cuenta', 'salto', 'tardia', 'contradice')")
         b.create_check_constraint(
             'ck_flota_lectura_fuera_de_serie_en_duda',
             "serie IS NULL OR serie = 'cuenta' OR confianza <> 'declarada'")

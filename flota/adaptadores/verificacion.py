@@ -100,6 +100,29 @@ def pendientes() -> List[Tuple[LecturaOdometro, str]]:
         key=lambda par: (par[0].ts, par[0].id))
 
 
+def _exigir_que_la_serie_siga_creciendo(fila) -> None:
+    """Verificar un salto o una lectura que contradice la HACE contar
+    (2026-09-29, validación): si con ella la serie queda decreciente —un
+    125.000 con lecturas de 12.600 después, o un 12.520 con un 13.500 antes
+    que sigue contando—, el tope saltaría y el camión se trabaría otra vez.
+    Primero se anula la equivocada; después se verifica."""
+    from flota.dominio import odometro as dom_odo
+
+    if fila.serie not in (dom_odo.SERIE_SALTO, dom_odo.SERIE_CONTRADICE):
+        return
+    serie = LecturaOdometro.query.filter_by(vehiculo_id=fila.vehiculo_id).all()
+    cuentan = [l for l in dom_odo.lecturas_que_cuentan([l.a_dominio() for l in serie])
+               if l.id != fila.id]
+    choca = next((l for l in cuentan
+                  if (l.ts < fila.ts and l.valor_km > fila.valor_km)
+                  or (l.ts > fila.ts and l.valor_km < fila.valor_km)), None)
+    if choca is not None:
+        raise VerificacionInvalida(
+            f'verificar la lectura de {fila.valor_km} km dejaría la serie '
+            f'decreciente: choca con la de {choca.valor_km} km (lectura '
+            f'{choca.id}), que sigue contando. Anule primero la equivocada.')
+
+
 def verificar(*, lectura_id: int, usuario_id: int,
               ts: Optional[datetime] = None) -> LecturaOdometro:
     """Una persona miró la foto y dijo que el número es ése. Deja su nombre.
@@ -141,6 +164,7 @@ def verificar(*, lectura_id: int, usuario_id: int,
             f'la puso en duda, así que no hay nada que confirmar. La cola solo '
             f'trae las que tienen un motivo escrito para desconfiar.'
         )
+    _exigir_que_la_serie_siga_creciendo(fila)
     anuladora = (LecturaOdometro.query
                  .filter_by(anula_lectura_id=fila.id).first())
     if anuladora is not None:

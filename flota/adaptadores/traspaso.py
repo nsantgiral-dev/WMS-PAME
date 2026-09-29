@@ -24,12 +24,14 @@ custodia o no entra ninguno de los dos.
 from datetime import datetime
 from typing import List, Optional
 
+from sqlalchemy import or_
+
 from app.extensions import db
 from app.models.vehiculo import Vehiculo
 from flota.adaptadores.modelos import Custodia, LecturaOdometro
 from flota.dominio import custodia as dom
 from flota.dominio import odometro as dom_odo
-from flota.dominio.errores import CustodiaInvalida, PermisoInsuficiente
+from flota.dominio.errores import CustodiaInvalida, LecturaRechazada, PermisoInsuficiente
 from flota.dominio.valores import (
     ClaseFoto,
     Custodia as CustodiaDom,
@@ -70,6 +72,22 @@ def custodia_activa(vehiculo_id: int) -> Optional[Custodia]:
     ).one_or_none()
 
 
+def custodia_en(vehiculo_id: int, ts: datetime) -> Optional[Custodia]:
+    """La custodia vigente del vehículo EN ese instante, o `None` (2026-09-29).
+
+    `inicio_ts ≤ ts < fin_ts` (o abierta): en el instante exacto de un traspaso
+    manda la nueva, porque el cierre y la apertura comparten el instante. Para
+    lo que llega por la cola después de un relevo: se hizo bajo el turno de
+    entonces, no el de ahora.
+    """
+    return (Custodia.query
+            .filter(Custodia.vehiculo_id == vehiculo_id,
+                    Custodia.inicio_ts <= ts,
+                    or_(Custodia.fin_ts.is_(None), Custodia.fin_ts > ts))
+            .order_by(Custodia.inicio_ts.desc(), Custodia.id.desc())
+            .first())
+
+
 def traspasar(
     *,
     vehiculo_id: int,
@@ -86,8 +104,16 @@ def traspasar(
     ubicacion: Optional[Ubicacion] = None,
     ubicacion_motivo: Optional[str] = None,
     ts: Optional[datetime] = None,
+    si_retrocede: Optional[str] = None,
+    ts_operacion: Optional[datetime] = None,
 ) -> Custodia:
     """Cierra la custodia vigente y abre la nueva, atómicamente.
+
+    `si_retrocede` (2026-09-29, VAL-COLA-1): lo pide la cola del conductor. Un
+    km menor que lo que cuenta no traba el recibo ni la entrega: la lectura
+    entra en duda (`contradice`, o `tardia` si se hizo antes), sin mover el
+    tope, y va a verificación. El turno que cierra queda con `km_fin` vacío si
+    el número contradice su propia apertura: no se inventa ninguno de los dos.
 
     QUÉ AFIRMA al devolver: que el vehículo tiene exactamente una custodia
     activa, que empieza en el mismo instante en que terminó la anterior, y que
@@ -270,10 +296,18 @@ def traspasar(
     # Regla 3: el kilometraje entra por la misma puerta o no entra ninguno.
     previas = [l.a_dominio() for l in
                LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id).all()]
-    dom_odo.validar_lectura(previas, Lectura(
-        valor_km=km, ts=ahora, origen=OrigenLectura.ENTREGA,
-        autor_usuario_id=registrado_por_usuario_id,
-    ))
+    serie_menor = None
+    try:
+        dom_odo.validar_lectura(previas, Lectura(
+            valor_km=km, ts=ahora, origen=OrigenLectura.ENTREGA,
+            autor_usuario_id=registrado_por_usuario_id,
+        ))
+    except LecturaRechazada:
+        if si_retrocede not in dom_odo.SERIES_KM_MENOR:
+            raise
+        serie_menor = dom_odo.serie_si_retrocede(
+            pedida=si_retrocede, valor_km=km, ts_operacion=ts_operacion,
+            previas=previas)
 
     # Las fotos se validan con el resto, ANTES de escribir: un ángulo que el
     # CHECK rechaza era un 500 en el commit (la cola lo reintentaba siempre).
@@ -281,7 +315,10 @@ def traspasar(
     validar_fotos(fotos_fin)
     validar_fotos(fotos_inicio)
 
-    if vigente is not None and km < vigente.km_inicio:
+    km_fin_vigente = km
+    if vigente is not None and km < vigente.km_inicio and serie_menor is not None:
+        km_fin_vigente = None
+    elif vigente is not None and km < vigente.km_inicio:
         raise CustodiaInvalida(
             f'el cierre no puede tener menos kilómetros que la apertura: '
             f'{km} < {vigente.km_inicio}'
@@ -296,7 +333,7 @@ def traspasar(
         colgadas_fin = []
         if vigente is not None:
             vigente.fin_ts = ahora
-            vigente.km_fin = km
+            vigente.km_fin = km_fin_vigente
             if forzado:
                 vigente.cierre_forzado = True
                 vigente.cierre_forzado_por_usuario_id = registrado_por_usuario_id
@@ -366,6 +403,7 @@ def traspasar(
             origen=OrigenLectura.ENTREGA.value,
             autor_usuario_id=registrado_por_usuario_id,
             foto_id=_tablero.id if _tablero is not None else None,
+            serie=serie_menor,
         ))
 
         db.session.commit()

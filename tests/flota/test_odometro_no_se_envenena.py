@@ -149,7 +149,8 @@ class TestLaTardiaNoMueveElOdometro:
                  _l(20000, 48, 4, serie=dom.SERIE_SALTO, confianza=Confianza.DUDOSA),
                  _l(1050, 50, 5, serie=dom.SERIE_TARDIA, confianza=Confianza.DUDOSA)]
         assert dom.fuera_de_la_serie(serie) == {
-            'anuladas': 1, 'saltos_sin_verificar': 1, 'tardias': 1}
+            'anuladas': 1, 'saltos_sin_verificar': 1, 'tardias': 1,
+            'contradicen': 0}
 
 
 class TestDondeNaceUnaLectura:
@@ -183,9 +184,14 @@ class TestElTechoDeKmPorDia:
 
     def test_con_ritmo_tres_veces_y_un_minimo(self):
         lento = dom.RitmoDeUso(Decimal('50'), Confianza.DECLARADA, 5, Decimal('30'))
-        rapido = dom.RitmoDeUso(Decimal('200'), Confianza.DECLARADA, 5, Decimal('30'))
+        rapido = dom.RitmoDeUso(Decimal('300'), Confianza.DECLARADA, 5, Decimal('30'))
         assert dom.techo_km_por_dia(lento)['km_dia'] == dom.KM_DIA_PLAUSIBLE_MINIMO
-        assert dom.techo_km_por_dia(rapido)['km_dia'] == 600
+        assert dom.techo_km_por_dia(rapido)['km_dia'] == 900
+
+    def test_el_piso_cubre_un_viaje_intermunicipal(self):
+        """Neiva–Florencia ida y vuelta, ~500 km (validación 2026-09-29): un
+        camión de 120 km/día no pregunta ese día."""
+        assert dom.KM_DIA_PLAUSIBLE_MINIMO >= 600
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -471,7 +477,7 @@ class TestLaFrontera:
         _lectura(mundo, 12500, 0)
         salto = _lectura(mundo, 125000, 24)
         d = client.get('/flota/custodia/activa/ENV100', headers=_auth(mundo['t'])).get_json()
-        assert d['ultima_lectura']['id'] == salto.id        # la que se anula
+        assert d['lecturas_anulables'][0]['id'] == salto.id  # de entrada, la última
         assert d['km_plausible']['km'] == 12500             # la que cuenta
         assert d['km_plausible']['km_dia'] == dom.KM_DIA_PLAUSIBLE_SIN_HISTORIA
 
@@ -555,9 +561,12 @@ class TestElTelefonoPregunta:
     def test_normal_no_dice_nada(self, tmp_path):
         assert self._plausible(tmp_path, 12700) is None
 
-    def test_menor_bloquea(self, tmp_path):
+    def test_menor_pregunta_y_no_bloquea(self, tmp_path):
+        """VAL-COLA-1 (2026-09-29): bloquearlo dejaba al que recibe sin camión
+        y sin rastro; ahora se pregunta y, confirmado, sale."""
         v = self._plausible(tmp_path, 12400)
-        assert v['bloquea'] and 'no puede ser menor' in v['texto']
+        assert v['pregunta'] and 'bloquea' not in v
+        assert 'control de flota revisa' in v['texto']
 
     def test_menor_en_un_tanqueo_pregunta(self, tmp_path):
         v = self._plausible(tmp_path, 12400, tanqueo=True)

@@ -27,7 +27,9 @@ from app.models.vehiculo import Vehiculo
 from app.routes._auth_helpers import Roles
 from flota.adaptadores import hallazgos as adaptador
 from flota.adaptadores.modelos import Hallazgo
-from flota.api._idempotencia import idempotente
+from flota.api._idempotencia import (idempotente, instante_de_la_operacion,
+                                     llego_por_la_cola)
+from flota.dominio import odometro as dom_odo
 from flota.api._permisos import (DECIDE_FLOTA, MAESTROS_FLOTA, exige,
                                  sin_derecho_sobre_vehiculo)
 from flota.api._tiempo import iso_utc
@@ -165,6 +167,10 @@ def reportar():
             reportado_por_usuario_id=_usuario_id(),
             item_id=datos['item_id'] if 'item_id' in datos else None,
             fotos=datos['fotos'] if 'fotos' in datos else None,
+            # Por la cola (2026-09-29): un km menor entra en duda en vez de
+            # 409, y el daño queda bajo el turno del instante en que se vio.
+            si_retrocede=dom_odo.SERIE_CONTRADICE if llego_por_la_cola() else None,
+            ts_operacion=instante_de_la_operacion(),
         )
     except (FotoInvalida, ErrorAlmacen) as e:
         return jsonify({'error': f'Foto inválida: {e}', 'motivo': 'foto_invalida'}), 400

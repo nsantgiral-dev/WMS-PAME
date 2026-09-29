@@ -46,6 +46,24 @@ class DiaDeLaOperacion:
     motivo: str
 
 
+def instante_creible(ts_dispositivo: Optional[datetime],
+                     ahora: datetime) -> Optional[datetime]:
+    """La hora del teléfono si es creíble, o `None` (2026-09-29, VAL-COLA-2).
+
+    La MISMA ventana que decide el día (`dia_de_la_operacion`): no adelantado
+    más de `TOLERANCIA_RELOJ_ADELANTADO`, no más de `MAX_DIAS_EN_EL_TELEFONO`
+    días atrás. Con ella se juzga el derecho del conductor sobre lo que hizo
+    sin señal: el turno de ENTONCES, no el de ahora.
+    """
+    if ts_dispositivo is None:
+        return None
+    if ts_dispositivo > ahora + TOLERANCIA_RELOJ_ADELANTADO:
+        return None
+    if ahora - ts_dispositivo > timedelta(days=MAX_DIAS_EN_EL_TELEFONO):
+        return None
+    return ts_dispositivo
+
+
 def dia_de_la_operacion(ts_dispositivo: Optional[datetime], ahora: datetime,
                         dia_de: Callable[[datetime], date]) -> DiaDeLaOperacion:
     """El día en que se HIZO lo que llega por la cola.
@@ -85,5 +103,5 @@ def dia_de_la_operacion(ts_dispositivo: Optional[datetime], ahora: datetime,
         f'se juzga con el día en que se hizo')
 
 
-__all__ = ['DiaDeLaOperacion', 'dia_de_la_operacion',
+__all__ = ['DiaDeLaOperacion', 'dia_de_la_operacion', 'instante_creible',
            'TOLERANCIA_RELOJ_ADELANTADO', 'MAX_DIAS_EN_EL_TELEFONO']

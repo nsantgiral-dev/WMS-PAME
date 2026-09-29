@@ -69,7 +69,7 @@ from app.utils.fecha import TZ_BOGOTA
 from flota.adaptadores import hallazgos as adaptador_hallazgos
 from flota.adaptadores.modelos import (Inspeccion, ItemInspeccion,
                                        PlantillaInspeccion, RespuestaItem)
-from flota.adaptadores.traspaso import custodia_activa
+from flota.adaptadores.traspaso import custodia_activa, custodia_en
 from flota.dominio import inspeccion as dom
 from flota.dominio.errores import ErrorFlota
 from flota.dominio.valores import OrigenLectura
@@ -236,6 +236,8 @@ def registrar(
     ts: Optional[datetime] = None,
     dia=None,
     tolerar_items_ajenos: bool = False,
+    si_retrocede: Optional[str] = None,
+    ts_operacion: Optional[datetime] = None,
 ) -> Inspeccion:
     """Registra la inspección respondida y devuelve la fila con su veredicto.
 
@@ -307,7 +309,9 @@ def registrar(
     veredicto = dom.veredicto(respondidos)
     conteos = dom.conteos(respondidos)
 
-    custodia = custodia_activa(vehiculo_id)
+    # El turno en el instante en que se hizo (2026-09-29, VAL-COLA-2).
+    custodia = (custodia_en(vehiculo_id, ts_operacion) if ts_operacion is not None
+                else custodia_activa(vehiculo_id))
 
     try:
         # Regla 3, y la MISMA función que usa el hallazgo (regla 0 del WMS):
@@ -316,7 +320,8 @@ def registrar(
         # que de verdad pasó: alguien miró el tablero una vez.
         lectura = adaptador_hallazgos.anclar_odometro(
             vehiculo_id, km, inspeccionada_por_usuario_id, ahora,
-            origen=OrigenLectura.PREOPERACIONAL)
+            origen=OrigenLectura.PREOPERACIONAL,
+            si_retrocede=si_retrocede, ts_operacion=ts_operacion)
 
         fila = Inspeccion(
             vehiculo_id=vehiculo_id,
@@ -355,6 +360,8 @@ def registrar(
                     item_id=item.id,
                     ts=ahora,
                     commit=False,
+                    si_retrocede=si_retrocede,
+                    ts_operacion=ts_operacion,
                 )
                 hallazgo_id = hallazgo.id
 

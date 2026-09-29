@@ -25,7 +25,15 @@ SERIE_SALTO = 'salto'
 #: Llegó DESPUÉS de lecturas con más km (un tanqueo sincronizado tarde): se
 #: guarda para no perder el gasto, en duda, y nunca mueve el odómetro.
 SERIE_TARDIA = 'tardia'
-SERIES = (SERIE_CUENTA, SERIE_SALTO, SERIE_TARDIA)
+#: Menor que la última lectura que cuenta, hecho AHORA (no llegó tarde): o
+#: esta está mal o la anterior (2026-09-29, VAL-COLA-1). Solo desde la cola del
+#: conductor: en el patio a las 5 a. m. no se lo bloquea por un número que
+#: tecleó otro. En duda, no sube ni baja el tope, y va a verificación; control
+#: de flota anula la equivocada. Verificada (con la serie ya coherente), cuenta.
+SERIE_CONTRADICE = 'contradice'
+SERIES = (SERIE_CUENTA, SERIE_SALTO, SERIE_TARDIA, SERIE_CONTRADICE)
+#: Las series con que puede entrar un km MENOR que el tope, si se pide.
+SERIES_KM_MENOR = (SERIE_TARDIA, SERIE_CONTRADICE)
 
 
 def validar_lectura(previas: Sequence[Lectura], nueva: Lectura) -> None:
@@ -117,7 +125,8 @@ def cuenta_en_la_serie(l: Lectura, ids_anulados) -> bool:
         return False
     if l.serie == SERIE_TARDIA:
         return False
-    if l.serie == SERIE_SALTO and l.confianza != Confianza.VERIFICADA:
+    if (l.serie in (SERIE_SALTO, SERIE_CONTRADICE)
+            and l.confianza != Confianza.VERIFICADA):
         return False
     return True
 
@@ -143,6 +152,9 @@ def fuera_de_la_serie(previas: Sequence[Lectura]) -> dict:
             and not (l.id is not None and l.id in ids)),
         'tardias': sum(1 for l in previas if l.serie == SERIE_TARDIA
                        and not (l.id is not None and l.id in ids)),
+        'contradicen': sum(1 for l in previas if l.serie == SERIE_CONTRADICE
+                           and l.confianza != Confianza.VERIFICADA
+                           and not (l.id is not None and l.id in ids)),
     }
 
 
@@ -291,11 +303,39 @@ MOTIVO_TARDIA = ('llegó después de lecturas con más kilómetros (se registró
                  'queda para revisión y no mueve el odómetro')
 
 
+#: El motivo escrito de una lectura que contradice a la anterior.
+MOTIVO_CONTRADICE = ('es menor que la última lectura que cuenta: o esta está '
+                     'mal o la anterior. No mueve el odómetro; control de flota '
+                     'revisa las dos y anula la equivocada')
+
+
+def serie_si_retrocede(*, pedida: str, valor_km: int,
+                       ts_operacion: Optional[datetime],
+                       previas: Sequence[Lectura]) -> str:
+    """Con qué serie entra un km MENOR que el tope, cuando quien escribe lo
+    permite (`pedida` ∈ `SERIES_KM_MENOR`).
+
+    Si la operación se HIZO antes que la lectura que la supera (su hora del
+    teléfono es creíble y anterior), no contradice a nadie: llegó tarde. Si no,
+    es lo que se pidió. Un gasto siempre pide `tardia`; el recibo, la entrega,
+    el daño y la inspección que llegan por la cola piden `contradice`.
+    """
+    if ts_operacion is not None:
+        mayores = [l.ts for l in lecturas_que_cuentan(previas)
+                   if l.valor_km > valor_km]
+        if mayores and ts_operacion < max(mayores):
+            return SERIE_TARDIA
+    return pedida
+
+
 def serie_al_nacer(*, valor_km: int, ts: datetime, previa_valor_km: Optional[int],
-                   previa_ts: Optional[datetime], tardia: bool) -> str:
+                   previa_ts: Optional[datetime], tardia: bool,
+                   menor: Optional[str] = None) -> str:
     """Dónde entra una lectura nueva en la serie. Mismas reglas de salto que
     `confianza_al_nacer` (las mismas funciones): un salto nace dudoso Y fuera
     del tope, nunca una cosa sin la otra. `previa` es la última que CUENTA."""
+    if menor in SERIES_KM_MENOR:
+        return menor
     if tardia:
         return SERIE_TARDIA
     if (_salto_en_cero_tiempo(valor_km, ts, previa_valor_km, previa_ts)
@@ -312,6 +352,7 @@ def confianza_al_nacer(
     previa_valor_km: Optional[int],
     previa_ts: Optional[datetime],
     tardia: bool = False,
+    menor: Optional[str] = None,
 ) -> Tuple[Confianza, Optional[str]]:
     """Con qué confianza nace una lectura, y **por qué**.
 
@@ -372,7 +413,9 @@ def confianza_al_nacer(
             motivos.append(regla)
 
     # ── Regla 4 · tardía (2026-09-27): un hecho que el adaptador comprobó ──
-    if tardia:
+    if menor == SERIE_CONTRADICE:
+        motivos.append(MOTIVO_CONTRADICE)
+    elif tardia or menor == SERIE_TARDIA:
         motivos.append(MOTIVO_TARDIA)
 
     if motivos:
@@ -570,7 +613,11 @@ def km_por_dia(lecturas: Sequence[Lectura]) -> RitmoDeUso:
 FACTOR_RITMO_PLAUSIBLE = 3
 #: Piso del techo con ritmo medido: un vehículo que casi no rueda también
 #: puede hacer un viaje largo.
-KM_DIA_PLAUSIBLE_MINIMO = 400
+#: 600 y no 400 (2026-09-29, validación): Neiva–Florencia ida y vuelta son
+#: ~500 km, y un camión intermunicipal que promedia 120 km por día calendario
+#: preguntaba cada vez que iba. Es para todos los vehículos: el WMS no sabe
+#: cuáles son intermunicipales, y un piso más alto solo quita preguntas.
+KM_DIA_PLAUSIBLE_MINIMO = 600
 #: Techo sin ritmo medido (menos de dos lecturas que cuenten, o tramo dudoso).
 KM_DIA_PLAUSIBLE_SIN_HISTORIA = 800
 
@@ -593,8 +640,9 @@ def techo_km_por_dia(ritmo: 'RitmoDeUso') -> dict:
 __all__ = ['validar_lectura', 'odometro_actual', 'confianza_al_nacer',
            'serie_al_nacer', 'lecturas_que_cuentan', 'cuenta_en_la_serie',
            'fuera_de_la_serie', 'anuladas', 'techo_km_por_dia',
-           'SERIE_CUENTA', 'SERIE_SALTO', 'SERIE_TARDIA', 'SERIES',
-           'MOTIVO_TARDIA',
+           'SERIE_CUENTA', 'SERIE_SALTO', 'SERIE_TARDIA', 'SERIE_CONTRADICE',
+           'SERIES', 'SERIES_KM_MENOR', 'MOTIVO_TARDIA', 'MOTIVO_CONTRADICE',
+           'serie_si_retrocede',
            'confianza_del_tramo', 'vigentes_tras_la_ultima_correccion',
            'km_por_dia', 'RitmoDeUso',
            'FACTOR_SALTO_SOSPECHOSO', 'SIN_DATO']

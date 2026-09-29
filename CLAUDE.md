@@ -8103,3 +8103,29 @@ mismos casos contra plpgsql).
   verifique esa lectura.
 - El km de cierre «prestado» del tanqueo de oficina sigue sin marca.
 
+
+### Lo que rechazó la validación del mismo día (VAL-COLA-1/2/3, 2026-09-29)
+
+`tests/flota/test_val_flota_cola_20260929.py` (sin xfail) y
+`tests/flota/test_la_cola_contra_el_turno_y_el_km.py`.
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **VAL-COLA-1** km menor | El teléfono no dejaba mandar un km menor que el último (ni en el recibo): el turno no se podía abrir y la entrega se perdía | Se **pregunta** («…se registra así y control de flota revisa cuál de los dos está mal») y se encola. Por la cola, el recibo, la entrega, la inspección y el daño nacen con serie **`contradice`** (en duda, motivo escrito): no mueven el tope ni el odómetro, y quedan en la cola de verificación. Verificar una exige que la serie siga creciendo (`_exigir_que_la_serie_siga_creciendo`, también para `salto`): primero se anula la que está mal. Sin cola sigue siendo 409. Desde el escritorio se anula **cualquiera** de las últimas 30 lecturas (`lecturas_anulables` en `custodia/activa`; `ultima_lectura` se retiró) |
+| **VAL-COLA-2** turno | Lo que llegaba por la cola se autorizaba con la custodia de AHORA: un daño hecho con el turno abierto y sincronizado después de entregarlo daba 403 | `_permisos.tuvo_la_custodia_en(usuario, vehículo, instante)` con `_idempotencia.instante_de_la_operacion()` (la hora del teléfono dentro de `dominio.cola.instante_creible`: ≤ 10 min adelantado, ≤ 7 días atrás). Hallazgo, inspección y traspaso llevan `ts_operacion`; `traspaso.custodia_en` resuelve el turno de ese instante. Fuera de lo creíble, o sin cola, manda el turno de ahora |
+| **VAL-COLA-3** sin espacio | `_condDB.set` no rechazaba en `tx.onabort` (la cuota se excede al hacer commit): la promesa quedaba colgada y la pantalla decía «guardado» | `onabort`/`onerror` rechazan en `set`/`dequeue`/`actualizar`; `enqueue` resuelve en `oncomplete`. `flotaColaMutar` corta a `FLOTA_COLA_GUARDAR_MAX_MS` (15 s). Sin espacio, `FLOTA_COLA_NO_GUARDADO`: «No quedó guardado en el teléfono… Libere espacio… sin cerrar esta pantalla» |
+| P2 rendimiento | Excluía los km del tanqueo tardío pero no sus galones | `tanqueos_de` marca `corta_ventana` y `ventanas_lleno_a_lleno` descarta la ventana que lo contiene |
+| P2 cierre | Control de flota cerraba un rechazo registrándolo a mano y «Reintentar» lo duplicaba | `rechazos_cola.cerrado_por_flota`: `@idempotente` devuelve 200 `ya_resuelto_por_flota` sin ejecutar; el teléfono lo saca de la cola como hecho |
+| P2 techo | Techo mínimo 400 km/día: un intermunicipal honesto preguntaba todos los días | `KM_DIA_PLAUSIBLE_MINIMO = 600` |
+
+Migración: `m051flotakm` (baja de `m051flotalegal`; una cabeza) suma
+`contradice` al CHECK de serie, al trigger y a la pregunta de la serie.
+PostgreSQL: `TestLaSerieEnPostgres` (55 declarados).
+
+**Lo que NO cubre, dicho:** un recibo repetido que llega al día siguiente
+se sigue tratando como recibo nuevo; una inspección de hace más de 7 días
+se juzga con el día del servidor; el gerente no tiene «Ya lo resolví» (es de
+control de flota); el trigger de ancla no mira saltos anteriores; un
+downgrade de `m051flotakm` pierde la serie; el temporizador lee la cola
+entera en cada vuelta; «Camión recibido ✓» también sale en el no-op; el
+resumen de un rechazo cerrado no se guarda.

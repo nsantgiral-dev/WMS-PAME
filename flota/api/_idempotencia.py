@@ -96,6 +96,19 @@ def llego_por_la_cola() -> bool:
     return _clave_del_pedido(request.get_json(silent=True) or {}) is not None
 
 
+def instante_de_la_operacion():
+    """El instante en que se HIZO lo que llega por la cola, si la hora del
+    teléfono es creíble; `None` si no llegó por la cola o no se le puede creer
+    (2026-09-29). Lo que no llega por la cola se juzga con el presente."""
+    from datetime import datetime
+
+    from flota.dominio.cola import instante_creible
+
+    if not llego_por_la_cola():
+        return None
+    return instante_creible(ts_dispositivo_del_pedido(), datetime.utcnow())
+
+
 #: Los rechazos que se anotan. 401 no llega acá (`@jwt_required` va antes) y
 #: 408/429 son de reintentar, no rechazos.
 _STATUS_RECHAZO = (400, 403, 404, 409, 410, 422)
@@ -130,6 +143,17 @@ def idempotente(operacion, campo_id):
                 return jsonify({'error': 'Clave de reenvío inválida.'}), 400
 
             usuario_id = int(get_jwt_identity())
+            # Control de flota ya lo resolvió a mano (2026-09-29): 200 y nada
+            # más. El teléfono lo da por hecho y lo saca de la cola; ejecutarlo
+            # lo registraría dos veces.
+            from flota.adaptadores import rechazos_cola
+            cerrado = rechazos_cola.cerrado_por_flota(usuario_id, clave)
+            if cerrado is not None:
+                return jsonify({
+                    'ya_resuelto_por_flota': True,
+                    'mensaje': (f'Control de flota ya lo resolvió: '
+                                f'{cerrado.cierre_motivo}. No se registró de nuevo.'),
+                }), 200
             previa = OperacionIdempotente.query.filter_by(clave=clave).first()
             if previa is not None:
                 return _respuesta_previa(previa, usuario_id, operacion)

@@ -2044,12 +2044,16 @@ const _condDB = (() => {
         r.onerror   = () => res(null);
       });
     },
+    /** Rechaza si la transacción aborta (disco lleno: `QuotaExceededError`
+     * dispara solo `abort`, 2026-09-29): una promesa que nunca vuelve colgaba
+     * la cola del conductor entera. */
     async set(key, val) {
       const db = await _open();
       return new Promise((res, rej) => {
         const tx = db.transaction('cache', 'readwrite');
         tx.objectStore('cache').put({ k: key, v: val, ts: Date.now() });
         tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+        tx.onabort = () => rej(tx.error || new Error('no quedó guardado'));
       });
     },
     async enqueue(item) {
@@ -2057,8 +2061,13 @@ const _condDB = (() => {
       return new Promise((res, rej) => {
         const tx = db.transaction('queue', 'readwrite');
         const r  = tx.objectStore('queue').add({ ...item, ts: Date.now() });
-        r.onsuccess = () => res(r.result);
-        r.onerror   = () => rej(r.error);
+        // Se resuelve al CONFIRMAR la transacción, no al aceptar el `add`: sin
+        // espacio, IndexedDB acepta el pedido y aborta al confirmar (solo
+        // `abort`, sin `error`), y lo que se creyó guardado no lo estaba
+        // (2026-09-29, VAL-COLA-3).
+        tx.oncomplete = () => res(r.result);
+        tx.onerror = () => rej(tx.error || r.error);
+        tx.onabort = () => rej(tx.error || r.error || new Error('no quedó guardado'));
       });
     },
     async queue() {
@@ -2075,6 +2084,7 @@ const _condDB = (() => {
         const tx = db.transaction('queue', 'readwrite');
         tx.objectStore('queue').delete(id);
         tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+        tx.onabort = () => rej(tx.error || new Error('no quedó guardado'));
       });
     },
     /** Reescribe un ítem de la cola (intentos, último error). */
@@ -2084,6 +2094,7 @@ const _condDB = (() => {
         const tx = db.transaction('queue', 'readwrite');
         tx.objectStore('queue').put(item);
         tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+        tx.onabort = () => rej(tx.error || new Error('no quedó guardado'));
       });
     }
   };

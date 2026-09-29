@@ -17,7 +17,8 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
 from app.routes._auth_helpers import Roles
-from flota.api._idempotencia import idempotente
+from flota.api._idempotencia import (idempotente, instante_de_la_operacion,
+                                     llego_por_la_cola)
 from flota.api._permisos import (
     MAESTROS_FLOTA,
     _usuario,
@@ -103,13 +104,21 @@ def km_plausible_json(vehiculo_id):
             'km_dia': techo['km_dia'], 'base': techo['base']}
 
 
-def _ultima_lectura_json(vehiculo_id):
-    fila = (LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id)
-            .order_by(LecturaOdometro.ts.desc(), LecturaOdometro.id.desc()).first())
-    if fila is None:
-        return None
-    return {'id': fila.id, 'valor_km': fila.valor_km, 'ts': iso_utc(fila.ts),
-            'confianza': fila.confianza}
+#: Cuántas lecturas se ofrecen para anular desde el escritorio.
+LECTURAS_ANULABLES = 30
+
+
+def _lecturas_anulables_json(vehiculo_id):
+    """Las lecturas que una corrección puede anular (2026-09-29, validación):
+    CUALQUIERA que no esté anulada ya, no solo la última — una mala con otra
+    detrás (un tanqueo tardío, un recibo que la contradice) no se podía anular
+    desde ninguna pantalla. Las más recientes primero."""
+    filas = (LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id)
+             .order_by(LecturaOdometro.ts.desc(), LecturaOdometro.id.desc()).all())
+    anuladas = {l.anula_lectura_id for l in filas if l.anula_lectura_id is not None}
+    return [{'id': l.id, 'valor_km': l.valor_km, 'ts': iso_utc(l.ts),
+             'origen': l.origen, 'confianza': l.confianza, 'serie': l.serie}
+            for l in filas if l.id not in anuladas][:LECTURAS_ANULABLES]
 
 
 @custodia_bp.route('/custodia/activa/<placa>', methods=['GET'])
@@ -147,10 +156,10 @@ def custodia_activa(placa):
         # `sin_dato` viaja como la palabra, no como 0. Un vehículo sin lecturas
         # no tiene 0 km: no sabemos cuántos tiene.
         'odometro_actual': km if km is not SIN_DATO else str(SIN_DATO),
-        # La lectura más reciente, sea cual sea (2026-09-27): es la que el
-        # formulario de escritorio anula al «corregir la última». Una
-        # corrección anula UNA lectura y tiene que decir cuál.
-        'ultima_lectura': _ultima_lectura_json(vehiculo.id),
+        # Las lecturas que una corrección puede anular (2026-09-29): el
+        # formulario de escritorio deja elegir cuál. Una corrección anula UNA
+        # lectura y tiene que decir cuál.
+        'lecturas_anulables': _lecturas_anulables_json(vehiculo.id),
         # Con qué compara el teléfono el km del recibo (2026-09-27).
         'km_plausible': km_plausible_json(vehiculo.id),
         'custodia': None if vigente is None else {
@@ -474,6 +483,10 @@ def custodia_traspaso():
             fotos_inicio=datos['fotos_inicio'] if 'fotos_inicio' in datos else None,
             ubicacion=ubicacion,
             ubicacion_motivo=datos['ubicacion_motivo'] if 'ubicacion_motivo' in datos else None,
+            # Por la cola del conductor (2026-09-29, VAL-COLA-1): un km menor
+            # no traba el recibo ni la entrega; entra en duda.
+            si_retrocede=dom_odo.SERIE_CONTRADICE if llego_por_la_cola() else None,
+            ts_operacion=instante_de_la_operacion(),
         )
     except (FotoInvalida, ErrorAlmacen) as e:
         # 400: la foto del cuerpo no se puede aceptar (ángulo o clase fuera del

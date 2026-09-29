@@ -309,6 +309,17 @@ def vehiculo_en_custodia_de(usuario):
     return vigente.vehiculo_id if vigente is not None else None
 
 
+def tuvo_la_custodia_en(usuario, vehiculo_id, instante) -> bool:
+    """¿El conductor tenía ESE vehículo en ESE instante? `False` sin instante."""
+    from flota.adaptadores.traspaso import custodia_en
+
+    c = conductor_de(usuario)
+    if instante is None or c is None:
+        return False
+    turno = custodia_en(vehiculo_id, instante)
+    return turno is not None and turno.custodio_conductor_id == c.id
+
+
 def sin_derecho_sobre_vehiculo(vehiculo, que: str):
     """`None` si quien pide puede operar sobre este vehículo; el 403 si no.
 
@@ -324,6 +335,14 @@ def sin_derecho_sobre_vehiculo(vehiculo, que: str):
             f'No puede {que}: su usuario no está vinculado a un conductor. '
             f'Pídale a administración que le vincule la ficha.')
     if vehiculo_en_custodia_de(u) == vehiculo.id:
+        return None
+    # Lo que llega por la cola se juzga con el turno EN EL INSTANTE en que se
+    # hizo (2026-09-29, VAL-COLA-2): el tanqueo y el daño de Ana, hechos sin
+    # señal en su turno, entran aunque sincronicen después del relevo. Solo con
+    # la hora del teléfono creíble; sin ella, el presente.
+    from flota.api._idempotencia import instante_de_la_operacion
+
+    if tuvo_la_custodia_en(u, vehiculo.id, instante_de_la_operacion()):
         return None
     return _no_es_tuyo(
         f'No puede {que} sobre el {vehiculo.placa}: no está en su turno. '

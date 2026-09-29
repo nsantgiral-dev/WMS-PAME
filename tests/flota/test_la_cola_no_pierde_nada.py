@@ -119,7 +119,11 @@ def mundo(db, app, almacen, tmp_path, monkeypatch):
 
 
 def _dano(client, mundo, km, clave=None, token=None):
-    cuerpo = {'placa': mundo['placa'], 'criticidad': 'menor',
+    # `km < 1000` es «un daño que el servidor rechaza». Hasta el 2026-09-29 lo
+    # rechazaba el km que retrocede; desde VAL-COLA-1 ese, por la cola, entra en
+    # duda: el rechazo sale ahora de una gravedad que no existe (409 igual).
+    cuerpo = {'placa': mundo['placa'],
+              'criticidad': 'rarisima' if km < 1000 else 'menor',
               'descripcion': 'rayón', 'km': km}
     if clave:
         cuerpo['clave_idempotencia'] = clave
@@ -147,7 +151,7 @@ class TestElRechazoSeAnota:
         assert fila is not None, 'el rechazo no quedó anotado: control de flota no se entera'
         assert fila.estado == 'abierto' and fila.intentos == 1
         assert fila.operacion == 'hallazgo' and fila.placa == mundo['placa']
-        assert fila.status_http == 409 and 'decrecer' in fila.mensaje
+        assert fila.status_http == 409 and 'criticidad' in fila.mensaje
         assert fila.ts_dispositivo is not None
         assert Hallazgo.query.count() == 0, 'el registro rechazado dejó filas'
 
@@ -279,7 +283,7 @@ class TestLaBandejaLoMuestra:
         _dano(client, mundo, km=500, clave='k-b1')
         (p,) = self._pendientes()
         assert p['placa'] == mundo['placa']
-        assert 'Yesid Cola' in p['texto'] and 'decrecer' in p['texto']
+        assert 'Yesid Cola' in p['texto'] and 'criticidad' in p['texto']
         assert p['accion'] == {'tipo': 'rechazo', 'rechazo_id': _rechazo('k-b1').id}
 
     def test_el_que_pidio_ayuda_va_primero(self, client, mundo):

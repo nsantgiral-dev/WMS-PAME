@@ -38,7 +38,7 @@ from typing import List, Optional
 from app.extensions import db
 from app.utils.fecha import TZ_BOGOTA, inicio_del_dia_utc
 from flota.adaptadores.modelos import Hallazgo, LecturaOdometro
-from flota.adaptadores.traspaso import custodia_activa
+from flota.adaptadores.traspaso import custodia_activa, custodia_en
 from flota.dominio import inspeccion as dom_insp
 from flota.dominio import odometro as dom_odo
 from flota.dominio.errores import LecturaRechazada, ErrorFlota
@@ -81,7 +81,8 @@ def anclar_odometro(vehiculo_id: int, km: int, autor_usuario_id: int,
                     ahora: datetime,
                     origen: OrigenLectura = OrigenLectura.HALLAZGO,
                     foto_tablero: Optional[dict] = None,
-                    permitir_tardia: bool = False,
+                    si_retrocede: Optional[str] = None,
+                    ts_operacion: Optional[datetime] = None,
                     ) -> LecturaOdometro:
     """La lectura a la que se ata un evento de flota. Regla 3, con un hecho.
 
@@ -137,6 +138,14 @@ def anclar_odometro(vehiculo_id: int, km: int, autor_usuario_id: int,
     lo piden— la lectura nace `tardia`: en duda, con su motivo, a la cola de
     verificación, y sin mover el odómetro. El `before_insert` comprueba que de
     verdad quede por debajo de lo que cuenta.
+
+    ## `si_retrocede` — generalizado el 2026-09-29 (VAL-COLA-1)
+
+    La serie con que entra un km menor, si quien escribe lo permite: `tardia`
+    (los gastos) o `contradice` (lo que llega por la cola del conductor: daño,
+    inspección). Con `ts_operacion` creíble y anterior a la lectura que lo
+    supera, es `tardia` venga de donde venga (`dominio.serie_si_retrocede`).
+    Sin `si_retrocede`, un km menor sigue siendo 409 (el escritorio).
     """
     previas = LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id).all()
 
@@ -149,6 +158,12 @@ def anclar_odometro(vehiculo_id: int, km: int, autor_usuario_id: int,
                  key=lambda l: (l.ts, l.id), default=None)
     if ultima is not None and ultima.valor_km == km:
         return ultima
+    # El mismo gesto (la inspección y los daños que produce comparten `ahora`):
+    # si su lectura nació fuera de la serie, se reutiliza igual — dos filas en
+    # duda por una sola mirada al tablero serían ruido en la cola.
+    mismo_gesto = next((l for l in previas if l.ts == ahora and l.valor_km == km), None)
+    if mismo_gesto is not None:
+        return mismo_gesto
 
     # El dominio juzga ANTES de escribir: un odómetro que retrocede no entra
     # por esta puerta más de lo que entra por el recibo de turno. Las filas se
@@ -162,9 +177,11 @@ def anclar_odometro(vehiculo_id: int, km: int, autor_usuario_id: int,
                     autor_usuario_id=autor_usuario_id),
         )
     except LecturaRechazada:
-        if not permitir_tardia:
+        if si_retrocede not in dom_odo.SERIES_KM_MENOR:
             raise
-        serie = dom_odo.SERIE_TARDIA
+        serie = dom_odo.serie_si_retrocede(
+            pedida=si_retrocede, valor_km=km, ts_operacion=ts_operacion,
+            previas=[l.a_dominio() for l in previas])
     foto = None
     if foto_tablero is not None:
         from flota.adaptadores.almacen_fotos import colgar_fotos
@@ -198,6 +215,8 @@ def reportar(
     fotos: Optional[List[dict]] = None,
     ts: Optional[datetime] = None,
     commit: bool = True,
+    si_retrocede: Optional[str] = None,
+    ts_operacion: Optional[datetime] = None,
 ) -> Hallazgo:
     """Registra un daño. Devuelve el hallazgo con su reloj ya corriendo.
 
@@ -256,10 +275,15 @@ def reportar(
         # frontera devuelva 400 y no 500 — es un dato malo, no un fallo.
         raise HallazgoInvalido(str(e))
 
-    custodia = custodia_activa(vehiculo_id)
+    # El turno EN EL INSTANTE del daño (2026-09-29, VAL-COLA-2): el que llega
+    # por la cola después de un relevo se hizo bajo la custodia de quien lo vio.
+    custodia = (custodia_en(vehiculo_id, ts_operacion) if ts_operacion is not None
+                else custodia_activa(vehiculo_id))
 
     try:
-        lectura = anclar_odometro(vehiculo_id, km, reportado_por_usuario_id, ahora)
+        lectura = anclar_odometro(vehiculo_id, km, reportado_por_usuario_id, ahora,
+                                  si_retrocede=si_retrocede,
+                                  ts_operacion=ts_operacion)
 
         fila = Hallazgo(
             vehiculo_id=vehiculo_id,

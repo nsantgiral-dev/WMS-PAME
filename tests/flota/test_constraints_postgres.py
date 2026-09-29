@@ -424,6 +424,13 @@ class TestLaSerieEnPostgres:
         _lectura_serie(esquema, semilla, 1_500)
         _lectura_serie(esquema, semilla, 1_400, 60, origen='tanqueo', serie='tardia')
 
+    def test_la_que_contradice_no_la_frena_y_no_cuenta(self, esquema, semilla):
+        """VAL-COLA-1 (2026-09-29): entra por debajo; no sube ni baja el tope."""
+        _lectura_serie(esquema, semilla, 13_500)
+        _lectura_serie(esquema, semilla, 12_520, 60, serie='contradice')
+        with pytest.raises(Exception, match='decrecer'):
+            _lectura_serie(esquema, semilla, 13_000, 120)
+
     def test_una_lectura_se_anula_una_sola_vez(self, esquema, semilla):
         _lectura_serie(esquema, semilla, 1_000)
         mala = _lectura_serie(esquema, semilla, 5_000, 60)

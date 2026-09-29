@@ -80,8 +80,8 @@ _CORREDOR = _RAIZ / 'scripts' / 'verificar_flota_postgres.sh'
 #: Y de 45 a 54 el 2026-09-27, con m051flotakm (T3): `TestLaSerieEnPostgres`
 #: ejerce contra plpgsql el salto que no sube el tope, la anulación puntual,
 #: la tardía y los tres CHECK nuevos. Corrida verde: PostgreSQL 17 local,
-#: 54 passed.
-_TESTS_ESPERADOS = 54
+#: 54 passed. Y 55 el 2026-09-29: la serie `contradice` (VAL-COLA-1).
+_TESTS_ESPERADOS = 55
 
 
 def _tests_del_archivo(ruta: pathlib.Path) -> list:

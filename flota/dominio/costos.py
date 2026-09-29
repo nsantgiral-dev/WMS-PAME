@@ -402,6 +402,11 @@ def ventanas_lleno_a_lleno(tanqueos: Sequence[dict]) -> list:
         km = tanqueos[b]['km'] - tanqueos[a]['km']
         galones = sum((Decimal(tanqueos[i]['galones'])
                        for i in range(a + 1, b + 1)), Decimal('0'))
+        # Un tanqueo que se sacó por su km (anulado, salto, tardía) entre los
+        # dos llenos: sus galones faltan en la suma. La ventana no se mide
+        # (2026-09-29): sin ellos, el km/galón salía inflado.
+        if any(tanqueos[i].get('corta_ventana') for i in range(a + 1, b + 1)):
+            continue
         if km <= 0 or galones <= 0:
             # Un tramo de cero kilómetros entre dos llenos no es rendimiento
             # infinito ni cero: es que las dos lecturas dicen lo mismo. Se

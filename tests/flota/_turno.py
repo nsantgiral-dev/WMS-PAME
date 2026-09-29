@@ -13,7 +13,7 @@ necesitan, y seis copias de «cómo se recibe un turno» divergen.
 """
 
 
-def dar_turno(db, usuario_id, placa, km=0, nombre=None):
+def dar_turno(db, usuario_id, placa, km=0, nombre=None, ts=None):
     """El conductor `usuario_id` recibe `placa` con `km`. Devuelve la custodia.
 
     Si el usuario no tiene ficha de `Conductor`, se le crea una vinculada: sin
@@ -35,5 +35,5 @@ def dar_turno(db, usuario_id, placa, km=0, nombre=None):
     return traspaso.traspasar(
         vehiculo_id=v.id, km=km, registrado_por_usuario_id=usuario_id,
         custodio_tipo=CustodioTipo.CONDUCTOR, custodio_conductor_id=c.id,
-        quien_pide=QuienPide.CONDUCTOR,
+        quien_pide=QuienPide.CONDUCTOR, ts=ts,
     )

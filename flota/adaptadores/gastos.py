@@ -260,7 +260,8 @@ def _lectura_para(*, vehiculo_id: int, categoria: str, km: Optional[int],
         # un 409 que se llevaba la plata del registro.
         return anclar_odometro(vehiculo_id, km, usuario_id, ahora,
                                origen=ORIGEN_DE_LECTURA[categoria],
-                               foto_tablero=foto_tablero, permitir_tardia=True)
+                               foto_tablero=foto_tablero,
+                               si_retrocede=dom_odo.SERIE_TARDIA)
 
     if km is not None:
         raise GastoInvalido(
@@ -671,18 +672,31 @@ def tanqueos_de(vehiculo_id: int) -> List[dict]:
     (`_tanqueo_cuenta`); cuántos quedaron fuera lo dice
     `rendimiento_publicable_de` (`tanqueos_fuera_por_km`).
     """
-    filas = _filas_de_tanqueo(vehiculo_id)
+    todas = _filas_de_tanqueo(vehiculo_id)
     anulados = {l.anula_lectura_id for l in LecturaOdometro.query.filter(
         LecturaOdometro.vehiculo_id == vehiculo_id,
         LecturaOdometro.anula_lectura_id.isnot(None)).all()}
-    filas = [f for f in filas if _tanqueo_cuenta(f[2], anulados)]
+    filas = [f for f in todas if _tanqueo_cuenta(f[2], anulados)]
+    fuera = [f for f in todas if not _tanqueo_cuenta(f[2], anulados)]
     ordenadas = sorted(filas, key=lambda f: (f[2].valor_km, f[0].gasto_id))
+    # Los galones del que se saca no se pierden en silencio (2026-09-29,
+    # validación): el primer tanqueo que cuenta DESPUÉS de él, por fecha, corta
+    # la ventana que lo contenía. Sin eso, tres llenos de 400 km y 12 galones
+    # sin el del medio daban 800 km contra 12 galones: el doble, y la señal de
+    # galones marcaba al conductor sano.
+    cortan = set()
+    for tq_f, g_f, _l in fuera:
+        siguiente = min(((g.fecha, g.id, tq.gasto_id) for tq, g, _ in filas
+                         if (g.fecha, g.id) > (g_f.fecha, g_f.id)), default=None)
+        if siguiente is not None:
+            cortan.add(siguiente[2])
     # `lectura_id` viaja para que quien juzgue una ventana pueda preguntar con
     # qué confianza se sostienen sus dos extremos (la bandeja: una ventana con
     # un km en duda no es evidencia de galones de más).
     return [{'km': lec.valor_km, 'galones': Decimal(tq.galones),
              'tanque': tq.tanque, 'gasto_id': tq.gasto_id,
-             'estacion': tq.estacion, 'fecha': g.fecha, 'lectura_id': lec.id}
+             'estacion': tq.estacion, 'fecha': g.fecha, 'lectura_id': lec.id,
+             'corta_ventana': tq.gasto_id in cortan}
             for tq, g, lec in ordenadas]
 
 

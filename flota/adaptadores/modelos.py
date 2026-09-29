@@ -415,7 +415,8 @@ class LecturaOdometro(db.Model):
                                  nullable=True)
     #: 2026-09-27 · Su lugar en la serie (`dominio.odometro.SERIES`): `cuenta`,
     #: `salto` (no sube el tope ni mueve el odómetro hasta que alguien lo
-    #: verifique) o `tardia` (llegó después de lecturas con más km). NULL =
+    #: verifique), `tardia` (llegó después de lecturas con más km) o
+    #: `contradice` (menor que lo que cuenta, hecho ahora: 2026-09-29). NULL =
     #: anterior a la marca, y cuenta como antes. La escribe el `before_insert`.
     serie = db.Column(db.String(10), nullable=True)
 
@@ -423,7 +424,7 @@ class LecturaOdometro(db.Model):
         _en('origen', ORIGEN_LECTURA),
         _en('confianza', CONFIANZA),
         db.CheckConstraint(
-            "serie IS NULL OR serie IN ('cuenta', 'salto', 'tardia')",
+            "serie IS NULL OR serie IN ('cuenta', 'salto', 'tardia', 'contradice')",
             name='ck_flota_lectura_serie'),
         # Un salto o una tardía nacen en duda: afirmar `declarada` sobre algo
         # que la serie deja afuera diría las dos cosas a la vez.
@@ -560,7 +561,8 @@ def _marcar_confianza(mapper, connection, target):
     anuladas_q = select(a.c.anula_lectura_id).where(
         a.c.vehiculo_id == target.vehiculo_id, a.c.anula_lectura_id.isnot(None))
     cuenta = or_(t.c.serie.is_(None), t.c.serie == 'cuenta',
-                 and_(t.c.serie == 'salto', t.c.confianza == 'verificada'))
+                 and_(t.c.serie.in_(('salto', 'contradice')),
+                      t.c.confianza == 'verificada'))
     previa = connection.execute(
         select(t.c.valor_km, t.c.ts)
         .where(t.c.vehiculo_id == target.vehiculo_id, cuenta,
@@ -571,13 +573,19 @@ def _marcar_confianza(mapper, connection, target):
     # Tardía solo si quien escribe la pidió (`anclar_odometro`, para un gasto)
     # Y de verdad queda por debajo de lo que cuenta: una tardía que no es
     # menor es una lectura normal.
-    tardia = False
-    if target.serie == 'tardia':
+    # Lo mismo para `contradice` (2026-09-29): la pide la cola del conductor y
+    # solo vale si de verdad queda por debajo.
+    from flota.dominio.odometro import SERIES_KM_MENOR
+
+    menor = None
+    if target.serie in SERIES_KM_MENOR:
         tope = connection.execute(
             select(func.max(t.c.valor_km))
             .where(t.c.vehiculo_id == target.vehiculo_id, cuenta,
                    t.c.id.notin_(anuladas_q))).scalar()
-        tardia = tope is not None and target.valor_km < tope
+        if tope is not None and target.valor_km < tope:
+            menor = target.serie
+    tardia = menor is not None
 
     # «Tiene foto» es tener una foto GUARDADA (`estado = 'ok'`), no un
     # `foto_id` (2026-09-25): el tablero de un recibo cuyo archivo no se guardó
@@ -596,14 +604,15 @@ def _marcar_confianza(mapper, connection, target):
         tiene_foto=tiene_foto,
         previa_valor_km=previa.valor_km if previa is not None else None,
         previa_ts=previa.ts if previa is not None else None,
-        tardia=tardia,
+        tardia=tardia, menor=menor,
     )
     target.confianza = confianza.value
     target.motivo_dudosa = motivo
     target.serie = serie_al_nacer(
         valor_km=target.valor_km, ts=target.ts,
         previa_valor_km=previa.valor_km if previa is not None else None,
-        previa_ts=previa.ts if previa is not None else None, tardia=tardia)
+        previa_ts=previa.ts if previa is not None else None, tardia=tardia,
+        menor=menor)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -962,13 +971,13 @@ def _identicas(comparador: str) -> str:
 # las correcciones VIEJAS (sin `anula_lectura_id`). Y una tardía no se valida:
 # la pide el adaptador y el `before_insert` comprueba que de verdad es menor.
 _CUENTA_SQL = ("(COALESCE(l.serie, 'cuenta') = 'cuenta' OR "
-               "(l.serie = 'salto' AND l.confianza = 'verificada'))")
+               "(l.serie IN ('salto', 'contradice') AND l.confianza = 'verificada'))")
 
 _SQLITE_DDL = f"""
 CREATE TRIGGER flota_odometro_monotonia
 BEFORE INSERT ON flota_lectura_odometro
 FOR EACH ROW WHEN NEW.origen <> 'correccion'
-    AND COALESCE(NEW.serie, 'cuenta') <> 'tardia' AND EXISTS (
+    AND COALESCE(NEW.serie, 'cuenta') NOT IN ('tardia', 'contradice') AND EXISTS (
     SELECT 1 FROM flota_lectura_odometro l
     WHERE l.vehiculo_id = NEW.vehiculo_id AND l.valor_km > NEW.valor_km
       AND {_CUENTA_SQL}
@@ -1059,7 +1068,7 @@ BEGIN SELECT RAISE(ABORT, '{_MSG_SOLAPE}'); END;
 _PG_DDL = f"""
 CREATE OR REPLACE FUNCTION flota_odometro_monotonia() RETURNS trigger AS $$
 BEGIN
-  IF NEW.origen <> 'correccion' AND COALESCE(NEW.serie, 'cuenta') <> 'tardia'
+  IF NEW.origen <> 'correccion' AND COALESCE(NEW.serie, 'cuenta') NOT IN ('tardia', 'contradice')
      AND EXISTS (
       SELECT 1 FROM flota_lectura_odometro l
       WHERE l.vehiculo_id = NEW.vehiculo_id AND l.valor_km > NEW.valor_km

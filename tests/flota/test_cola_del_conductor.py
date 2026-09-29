@@ -172,19 +172,20 @@ class TestUnReenvioNoDuplicaElTurno:
 class TestUnRechazoNoGastaLaClave:
 
     def test_si_falla_el_reintento_corregido_entra(self, client, mundo):
-        """Un daño con un kilometraje que retrocede: 409. La clave no se gasta
-        y el reintento corregido entra. (Hasta el 2026-09-27 se probaba con un
-        segundo recibo del mismo custodio; ése ahora es un no-op declarado.)"""
+        """Un daño con una gravedad que no existe: 409 del adaptador. La clave
+        no se gasta y el reintento corregido entra. (Hasta el 2026-09-29 se
+        probaba con un km que retrocede; desde VAL-COLA-1 ese, por la cola,
+        entra en duda.)"""
         from flota.adaptadores.modelos import OperacionIdempotente
         client.post('/flota/custodia/traspaso', json=_recibo(mundo, 'k-base', km=1000),
                     headers=_auth(mundo['t_cond']))
-        dano = {'placa': mundo['placa'], 'criticidad': 'menor',
-                'descripcion': 'rayón', 'clave_idempotencia': 'k-corrige'}
-        r = client.post('/flota/hallazgos', json=dict(dano, km=500),
+        dano = {'placa': mundo['placa'], 'descripcion': 'rayón',
+                'clave_idempotencia': 'k-corrige', 'km': 1200}
+        r = client.post('/flota/hallazgos', json=dict(dano, criticidad='rarisima'),
                         headers=_auth(mundo['t_cond']))
-        assert r.status_code == 409, r.get_json()
+        assert r.status_code in (400, 409), r.get_json()
         assert OperacionIdempotente.query.filter_by(clave='k-corrige').count() == 0
-        r = client.post('/flota/hallazgos', json=dict(dano, km=1200),
+        r = client.post('/flota/hallazgos', json=dict(dano, criticidad='menor'),
                         headers=_auth(mundo['t_cond']))
         assert r.status_code == 201, r.get_json()
 

@@ -905,7 +905,10 @@ function flotaAbrirOdometro(placa) {
       <option value="correccion">Corrección de una lectura anterior</option>
     </select>
     <div id="od-motivo-caja" style="display:none">
-      <p id="od-anula" style="font-size:var(--fs-sm);color:var(--tx2)">Buscando la última lectura…</p>
+      <p id="od-anula" style="font-size:var(--fs-sm);color:var(--tx2)">Buscando las lecturas…</p>
+      <label for="od-anula-sel">Lectura que se anula</label>
+      <select id="od-anula-sel" style="width:100%;padding:6px;display:none"
+              onchange="flotaOdElegirAnulada()"></select>
       <label style="color:var(--yellow)">Motivo de la corrección (obligatorio)</label>
       <input id="od-motivo" style="width:100%;padding:6px">
     </div>
@@ -916,31 +919,49 @@ function flotaAbrirOdometro(placa) {
   </div>`;
 }
 
-/** La lectura que anula la corrección del formulario de escritorio: la última
- * del vehículo. `null` si no hay ninguna o no se pudo saber. */
+/** La lectura que anula la corrección del formulario de escritorio: la
+ * elegida en la lista (de entrada, la última). `null` si no se pudo saber. */
 let FLOTA_OD_ANULA = null;
+/** Las lecturas que se pueden anular (`lecturas_anulables`): el `<select>`
+ * viaja por posición. */
+let FLOTA_OD_LECTURAS = [];
 
-/** Muestra el motivo solo cuando el origen es una corrección, y dice QUÉ
- * lectura se anula (2026-09-27): una corrección anula UNA lectura —la última,
- * desde acá; una de más atrás, desde «Kilometrajes por verificar»— y no borra
- * la historia. */
+/** La lectura elegida en la lista de anulables. */
+function flotaOdElegirAnulada() {
+  const sel = document.getElementById('od-anula-sel');
+  FLOTA_OD_ANULA = FLOTA_OD_LECTURAS[parseInt(sel ? sel.value : '', 10)] || null;
+}
+
+/** Muestra el motivo solo cuando el origen es una corrección, y deja elegir
+ * QUÉ lectura se anula: una corrección anula UNA lectura y no borra la
+ * historia. Desde el 2026-09-29 cualquiera que no esté anulada ya (antes, solo
+ * la última: una mala con otra detrás no se podía anular desde ninguna
+ * pantalla). */
 async function flotaOrigenCambio() {
   const es = document.getElementById('od-origen').value === 'correccion';
   document.getElementById('od-motivo-caja').style.display = es ? 'block' : 'none';
   if (!es) return;
   const aviso = document.getElementById('od-anula');
+  const sel = document.getElementById('od-anula-sel');
   FLOTA_OD_ANULA = null;
+  FLOTA_OD_LECTURAS = [];
   try {
     const d = await get('/flota/custodia/activa/' + encodeURIComponent(FLOTA_PLACA));
-    FLOTA_OD_ANULA = d.ultima_lectura || null;
+    FLOTA_OD_LECTURAS = d.lecturas_anulables || [];
   } catch (e) {
-    FLOTA_OD_ANULA = null;
+    FLOTA_OD_LECTURAS = [];
+  }
+  FLOTA_OD_ANULA = FLOTA_OD_LECTURAS[0] || null;
+  if (sel) {
+    sel.innerHTML = FLOTA_OD_LECTURAS.map((l, i) =>
+      `<option value="${i}">${esc(flotaKm(l.valor_km))} km · ${esc(horaColombia(l.ts))}` +
+      `${l.confianza === 'dudosa' ? ' · en duda' : ''}</option>`).join('');
+    sel.style.display = FLOTA_OD_LECTURAS.length ? 'block' : 'none';
   }
   if (aviso) {
     aviso.textContent = FLOTA_OD_ANULA
-      ? `Se anula la última lectura: ${flotaKm(FLOTA_OD_ANULA.valor_km)} km (${horaColombia(FLOTA_OD_ANULA.ts)}). ` +
-        'El kilometraje de arriba es el que marca el tablero ahora.'
-      : 'No se pudo saber cuál es la última lectura: sin eso no se corrige.';
+      ? 'Elija la lectura equivocada (de entrada, la última). El kilometraje de arriba es el que marca el tablero ahora.'
+      : 'No se pudo saber qué lecturas tiene el vehículo: sin eso no se corrige.';
   }
 }
 
@@ -1921,10 +1942,16 @@ async function flotaColaLeer() {
   return [];
 }
 
+/** Cuánto espera la cola a que el teléfono guarde antes de darlo por no
+ * guardado (2026-09-29, VAL-COLA-3). Una escritura que no vuelve —disco lleno
+ * en un navegador que no avisa— dejaba el candado tomado para siempre. */
+const FLOTA_COLA_GUARDAR_MAX_MS = 15000;
+
 /** Lee-modifica-escribe la cola bajo un candado: el formulario que encola y la
- * sincronización que desencola no pueden pisarse. Levanta si no pudo guardar. */
+ * sincronización que desencola no pueden pisarse. Levanta si no pudo guardar,
+ * y también si el teléfono no contesta a tiempo: el candado se suelta. */
 function flotaColaMutar(fn) {
-  const paso = FLOTA_COLA_CANDADO.then(async () => {
+  const trabajo = FLOTA_COLA_CANDADO.then(async () => {
     const lista = fn(await flotaColaLeer());
     if (flotaColaHayAlmacen()) {
       await _condDB.set(FLOTA_COLA_LLAVE, lista);
@@ -1933,9 +1960,22 @@ function flotaColaMutar(fn) {
     FLOTA_COLA_ITEMS = lista;
     return lista;
   });
+  let reloj = null;
+  const plazo = new Promise((_, rej) => {
+    reloj = setTimeout(() => rej(new Error('El teléfono no terminó de guardar.')),
+                       FLOTA_COLA_GUARDAR_MAX_MS);
+    if (reloj && reloj.unref) reloj.unref();
+  });
+  const paso = Promise.race([trabajo, plazo]).finally(() => clearTimeout(reloj));
   FLOTA_COLA_CANDADO = paso.catch(() => {});
   return paso;
 }
+
+/** Lo que el conductor lee cuando el teléfono no pudo guardar (sin espacio,
+ * casi siempre): qué pasó y qué hacer, en una frase. */
+const FLOTA_COLA_NO_GUARDADO = 'No quedó guardado en el teléfono: casi siempre es '
+  + 'falta de espacio. Libere espacio (fotos o videos viejos) y vuelva a intentarlo '
+  + 'sin cerrar esta pantalla; si no hay señal, avísele a control de flota.';
 
 /** El conductor leyó un rechazo VIEJO (solo mensaje). Se quita por posición. */
 async function flotaColaDescartarRechazo(i) {
@@ -1999,7 +2039,12 @@ async function flotaColaEnviarUna(op) {
   }
   let d = {};
   try { d = await r.json(); } catch (_) { d = {}; }
-  if (r.ok) return { estado: 'hecho', datos: d };
+  // Control de flota ya lo resolvió a mano (2026-09-29): el servidor no lo
+  // ejecuta de nuevo y el teléfono lo da por hecho, con su mensaje.
+  if (r.ok) {
+    return { estado: 'hecho', datos: d,
+             mensaje: d && d.ya_resuelto_por_flota ? d.mensaje : undefined };
+  }
   if (r.status === 401) {
     return { estado: 'reintentar', mensaje: 'La sesión venció. Entre de nuevo y se manda sola.' };
   }
@@ -2137,6 +2182,9 @@ async function flotaColaRegistrar(tipo, que, placa, cuerpo) {
     const res = await flotaColaEnviarUna(op);
     await flotaColaMutar(l => l.filter(x => x.clave !== op.clave)).catch(() => {});
     if (res.estado === 'hecho' || res.estado === 'rechazado') return res;
+    if (!guardada && flotaColaHayAlmacen()) {
+      return { estado: 'perdido', mensaje: FLOTA_COLA_NO_GUARDADO };
+    }
     return { estado: 'perdido', mensaje: res.mensaje +
       '. El teléfono no pudo guardarlo: no cierre esta pantalla y pruebe de nuevo con señal.' };
   }
@@ -2956,11 +3004,13 @@ function flotaCondKmLeido(pref) {
 // 125.000 donde iba 12.500 se ataja en el patio, no en la cola de
 // verificación tres días después: la pantalla compara contra el último km que
 // cuenta y el techo de km por día que manda el servidor (`km_plausible`,
-// `dominio.odometro.techo_km_por_dia`). **Menor** que el último: no se manda
-// (el servidor lo rechazaría) — salvo un tanqueo, que se registra tarde y
-// queda en revisión. **Mucho mayor**: se pregunta en la pantalla, con el
-// cálculo a la vista; si el conductor confirma, sale igual. La confirmación
-// es una pregunta, no un permiso: el servidor marca sus saltos por su cuenta.
+// `dominio.odometro.techo_km_por_dia`). **Menor** que el último: se PREGUNTA
+// y, si el conductor confirma, sale (2026-09-29, VAL-COLA-1): el servidor lo
+// anota en duda —tardío o «contradice a la anterior»—, sin mover el tope, y
+// control de flota lo ve en Pendientes. Bloquearlo en el teléfono dejaba al
+// que recibe a las 5 a. m. sin camión y sin rastro por un número que tecleó
+// otro. **Mucho mayor**: se pregunta igual, con el cálculo a la vista. La
+// confirmación es una pregunta, no un permiso: el servidor marca por su cuenta.
 // ══════════════════════════════════════════════════════════════════════
 
 /** Con qué comparar: lo último que el teléfono sabe de esta placa —su cola
@@ -2991,9 +3041,9 @@ function flotaKmPlausible(placa, km, opts) {
         `(${flotaKm(ref.km)} km). Si es un tanqueo de antes, se registra y queda en revisión. ` +
         `Si no, revise el tablero.` };
     }
-    return { bloquea: true, texto: `El kilometraje no puede ser menor que el último registrado ` +
-      `(${flotaKm(ref.km)} km). Revise el tablero; si de verdad marca ${flotaKm(km)}, ` +
-      `avise a control de flota.` };
+    return { pregunta: true, texto: `Es menor que el último kilometraje registrado ` +
+      `(${flotaKm(ref.km)} km). Revise el tablero: si de verdad marca ${flotaKm(km)}, ` +
+      `se registra así y control de flota revisa cuál de los dos está mal.` };
   }
   if (!Number.isFinite(ref.km_dia) || !ref.ts) return null;
   // Redondeado y no hacia arriba: 24 h y unos segundos son «un día», no dos.
@@ -3004,16 +3054,12 @@ function flotaKmPlausible(placa, km, opts) {
     `mucho más de lo que suele rodar. Revise el tablero.` };
 }
 
-/** Antes de mandar: `true` si sigue. Lo que bloquea se dice en el formulario;
- * lo que se pregunta, en la pantalla (nunca con el diálogo del sistema). */
+/** Antes de mandar: `true` si sigue. Nada se bloquea (2026-09-29): lo que no
+ * cuadra se pregunta en la pantalla (nunca con el diálogo del sistema) y, si
+ * el conductor confirma, sale; `idError` queda por la firma de los llamadores. */
 async function flotaKmCreible(placa, km, idError, opts) {
   const v = flotaKmPlausible(placa, km, opts);
   if (!v) return true;
-  if (v.bloquea) {
-    const err = document.getElementById(idError);
-    if (err) err.textContent = v.texto;
-    return false;
-  }
   return _modalConfirmar(esc(v.texto), { titulo: '¿Es ese el kilometraje?',
     textoConfirmar: 'El tablero marca eso', textoCancelar: 'Corregir' });
 }

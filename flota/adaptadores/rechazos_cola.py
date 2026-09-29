@@ -109,6 +109,17 @@ def resolver(usuario_id: int, clave: str) -> None:
         fila.estado = 'resuelto'
 
 
+def cerrado_por_flota(usuario_id: int, clave: str) -> Optional[RechazoCola]:
+    """El rechazo de esta clave, si control de flota lo CERRÓ (2026-09-29).
+
+    Cerrar es «lo registré a mano» o «no va»: un «Reintentar» posterior del
+    conductor con la misma clave lo duplicaría (el tanqueo del conductor no
+    lleva número de recibo). La clave cerrada ya no ejecuta nada.
+    """
+    fila = RechazoCola.query.filter_by(usuario_id=usuario_id, clave=clave).first()
+    return fila if fila is not None and fila.estado == 'cerrado' else None
+
+
 def de_otro(usuario_id: int, clave: str) -> bool:
     """¿La clave es de un rechazo de OTRA persona? La pregunta del derecho."""
     fila = RechazoCola.query.filter_by(clave=clave).first()

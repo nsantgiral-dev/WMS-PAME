@@ -56,6 +56,8 @@ from flota.api._idempotencia import (idempotente, llego_por_la_cola,
 from flota.api._permisos import exige, sin_derecho_sobre_vehiculo
 from flota.api._tiempo import iso_utc
 from flota.dominio import inspeccion as dom
+from flota.dominio import odometro as dom_odo
+from flota.dominio.cola import instante_creible
 from flota.dominio.errores import ErrorFlota
 
 inspecciones_bp = Blueprint('flota_inspecciones', __name__)
@@ -269,6 +271,11 @@ def registrar():
             observacion=datos['observacion'] if 'observacion' in datos else None,
             dia=dia_op.dia,
             tolerar_items_ajenos=por_cola,
+            # Por la cola (2026-09-29): un km menor entra en duda en vez de 409,
+            # y el turno es el del instante en que se hizo.
+            si_retrocede=dom_odo.SERIE_CONTRADICE if por_cola else None,
+            ts_operacion=(instante_creible(ts_dispositivo_del_pedido(), _ahora())
+                          if por_cola else None),
         )
     except ErrorFlota as e:
         # 409: el JSON puede estar perfecto y el mundo no admitirlo — un
