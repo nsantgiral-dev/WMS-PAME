@@ -7372,7 +7372,11 @@ la verdad. Tres AST: `_guardar_stock_en_bd` solo recibe una lectura de Siesa
 pregunta `lectura_completa`; `_leer_stock_de_bd` solo donde no se persiste o en
 la rama degradada. Meta-tests (la mezcla, la mutación del dict, lo sano, la
 función anidada, la copia a otro modelo) y pisos. **18 mutaciones, las 18
-rojas.** Los tests de «las tres pasadas» se reescribieron con su porqué.
+rojas**; con los arreglos de la validación, 15 más (guard contra el WMS,
+intento que borra la completa, arranque/carga/botón/pre-calentamiento que leen
+Siesa, reconciliación de otro día, Salud, la zona de la hora, y en ventas el
+hueco callado, el período en curso leído, el `hasta` re-registrado), todas
+rojas — tres sobrevivían al primer intento y obligaron a mejorar sus tests. Los tests de «las tres pasadas» se reescribieron con su porqué.
 
 **Lo que NO cubre, dicho:**
 - **Un inventario que cambia de forma balanceada entre dos páginas** (una fila
