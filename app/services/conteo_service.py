@@ -2969,44 +2969,102 @@ class ConteoService:
         costo = sesion.costo_prom_uni_siesa
         return costo is None or float(costo) <= 0
 
+    #: Desde qué diferencia (fracción) entre el costo escrito y el sugerido la
+    #: pantalla pide una confirmación extra. No bloquea: avisa (un 9.000
+    #: escrito por 900 es lo que atrapa). Decisión del dueño, 2026-09-29.
+    AVISO_DIFERENCIA_COSTO = 0.5
+
+    @staticmethod
+    def _motivo_ajuste_de(sesion: SesionConteo):
+        """'AJ-ENT' / 'AJ-SAL' con la foto del conteo, o None si no hay delta."""
+        if sesion.cantidad_fisica is None or sesion.teorico_siesa is None:
+            return None
+        diferencia = sesion.cantidad_fisica - sesion.teorico_siesa
+        if diferencia == 0:
+            return None
+        return 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
+
+    @staticmethod
+    def costo_sugerido_entrada(sesion: SesionConteo, bodega_siesa: str) -> dict:
+        """Lo que la pantalla muestra ANTES de aprobar: si el ajuste necesita un
+        costo explícito y cuál sugiere el sistema.
+
+        Returns: {requiere_costo, sugerido: {costo, fuente, detalle} | None,
+                  unidades, aviso_diferencia}
+        """
+        motivo = ConteoService._motivo_ajuste_de(sesion)
+        requiere = (motivo == 'AJ-ENT'
+                    and ConteoService.necesita_costo_explicito(sesion))
+        sugerido = None
+        if requiere:
+            from app.services.costo_service import costo_entrada_ajuste
+            sugerido = costo_entrada_ajuste(sesion.producto_codigo_siesa, bodega_siesa)
+        return {
+            'requiere_costo': requiere,
+            'sugerido': sugerido,
+            'unidades': (abs(sesion.cantidad_fisica - sesion.teorico_siesa)
+                         if motivo else 0),
+            'aviso_diferencia': ConteoService.AVISO_DIFERENCIA_COSTO,
+        }
+
     @staticmethod
     def _costo_de_la_entrada(sesion: SesionConteo, motivo_codigo: str,
-                             bodega_siesa: str, costo_unitario_manual=None):
+                             bodega_siesa: str, costo_unitario_manual=None,
+                             motivo_costo=None):
         """El costo unitario explícito de una ENTRADA de ajuste, o `None`
         si no lleva (salida, o bodega con promedio: Siesa usa el suyo).
 
-        Niveles (decisión del dueño, 2026-09-29): el de Siesa en otras
-        bodegas, la política de costo del WMS, y solo si ninguno sabe, el que
-        escribe quien aprueba. Sin ninguno → `CostoRequerido`: el ajuste no
-        sale en $0 (ADI-00000040 de QA entró 10 und sin asiento).
+        El sistema sugiere (Siesa en otras bodegas → política de costo del
+        WMS) y **quien aprueba decide** (decisión del dueño, 2026-09-29): el
+        costo escrito manda sobre el sugerido. Si lo cambia, dice por qué
+        (`motivo_costo`); si no hay sugerido, escribirlo es obligatorio. Sin
+        ninguno → `CostoRequerido`: el ajuste no sale en $0 (ADI-00000040 de
+        QA entró 10 und sin asiento).
+
+        Returns: {costo, fuente, detalle, sugerido, sugerido_fuente, motivo} | None
         """
         import math
         if motivo_codigo != 'AJ-ENT' or not ConteoService.necesita_costo_explicito(sesion):
             return None
         from app.services.costo_service import costo_entrada_ajuste
-        resuelto = costo_entrada_ajuste(sesion.producto_codigo_siesa, bodega_siesa)
-        if resuelto:
-            return resuelto
-        if costo_unitario_manual is not None:
-            try:
-                manual = float(costo_unitario_manual)
-            except (TypeError, ValueError):
-                manual = None
-            if manual is None or not math.isfinite(manual) or manual <= 0:
-                raise CostoRequerido(
-                    f'El costo unitario de {sesion.producto_codigo_siesa} tiene que '
-                    f'ser un número mayor que cero.')
-            return {'costo': round(manual, 4), 'fuente': 'MANUAL',
-                    'detalle': 'escrito por quien aprobó el ajuste'}
-        raise CostoRequerido(
-            f'{sesion.producto_codigo_siesa} no tiene costo en {bodega_siesa} ni en '
-            f'ninguna otra bodega de Siesa, ni en la política de costo del WMS. '
-            f'Escriba el costo unitario con que entra: sin él entraría a Siesa en $0.')
+        sugerido = costo_entrada_ajuste(sesion.producto_codigo_siesa, bodega_siesa)
+        base = {
+            'sugerido': sugerido['costo'] if sugerido else None,
+            'sugerido_fuente': sugerido['fuente'] if sugerido else None,
+            'motivo': None,
+        }
+        if costo_unitario_manual is None:
+            if sugerido:
+                return {**sugerido, **base}
+            raise CostoRequerido(
+                f'{sesion.producto_codigo_siesa} no tiene costo en {bodega_siesa} ni en '
+                f'ninguna otra bodega de Siesa, ni en la política de costo del WMS. '
+                f'Escriba el costo unitario con que entra: sin él entraría a Siesa en $0.')
+        try:
+            manual = float(costo_unitario_manual)
+        except (TypeError, ValueError):
+            manual = None
+        if manual is None or not math.isfinite(manual) or manual <= 0:
+            raise CostoRequerido(
+                f'El costo unitario de {sesion.producto_codigo_siesa} tiene que '
+                f'ser un número mayor que cero.')
+        # Aceptar el sugerido (la pantalla lo redondea a pesos) no es cambiarlo.
+        if sugerido and abs(manual - float(sugerido['costo'])) < 1:
+            return {**sugerido, **base}
+        motivo = (motivo_costo or '').strip()
+        if sugerido and not motivo:
+            raise ValueError(
+                f'El costo sugerido de {sesion.producto_codigo_siesa} es '
+                f'${sugerido["costo"]:,.0f} ({sugerido["fuente"]}). Para usar '
+                f'${manual:,.0f} escriba por qué (factura, compra, costo del proveedor).')
+        return {'costo': round(manual, 4), 'fuente': 'MANUAL',
+                'detalle': 'escrito por quien aprobó el ajuste',
+                **base, 'motivo': motivo or None}
 
     @staticmethod
     def _encolar_ajuste_fisico(sesion: SesionConteo, aprobador_id: int = None, *,
                                exige_foto_inicio: bool = True,
-                               costo_unitario_manual=None) -> None:
+                               costo_unitario_manual=None, motivo_costo=None) -> None:
         """
         SRP: única responsabilidad — calcular el delta con la foto de Siesa que
         la sesión guardó AL CONTAR (`cantidad_fisica − teorico_siesa`) y encolar
@@ -3116,7 +3174,7 @@ class ConteoService:
         motivo_codigo = 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
         cantidad_ajuste = abs(diferencia)
         costo = ConteoService._costo_de_la_entrada(
-            sesion, motivo_codigo, bodega_siesa, costo_unitario_manual)
+            sesion, motivo_codigo, bodega_siesa, costo_unitario_manual, motivo_costo)
 
         sesion.diferencia = diferencia
         sesion.motivo_codigo = motivo_codigo
@@ -3141,11 +3199,23 @@ class ConteoService:
                 # Siesa usa su promedio (`_costo_de_la_entrada`).
                 'costo_unitario': costo['costo'] if costo else None,
                 'costo_fuente': costo['fuente'] if costo else None,
+                'costo_sugerido': costo.get('sugerido') if costo else None,
+                'costo_sugerido_fuente': costo.get('sugerido_fuente') if costo else None,
+                'costo_motivo': costo.get('motivo') if costo else None,
             },
             referencia_tipo='SesionConteo',
             referencia_id=sesion.id,
             creado_por_id=aprobador_id,
         )
+        if costo and costo['fuente'] == 'MANUAL':
+            # Quién puso el valor, sobre qué sugerido y por qué: la pregunta
+            # «¿por qué entró a ese costo?» tiene que tener respuesta escrita.
+            from app.services.bitacora import registrar_accion
+            registrar_accion(
+                'EDITAR', sesion, usuario_id=aprobador_id, motivo=costo.get('motivo'),
+                antes={'costo_sugerido': costo.get('sugerido'),
+                       'fuente': costo.get('sugerido_fuente')},
+                despues={'costo_unitario': costo['costo'], 'fuente': 'MANUAL'})
         if costo:
             logger.info(
                 '[CONTEO] Entrada %s de %s en %s sin costo en la bodega: va a $%s '
@@ -3375,7 +3445,8 @@ class ConteoService:
         return sesion
 
     @staticmethod
-    def confirmar_ajuste(sesion_id: int, supervisor_id: int, costo_unitario=None):
+    def confirmar_ajuste(sesion_id: int, supervisor_id: int, costo_unitario=None,
+                         motivo_costo=None):
         """
         Después del segundo conteo confirma el descuadre y dispara ajuste a Siesa.
         Consulta existencia fiscal en Siesa en este momento (no durante el conteo).
@@ -3469,7 +3540,8 @@ class ConteoService:
                 # Un job de antes de que existiera el costo explícito: se
                 # resuelve ahora, con la misma política (nunca en $0).
                 resuelto = ConteoService._costo_de_la_entrada(
-                    sesion, motivo_reenc, payload_reenc['bodega'], costo_unitario)
+                    sesion, motivo_reenc, payload_reenc['bodega'], costo_unitario,
+                    motivo_costo)
                 if resuelto:
                     costo_previo = {'costo_unitario': resuelto['costo'],
                                     'costo_fuente': resuelto['fuente']}
@@ -3488,7 +3560,8 @@ class ConteoService:
             raise ValueError('Faltan datos del conteo para generar ajuste')
 
         ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=supervisor_id,
-                                             costo_unitario_manual=costo_unitario)
+                                             costo_unitario_manual=costo_unitario,
+                                             motivo_costo=motivo_costo)
 
         try:
             db.session.commit()
