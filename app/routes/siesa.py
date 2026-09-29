@@ -542,7 +542,7 @@ def _agregar_fecha_y_vendedor(pedidos: dict) -> None:
     """
     from app.models.pedido_historia import PedidoHistoria
     from app.services.cadena_pedido import clave_pedido
-    from app.services.vendedores import nombres_por_nit, resolver
+    from app.services.vendedores import lectura_fallida, nombres_por_nit, resolver
 
     claves = {clave_pedido(p.get('centro_op'), p.get('tipo_docto'), p.get('consec_docto'))
               for p in pedidos.values()} - {None}
@@ -556,6 +556,7 @@ def _agregar_fecha_y_vendedor(pedidos: dict) -> None:
             d['fecha'] = d['fecha'] or h.fecha_pedido
             d['vend'] = d['vend'] or h.vendedor_id
     nombres = nombres_por_nit() if any(d['vend'] for d in datos.values()) else {}
+    fallida = lectura_fallida()
 
     for p in pedidos.values():
         clave = clave_pedido(p.get('centro_op'), p.get('tipo_docto'), p.get('consec_docto'))
@@ -563,7 +564,22 @@ def _agregar_fecha_y_vendedor(pedidos: dict) -> None:
         fecha, vend = d.get('fecha'), d.get('vend')
         p['fecha_pedido'] = fecha.isoformat() if fecha else None
         p['vendedor_id'] = vend
-        p['vendedor_estado'], p['vendedor_nombre'] = resolver(vend, nombres)
+        p['vendedor_estado'], p['vendedor_nombre'] = resolver(vend, nombres, fallida)
+
+
+@siesa_bp.route('/debug-vendedores/refrescar', methods=['POST'])
+@jwt_required()
+def debug_vendedores_refrescar():
+    """Relee YA la lista de vendedores de Siesa en este proceso. Solo admin.
+
+    Para después de corregir `papeleriamedellin_WMS_Vendedor_Contacto`, sin
+    esperar el TTL ni la pausa tras un fallo. **Refresca un solo worker** (la
+    respuesta trae su `pid`): hay que llamarla hasta ver los dos.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    from app.services.vendedores import refrescar_ahora
+    return jsonify(refrescar_ahora()), 200
 
 
 @siesa_bp.route('/pedidos', methods=['GET'])

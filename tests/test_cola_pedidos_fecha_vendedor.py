@@ -162,6 +162,52 @@ class TestLaColaNoEsperaASiesa:
         hilo.assert_not_called()
 
 
+class TestUnFalloNoSeDisfrazaDeEspera:
+    """2026-09-28: Siesa respondió 500 y la cola dijo «cargando…» media hora."""
+
+    def test_la_cola_dice_no_disponible_si_la_lectura_fallo(self, app, client, db):
+        _pedido(db, 920)
+        with _refresco_sincrono([]):
+            V._refrescar()
+        assert V.lectura_fallida()
+        assert _cola(app, client, db)['PD920']['vendedor_estado'] == V.EstadoVendedor.NO_DISPONIBLE
+
+    def test_un_exito_despues_limpia_el_fallo(self):
+        with _refresco_sincrono([]):
+            V._refrescar()
+        with _refresco_sincrono(FILAS_VENDEDORES):
+            V._refrescar()
+        assert not V.lectura_fallida()
+
+
+class TestForzarLaRelectura:
+
+    def test_refrescar_ahora_no_espera_la_pausa_tras_un_fallo(self):
+        with _refresco_sincrono([]):
+            V._refrescar()
+        with _refresco_sincrono(FILAS_VENDEDORES):
+            r = V.refrescar_ahora()
+        assert r['ok'] is True and r['vendedores'] == 2 and isinstance(r['pid'], int)
+
+    def test_el_endpoint_es_solo_de_admin(self, app, client, db):
+        from app.models.usuario import Usuario
+        op = Usuario(email=f'op_{uuid.uuid4().hex[:6]}@t.com', nombre='op', rol='operario',
+                     activo=True)
+        op.set_password('x')
+        db.session.add(op)
+        db.session.commit()
+        r = client.post('/api/siesa/debug-vendedores/refrescar', headers=_jwt(app, op))
+        assert r.status_code == 403
+
+    def test_el_endpoint_relee_y_dice_el_proceso(self, app, client, db):
+        with _refresco_sincrono(FILAS_VENDEDORES):
+            r = client.post('/api/siesa/debug-vendedores/refrescar',
+                            headers=_jwt(app, _usuario(db)))
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d['ok'] is True and d['vendedores'] == 2 and 'pid' in d
+
+
 class TestResolver:
 
     NOMBRES = {'53051164': 'ANA PEREZ'}
@@ -172,6 +218,13 @@ class TestResolver:
 
     def test_sin_lista_es_cargando_no_desconocido(self):
         assert V.resolver('53051164', {}) == (V.EstadoVendedor.CARGANDO, None)
+
+    def test_sin_lista_y_con_fallo_es_no_disponible(self):
+        assert V.resolver('53051164', {}, fallida=True) == (V.EstadoVendedor.NO_DISPONIBLE, None)
+
+    def test_con_lista_un_fallo_posterior_no_la_invalida(self):
+        assert V.resolver('53051164', self.NOMBRES, fallida=True) == (
+            V.EstadoVendedor.CONOCIDO, 'ANA PEREZ')
 
     def test_conocido_y_desconocido(self):
         assert V.resolver(' 53051164 ', self.NOMBRES) == (V.EstadoVendedor.CONOCIDO, 'ANA PEREZ')
