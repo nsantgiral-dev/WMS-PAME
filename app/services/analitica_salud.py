@@ -124,9 +124,13 @@ TEXTO_GLOBAL = {
 #: El sync de pedidos corre cada minuto; 15 minutos operativos sin una
 #: corrida completa es que dejó de correr, no que está lento.
 TOLERANCIA_PEDIDOS = timedelta(minutes=15)
-#: El refresco de existencias corre cada 45 min (`_REFRESH_INTERVALO`): dos
-#: ciclos perdidos y un margen.
-TOLERANCIA_STOCK = timedelta(hours=2)
+#: Las existencias se leen completas dos veces al día (`INV_SIESA_LECTURAS`,
+#: 04:30 y 23:30): la tolerancia es el hueco más largo entre dos lecturas más
+#: dos horas (`inventario_siesa_service.tolerancia_existencias`, 2026-09-27;
+#: antes 2 h, cuando se leía cada 45 min).
+def tolerancia_stock():
+    from app.services.inventario_siesa_service import tolerancia_existencias
+    return tolerancia_existencias()
 #: Una corrida de pedidos abierta más de esto murió (deploy, OOM).
 CORRIDA_ABIERTA_MUERTA = timedelta(minutes=30)
 #: Las fotos corren a las 18:00; pasada la ventana (19:30) la de hoy ya debe estar.
@@ -381,7 +385,7 @@ def fuente_stock(ahora_utc, almacen_id=None, activos=()):
         bodegas.append({'bodega': b, 'actualizada_utc': _iso(u), 'filas': n,
                         'edad_operativa_min': (int(edad.total_seconds() // 60)
                                                if edad is not None else None),
-                        'atrasada': edad is None or edad > TOLERANCIA_STOCK})
+                        'atrasada': edad is None or edad > tolerancia_stock()})
     # La última lectura terminó incompleta (2026-09-27): `stock_siesa`
     # conserva la anterior, y eso se declara aunque las bodegas estén en hora.
     try:
@@ -396,17 +400,12 @@ def fuente_stock(ahora_utc, almacen_id=None, activos=()):
     atrasadas = [x['bodega'] for x in bodegas if x['filas'] and x['atrasada']]
     mas_vieja = min((por_bodega[b][0] for b in presentes if por_bodega[b][0]), default=None)
     detalle = {'bodegas': bodegas, 'tolerancia_operativa_min':
-               int(TOLERANCIA_STOCK.total_seconds() // 60),
+               int(tolerancia_stock().total_seconds() // 60),
                'ultima_lectura_completa': _ok.get('fin'),
                'bodegas_en_cero_segun_siesa': sorted(_vacias)}
-    if _lec.get('incompleta'):
-        return _fuente('stock_siesa', nombre, INCOMPLETA,
-                       'La última lectura de existencias de Siesa no quedó completa: '
-                       + str(_lec.get('motivo') or 'sin motivo') + ' Las existencias '
-                       'guardadas son las de la última lectura completa.',
-                       'Se reintenta sola en el próximo refresco ([INV_SIESA_REFRESH], '
-                       'cada 45 min); si se repite, revisar la consulta de existencias.',
-                       ultima=_iso(mas_vieja), completa=False, detalle=detalle, **kw)
+    # Un intento que no quedó completo NO invalida la última completa: vale
+    # con su fecha (2026-09-27). Solo pesa si esa completa ya está atrasada.
+    detalle['ultimo_intento_incompleto'] = _lec.get('motivo') if _lec.get('incompleta') else None
     if faltan:
         return _fuente('stock_siesa', nombre, INCOMPLETA,
                        f'Sin existencias guardadas para {len(faltan)} bodega(s): '
@@ -417,13 +416,19 @@ def fuente_stock(ahora_utc, almacen_id=None, activos=()):
     if atrasadas:
         return _fuente('stock_siesa', nombre, ATRASADA,
                        f'{len(atrasadas)} bodega(s) sin refrescar hace más de '
-                       f'{_texto_duracion(TOLERANCIA_STOCK)} operativas: '
+                       f'{_texto_duracion(tolerancia_stock())} operativas: '
+                       + ('' if not _lec.get('incompleta') else
+                          f'(el último intento no quedó completo: {_lec.get("motivo")}) ')
                        + ', '.join(atrasadas) + '.',
                        'Verificar el refresco de existencias en el worker '
                        '([INV_SIESA_REFRESH]).',
                        ultima=_iso(mas_vieja), completa=True, detalle=detalle, **kw)
     return _fuente('stock_siesa', nombre, AL_DIA,
-                   f'{len(presentes)} bodega(s) refrescadas dentro de la tolerancia.',
+                   f'{len(presentes)} bodega(s) con la última lectura completa dentro de la '
+                   'tolerancia.'
+                   + ('' if not _lec.get('incompleta') else
+                      ' El último intento no quedó completo (' + str(_lec.get('motivo'))
+                      + '): se usa la completa anterior, con su fecha.'),
                    None, ultima=_iso(mas_vieja), completa=True, detalle=detalle, **kw)
 
 

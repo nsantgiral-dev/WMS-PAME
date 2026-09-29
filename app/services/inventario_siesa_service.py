@@ -130,113 +130,144 @@ _cache_inventario_multibodega = {'data': None, 'ts': None, 'degradado': False,
                                  'bodegas_frescas': frozenset(),
                                  'completa': False, 'motivo': ''}
 _descarga_multibodega_en_curso = False
-_CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
-_REFRESH_INTERVALO = 2700   # 45 min — refresh periódico del cache multi-bodega
 _refresh_timer = None
 
 
 _HORA_CARGA_DIARIA = 7  # 7am Colombia (UTC-5 = 12:00 UTC)
 _ZONA_UTC_OFFSET = -5
 
+#: Cuándo se leen las existencias de Siesa (hora de Bogotá). **Dos lecturas
+#: completas al día, de madrugada y al cierre** (2026-09-27): la de 11 min de
+#: día casi nunca termina completa (vender la última unidad de un SKU cambia
+#: el total) y no compra nada — cada página re-ejecuta la vista. La de las
+#: 04:30 es la que usa la carga física de las 7:00. En temporada, con
+#: facturación hasta medianoche, conviene `INV_SIESA_LECTURAS=04:30,00:30`.
+LECTURAS_DEFAULT = '04:30,23:30'
+
+
+def horas_de_lectura() -> list:
+    """Las horas de `INV_SIESA_LECTURAS` (`HH:MM` separadas por coma), en
+    orden. Una entrada ilegible se ignora y se loguea; sin ninguna legible,
+    las de `LECTURAS_DEFAULT`."""
+    from datetime import time as _time
+    crudo = os.getenv('INV_SIESA_LECTURAS') or LECTURAS_DEFAULT
+    horas = []
+    for trozo in crudo.split(','):
+        trozo = trozo.strip()
+        try:
+            h, m = trozo.split(':')
+            horas.append(_time(int(h), int(m)))
+        except (ValueError, TypeError):
+            if trozo:
+                logger.warning('[INV-SIESA] INV_SIESA_LECTURAS: %r ilegible, se ignora', trozo)
+    if not horas:
+        return horas_de_lectura_default()
+    return sorted(set(horas))
+
+
+def horas_de_lectura_default() -> list:
+    from datetime import time as _time
+    return [_time(int(t.split(':')[0]), int(t.split(':')[1]))
+            for t in LECTURAS_DEFAULT.split(',')]
+
+
+def tolerancia_existencias() -> timedelta:
+    """Hasta cuánto puede tener la última lectura completa sin estar atrasada:
+    el hueco más largo entre dos lecturas programadas, más dos horas (una
+    lectura tarda ~11 min y una puede fallar por un día movido)."""
+    horas = horas_de_lectura()
+    minutos = [h.hour * 60 + h.minute for h in horas]
+    huecos = [(minutos[(i + 1) % len(minutos)] - m) % (24 * 60) or 24 * 60
+              for i, m in enumerate(minutos)]
+    return timedelta(minutes=max(huecos)) + timedelta(hours=2)
+
+
+def _segundos_hasta(hora, ahora_utc=None) -> float:
+    """Segundos hasta la próxima `hora` de Bogotá."""
+    ahora = ahora_utc or datetime.utcnow()
+    local = ahora + timedelta(hours=_ZONA_UTC_OFFSET)
+    objetivo = local.replace(hour=hora.hour, minute=hora.minute, second=0, microsecond=0)
+    if objetivo <= local:
+        objetivo += timedelta(days=1)
+    return (objetivo - local).total_seconds()
+
+
+def _ejecutar_lectura_programada(app):
+    """UNA lectura de existencias, con el lock de siempre (web y worker con
+    `HEAVY_SCHEDULERS`: uno lee, el otro no) y la ventana de Siesa. Es la
+    ÚNICA que le pide a Siesa la lectura completa (`_descargar_inventario_
+    siesa_raw(forzar=True)`): ni la carga física, ni la reconciliación, ni
+    los botones, ni el pre-calentamiento fuerzan una."""
+    global _descarga_multibodega_en_curso
+    if _descarga_multibodega_en_curso:
+        return
+    # Hilo propio (no APScheduler): la ventana de Siesa se mira acá.
+    from app.services.ventana_siesa import ventana_abierta
+    if not ventana_abierta():
+        return
+    _descarga_multibodega_en_curso = True
+    try:
+        from app.utils.lock import LOCK_REFRESCO_EXISTENCIAS, advisory_lock
+        with app.app_context():
+            with advisory_lock(LOCK_REFRESCO_EXISTENCIAS, 'refresco_existencias') as tomado:
+                if not tomado:
+                    logger.info('[INV-SIESA] Lectura omitida: otro proceso la está haciendo')
+                    return
+                _descargar_inventario_siesa_raw(forzar=True)
+            logger.info('[INV-SIESA] Lectura programada terminada')
+    except Exception as exc:
+        logger.error('[INV-SIESA] Lectura programada falló: %s', exc)
+    finally:
+        _descarga_multibodega_en_curso = False
+
 
 def iniciar_refresh_periodico(app):
-    """Inicia refresh cada 45 min + carga diaria a las 7am Colombia."""
-    global _refresh_timer
+    """Las lecturas programadas (`horas_de_lectura`) + la carga física de las
+    7:00. Al arrancar NO se lee Siesa: se carga en memoria la última lectura
+    completa guardada (`_asegurar_ultima_completa`)."""
 
-    def _ejecutar_descarga():
-        global _descarga_multibodega_en_curso
-        if _descarga_multibodega_en_curso:
-            return
-        # Hilo propio (no APScheduler): la ventana de Siesa se mira acá
-        # (P2 2026-09-25). Antes el refresco corría las 24 horas.
-        from app.services.ventana_siesa import ventana_abierta
-        if not ventana_abierta():
-            return
-        _descarga_multibodega_en_curso = True
-        try:
-            from app.utils.lock import LOCK_REFRESCO_EXISTENCIAS, advisory_lock
-            with app.app_context():
-                # Web y worker con HEAVY_SCHEDULERS: uno descarga, el otro no.
-                with advisory_lock(LOCK_REFRESCO_EXISTENCIAS, 'refresco_existencias') as tomado:
-                    if not tomado:
-                        logger.info('[INV-SIESA] Refresh omitido: otro proceso lo está haciendo')
-                        return
-                    _descargar_inventario_siesa_raw(forzar=True)
-                logger.info('[INV-SIESA] Refresh completado')
-        except Exception as exc:
-            logger.error('[INV-SIESA] Refresh falló: %s', exc)
-        finally:
-            _descarga_multibodega_en_curso = False
+    def _programar(hora, fn, etiqueta):
+        segundos = _segundos_hasta(hora)
+        logger.info('[INV-SIESA] %s programada a las %02d:%02d Bogotá (en %.0f min)',
+                    etiqueta, hora.hour, hora.minute, segundos / 60)
 
-    def _ciclo_refresh():
-        """Refresh cada 45 min."""
-        _ejecutar_descarga()
-        _refresh_timer = threading.Timer(_REFRESH_INTERVALO, _ciclo_refresh)
-        _refresh_timer.daemon = True
-        _refresh_timer.start()
+        def _correr_y_reprogramar():
+            try:
+                fn()
+            finally:
+                _programar(hora, fn, etiqueta)
 
-    def _programar_carga_diaria():
-        """Programa la carga diaria a las 7am Colombia."""
-        ahora = datetime.utcnow()
-        hora_utc_objetivo = _HORA_CARGA_DIARIA - _ZONA_UTC_OFFSET
-        proxima = ahora.replace(hour=hora_utc_objetivo, minute=0, second=0, microsecond=0)
-        if proxima <= ahora:
-            proxima += timedelta(days=1)
-        segundos = (proxima - ahora).total_seconds()
-        logger.info('[INV-SIESA] Carga diaria programada a las %d:00 Colombia (en %.0f min)',
-                    _HORA_CARGA_DIARIA, segundos / 60)
-
-        def _carga_y_reprogramar():
-            logger.info('[INV-SIESA] === CARGA DIARIA 7AM INICIADA ===')
-            _ejecutar_descarga()
-            # Stock Siesa (stock_siesa) primero — la carga física reutiliza
-            # esa descarga recién hecha en vez de pedirla de nuevo por bodega.
-            _ejecutar_carga_fisica_diaria(app)
-            _programar_carga_diaria()
-
-        t = threading.Timer(segundos, _carga_y_reprogramar)
+        t = threading.Timer(segundos, _correr_y_reprogramar)
         t.daemon = True
         t.start()
 
-    _hilo = threading.Thread(target=_ciclo_refresh, daemon=True)
+    def _arranque():
+        try:
+            with app.app_context():
+                _asegurar_ultima_completa()
+        except Exception as exc:                              # noqa: BLE001
+            logger.error('[INV-SIESA] No se pudo cargar la última lectura completa: %s', exc)
+        for hora in horas_de_lectura():
+            _programar(hora, lambda: _ejecutar_lectura_programada(app), 'Lectura de existencias')
+        from datetime import time as _time
+        _programar(_time(_HORA_CARGA_DIARIA, 0), lambda: _ejecutar_carga_fisica_diaria(app),
+                   'Carga física diaria')
+
+    _hilo = threading.Thread(target=_arranque, daemon=True)
     _hilo.start()
-    _programar_carga_diaria()
     # No usa APScheduler sino hilos, pero declara igual: el registro mira el
     # retorno para saber si esto quedó corriendo de verdad.
     return _hilo
 
 
 def precalentar_cache_multibodega(app=None):
-    """Lanza descarga en background. Llamar desde app startup o primer request."""
-    global _descarga_multibodega_en_curso
-    if _descarga_multibodega_en_curso:
-        return
-    if _cache_inventario_multibodega['data'] is not None:
-        return
-
-    if app is None:
-        try:
-            from flask import current_app
-            app = current_app._get_current_object()
-        except RuntimeError:
-            logger.warning('[INV-SIESA] No hay app context para pre-calentamiento')
-            return
-
-    _descarga_multibodega_en_curso = True
-    _app = app
-
-    def _worker():
-        global _descarga_multibodega_en_curso
-        try:
-            with _app.app_context():
-                _descargar_inventario_siesa_raw(forzar=True)
-                logger.info('[INV-SIESA] Cache multi-bodega pre-calentado en background')
-        except Exception as exc:
-            logger.error('[INV-SIESA] Pre-calentamiento falló: %s', exc)
-        finally:
-            _descarga_multibodega_en_curso = False
-
-    threading.Thread(target=_worker, daemon=True).start()
+    """Carga en memoria la última lectura COMPLETA guardada. **No le pide nada
+    a Siesa** (2026-09-27: antes lanzaba una lectura de 11 min cada vez que un
+    proceso arrancaba y alguien pedía stock)."""
+    try:
+        _asegurar_ultima_completa()
+    except Exception as exc:                                  # noqa: BLE001
+        logger.warning('[INV-SIESA] Pre-calentamiento desde la BD falló: %s', exc)
 
 
 # NS2 no es punto de venta: es la bodega de parqueo de licitaciones. Sin
@@ -525,35 +556,76 @@ def _descargar_una_pasada_custom() -> 'ResultadoDescarga':
                              bodegas_sin_filas=sin_filas)
 
 
+def _datos_de_la_bd(con_vacias=False) -> dict:
+    """`stock_siesa` por bodega (sin las filas en cero). Solo LEE: nunca se
+    persiste de acá (trinquete de `test_existencias_verdaderas`)."""
+    out = {}
+    for bod in _BODEGAS_INVENTARIO:
+        inv, _ = _leer_stock_de_bd(bod)
+        if inv or con_vacias:
+            out[bod] = inv
+    return out
+
+
+def _asegurar_ultima_completa() -> bool:
+    """¿Hay en memoria una lectura COMPLETA de Siesa? Si no, la carga de la
+    base: solo una lectura completa escribe `stock_siesa`, así que la base ES
+    la última completa (`registros_sync` `existencias_siesa` con `ok`, su
+    fecha es la de la lectura). Así un proceso recién arrancado —o el worker
+    que corre la carga de las 7:00— usa la de la madrugada sin volver a leer
+    Siesa. `True` si queda una completa en memoria."""
+    c = _cache_inventario_multibodega
+    if c.get('completa') and c.get('data') is not None:
+        return True
+    from app.services import registro_sync_service as _reg
+    ok = _reg.ultimo_ok('existencias_siesa')
+    if not ok or ok.get('_error_lectura') or not ok.get('fin'):
+        return False
+    datos = _datos_de_la_bd(con_vacias=True)
+    c['data'] = datos
+    c['ts'] = datetime.fromisoformat(ok['fin'])
+    c['completa'] = True
+    c['degradado'] = False
+    c['bodegas_frescas'] = frozenset(b for b, v in datos.items() if v)
+    c['origen'] = 'bd'
+    logger.info('[INV-SIESA] Última lectura completa cargada de la BD (%s)', c['ts'])
+    return True
+
+
 def _descargar_inventario_siesa_raw(forzar=False):
     """Las existencias de Siesa de todas las bodegas del universo
     (`_BODEGAS_INVENTARIO`), `{bodega: {codigo: {existencia, comprometido,
     salida_sin_conf, ...}}}`.
+
+    Sin `forzar` **no le pide nada a Siesa**: devuelve la última lectura
+    completa (memoria o base). Con `forzar` —solo las lecturas programadas,
+    `_ejecutar_lectura_programada`— lee:
 
     **Con una lectura completa** (`_descargar_una_pasada_custom`) devuelve lo
     que Siesa reportó y nada más —una bodega sin filas viene vacía— y lo
     persiste: lo reportado se escribe y lo que Siesa ya no reporta queda en
     cero, con fecha (`_guardar_stock_en_bd`).
 
-    **Con una lectura incompleta no se persiste nada**: se responde con lo que
-    hay en `stock_siesa` (sin las filas que ya se sabe que están en cero), el
-    caché queda `degradado` con su motivo y la marca de tiempo NO avanza — el
-    sello de frescura solo avanza con dato de Siesa (defecto L).
+    **Con una lectura incompleta no se persiste nada, y la última completa
+    sigue valiendo con su fecha** (2026-09-27: el intento que falla solo anota
+    su motivo en `ultimo_intento`; antes dejaba degradado el caché y la carga
+    de las 7:00 no escribía aunque la completa de la madrugada fuera de hoy).
+    Sin ninguna completa, se responde con `stock_siesa` y el caché queda
+    `degradado`. El sello de frescura solo avanza con dato de Siesa (defecto L).
 
     Ya no mezcla lo leído con lo guardado (P0-1, 2026-09-27). La mezcla era un
     parche para la paginación inestable de `tamPag=1000`, y convertía cada
     agotado en un positivo eterno: la consulta solo trae existencia > 0, así
     que el SKU que se agota desaparece de la respuesta y la mezcla lo rellenaba
-    con su último valor. La misma mezcla alimentaba la carga física de las 7:00
-    (`_descargar_inventario_siesa` lee de acá): el picker iba a un hueco vacío.
+    con su último valor.
     """
     global _cache_inventario_multibodega
-    ahora = datetime.utcnow()
-    if (not forzar
-            and _cache_inventario_multibodega['data'] is not None
-            and _cache_inventario_multibodega['ts'] is not None
-            and (ahora - _cache_inventario_multibodega['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
-        return _cache_inventario_multibodega['data']
+    c = _cache_inventario_multibodega
+    if not forzar:
+        if not _asegurar_ultima_completa() and c.get('data') is None:
+            c['data'] = _datos_de_la_bd()
+            c['degradado'], c['completa'] = True, False
+        return c['data']
 
     from app.services import registro_sync_service as _reg
     _reg_id = _reg.abrir('existencias_siesa')
@@ -565,7 +637,8 @@ def _descargar_inventario_siesa_raw(forzar=False):
     if not motivo:
         # Defensa en profundidad: una lectura completa y MUY chica (la consulta
         # cambió, la bodega principal desapareció) no pone en cero miles de
-        # filas. Se juzga sobre lo que Siesa trajo, no sobre una mezcla.
+        # filas. Se juzga contra la última lectura COMPLETA de Siesa de esa
+        # bodega, nunca contra el WMS.
         try:
             _verificar_respuesta_no_parcial(
                 lectura.get(connekta.bodega, {}), connekta.bodega)
@@ -573,48 +646,37 @@ def _descargar_inventario_siesa_raw(forzar=False):
             motivo = str(_e_parcial)
 
     _degradado = bool(motivo)
-    if _degradado:
+    c['ultimo_intento'] = {'ts': datetime.utcnow(), 'completa': not _degradado,
+                           'motivo': motivo}
+    c['motivo'] = motivo
+    if not _degradado:
+        c['data'] = {b: dict(v) for b, v in lectura.items()}
+        c['completa'] = True
+        c['origen'] = 'lectura'
+    elif _asegurar_ultima_completa():
         logger.error(
             '[INV-SIESA] Lectura de existencias NO completa (%s): no se persiste nada; '
-            'se responde con stock_siesa, que NO se acaba de verificar contra Siesa.',
-            motivo)
-        inventario_global = {}
-        for bod in _BODEGAS_INVENTARIO:
-            inv_bd, _ = _leer_stock_de_bd(bod)
-            if inv_bd:
-                inventario_global[bod] = inv_bd
+            'sigue valiendo la última completa (%s).', motivo, c['ts'])
     else:
-        inventario_global = {b: dict(v) for b, v in lectura.items()}
+        logger.error(
+            '[INV-SIESA] Lectura de existencias NO completa (%s) y no hay ninguna completa: '
+            'se responde con stock_siesa, que NO está verificado contra Siesa.', motivo)
+        c['data'] = _datos_de_la_bd()
+        c['completa'] = False
 
-    total = sum(len(v) for v in inventario_global.values())
-    logger.info('[INV-SIESA] Existencias: %d productos en %s (%s)', total,
-                sorted(b for b, v in inventario_global.items() if v),
-                'degradado' if _degradado else 'lectura completa')
-
-    _cache_inventario_multibodega['data'] = inventario_global
-    _cache_inventario_multibodega['completa'] = not _degradado
-    _cache_inventario_multibodega['motivo'] = motivo
-    _cache_inventario_multibodega['degradado'] = _degradado
+    _cache_inventario_multibodega['degradado'] = not c.get('completa')
     if not _degradado:
-        _cache_inventario_multibodega['ts'] = datetime.utcnow()
-        _cache_inventario_multibodega['bodegas_frescas'] = frozenset(
-            b for b, filas in lectura.items() if filas)
-    else:
-        # NO se refresca la marca de tiempo.
-        #
-        # Ponerle `utcnow()` a un inventario que salió de la BD porque Siesa no
-        # respondió es un sello fresco sobre un dato viejo: el TTL de una hora
-        # lo daba por vigente y se usaba para **proponer traslados**. Nadie
-        # podía distinguir «Siesa dice esto» de «esto es lo último que supimos».
-        #
-        # Dejando la marca vieja, el TTL vence y el siguiente llamador
-        # reintenta. El circuit breaker acota el costo de reintentar contra un
-        # Siesa caído.
-        _cache_inventario_multibodega['bodegas_frescas'] = frozenset()
-        logger.warning(
-            '[INV-SIESA] Cache marcado DEGRADADO — la marca de tiempo sigue '
-            'siendo la de la última descarga real (%s)',
-            _cache_inventario_multibodega['ts'])
+        c['ts'] = datetime.utcnow()
+        c['bodegas_frescas'] = frozenset(b for b, filas in lectura.items() if filas)
+    elif not c.get('completa'):
+        # Sin ninguna completa: la marca de tiempo NO se refresca (un sello
+        # fresco sobre un dato viejo es el defecto L) y ninguna bodega es fresca.
+        c['bodegas_frescas'] = frozenset()
+
+    total = sum(len(v) for v in (c['data'] or {}).values())
+    logger.info('[INV-SIESA] Existencias: %d productos (%s)', total,
+                'lectura completa' if not _degradado else
+                ('última completa de ' + str(c['ts']) if c.get('completa') else 'degradado'))
 
     detalle = {'filas': getattr(lectura, 'filas', None),
                'total_declarado': getattr(lectura, 'total_declarado', None),
@@ -632,7 +694,7 @@ def _descargar_inventario_siesa_raw(forzar=False):
         else:
             _reg.cerrar_ok(_reg_id, detalle)
 
-    return inventario_global
+    return c['data']
 
 
 def _guardar_stock_en_bd(lectura, degradado: bool = False) -> dict:
@@ -860,29 +922,35 @@ def fuente_para_escribir(bodega: str) -> str:
     """`''` si el inventario de `bodega` en memoria sirve para escribir; si no,
     el motivo. **Una política** para toda escritura de inventario desde Siesa.
 
-    Sirve solo si: (1) la última descarga no fue degradada; (2) su sello es de
-    HOY en Bogotá; (3) esa descarga trajo filas de esta bodega (no salió de
-    `stock_siesa`); (4) **la lectura fue completa y verificada**
+    Sirve solo si: (1) hay una lectura completa (en memoria o, si el proceso
+    arrancó después, la de la base: `_asegurar_ultima_completa`); (2) su sello
+    es de HOY en Bogotá; (3) trajo filas de esta bodega; (4) **la lectura fue
+    completa y verificada**
     (`lectura_completa`: `LineaRegistro` 1…N contra el total que Siesa
     declara, sin repetidos; 2026-09-27 — antes, tres pasadas de `tamPag=1000`
     unidas a lo guardado). Solo así lo que el bulk zero pone en cero es algo
     que Siesa no tiene, y no algo que la lectura no alcanzó a traer.
     """
     from app.utils.fecha import dia_operativo, dia_operativo_de
+    _asegurar_ultima_completa()
     c = _cache_inventario_multibodega
     if c.get('data') is None:
-        return 'no hay descarga de Siesa en memoria'
+        return 'no hay ninguna lectura completa de las existencias de Siesa'
     if c.get('degradado'):
-        return ('la última lectura de existencias de Siesa falló o quedó incompleta'
-                + (f' ({c.get("motivo")})' if c.get('motivo') else '')
+        return ('no hay ninguna lectura completa de las existencias de Siesa'
+                + (f'; la última falló o quedó incompleta ({c.get("motivo")})'
+                   if c.get('motivo') else '')
                 + ': lo que hay en memoria es la foto guardada en stock_siesa, '
                   'no el dato de hoy')
     ts = c.get('ts')
     if ts is None or dia_operativo_de(ts) != dia_operativo():
-        return f'el dato de Siesa no es de hoy (sello: {ts.isoformat() if ts else "ninguno"})'
+        intento = c.get('ultimo_intento') or {}
+        return (f'la última lectura completa de Siesa no es de hoy (sello: '
+                f'{ts.isoformat() if ts else "ninguno"})'
+                + (f'; la de hoy no quedó completa ({intento.get("motivo")})'
+                   if intento.get('motivo') else ''))
     if bodega not in (c.get('bodegas_frescas') or ()):
-        return (f'la descarga de hoy no trajo filas de {bodega}: lo que hay para '
-                f'esa bodega es la foto guardada en stock_siesa')
+        return (f'la última lectura completa no trajo filas de {bodega}')
     if not c.get('completa'):
         return ('la lectura de existencias de Siesa no quedó completa'
                 + (f' ({c.get("motivo")})' if c.get('motivo') else '')
@@ -902,38 +970,49 @@ def _exigir_fuente_para_escribir(bodega: str):
             f'{MARCA_NO_ESCRIBIO} de {bodega}: {motivo}.')
 
 
-def _descargar_inventario_siesa(forzar=False, bodega: str = None, almacen_id: int = None):
+def _descargar_inventario_siesa(bodega: str = None):
     """
-    Inventario de una bodega **para escribirlo** en el WMS (carga física).
-
-    Exige `fuente_para_escribir(bod)`: si lo que hay en memoria no es fresco y
-    completo, fuerza una descarga nueva; si tampoco sirve, levanta
-    `FuenteInventarioNoConfiable` y no se escribe nada (P0-8). Ya no hay atajo
-    por un cache propio de la bodega: ese cache se llenaba igual con un dato
-    degradado y el atajo saltaba la verificación.
-
-    `almacen_id`: si se pasa, el baseline de UbicacionProducto se cuenta SOLO
-    en ese almacén — sin esto, cargar NS1 por primera vez compara su tamaño
-    contra el conteo GLOBAL (que ya incluye miles de filas de NB1) y aborta
-    con "respuesta parcial" aunque NS1 nunca haya tenido ni una fila.
+    Inventario de una bodega **para escribirlo** en el WMS (carga física):
+    **la última lectura completa de hoy** (`fuente_para_escribir`). No le pide
+    nada a Siesa (2026-09-27): la carga de las 7:00 usa la de las 04:30, y un
+    botón usa la que haya y lo dice. Sin una que sirva, levanta
+    `FuenteInventarioNoConfiable` y no se escribe nada (P0-8).
     """
     bod = bodega or connekta.bodega
-    if forzar or fuente_para_escribir(bod):
-        multi = _descargar_inventario_siesa_raw(forzar=True)
-    else:
-        multi = _cache_inventario_multibodega['data']
     _exigir_fuente_para_escribir(bod)
-    inventario = multi.get(bod, {})
-
-    logger.info(f'[INV-SIESA] Bodega {bod}: {len(inventario)} productos')
-
-    _verificar_respuesta_no_parcial(inventario, bod, almacen_id)
+    inventario = _cache_inventario_multibodega['data'].get(bod, {})
+    logger.info('[INV-SIESA] Bodega %s: %d productos (lectura completa de %s)', bod,
+                len(inventario), _cache_inventario_multibodega.get('ts'))
+    _verificar_respuesta_no_parcial(inventario, bod)
     return inventario
 
 
-def _verificar_respuesta_no_parcial(inventario: dict, bod: str,
-                                    almacen_id: int = None):
+def lectura_en_uso() -> dict:
+    """De qué lectura de Siesa sale lo que se va a usar: `{'completa', 'ts'
+    (UTC ISO), 'origen', 'ultimo_intento'}`. Para que un botón diga «con la
+    lectura completa de las 04:31»."""
+    _asegurar_ultima_completa()
+    c = _cache_inventario_multibodega
+    ts = c.get('ts')
+    it = c.get('ultimo_intento') or {}
+    return {'completa': bool(c.get('completa')), 'ts': ts.isoformat() if ts else None,
+            'origen': c.get('origen'),
+            'ultimo_intento': ({'ts': it['ts'].isoformat(), 'completa': it.get('completa'),
+                                'motivo': it.get('motivo')} if it.get('ts') else None)}
+
+
+def _verificar_respuesta_no_parcial(inventario: dict, bod: str):
     """Aborta si la respuesta de Siesa para una bodega llegó a medias.
+
+    **La base de comparación es la última lectura COMPLETA de Siesa de esa
+    bodega** (`registros_sync` `existencias_siesa`, `por_bodega[bod].
+    reportadas`), nunca el WMS (P0-A1 de la validación, 2026-09-27): comparaba
+    contra `ubicaciones_productos` con stock de TODOS los almacenes —en
+    producción 31.740 contra 4.588 filas de NB1—, y ese número lo escribe la
+    carga física con los mismos fantasmas que la lectura tiene que limpiar. Con
+    la prueba de completitud (`total_registros` + 1…N) este guard es solo
+    defensa contra una consulta que cambió. Sin lectura completa previa, solo
+    el mínimo absoluto.
 
     Una respuesta parcial no se distingue de «Siesa dice que no hay»: en la
     carga inicial pone en cero miles de productos, y en la reconciliación
@@ -962,20 +1041,7 @@ def _verificar_respuesta_no_parcial(inventario: dict, bod: str,
     todas. Una descarga que trajo NB1 completa y perdió NC1 entera pasa el
     guard si se le pregunta por NB1.
     """
-    cache = _cache_inventario_siesa.get(bod) or {}
-    _prev_count = len(cache.get('data') or {})
-    if not _prev_count:
-        try:
-            from app.models.inventario import UbicacionProducto as _UP
-            _q = _UP.query.filter(_UP.cantidad > 0)
-            if almacen_id is not None:
-                from app.models.ubicacion import Ubicacion as _Ub
-                _q = _q.join(_Ub, _Ub.id == _UP.ubicacion_id).filter(_Ub.almacen_id == almacen_id)
-            _prev_count = _q.count()
-        except Exception as _e_prev:
-            raise ValueError(
-                f'No se pudo obtener baseline de inventario (cache frío + DB inaccesible): {_e_prev}'
-            ) from _e_prev
+    _prev_count = filas_ultima_completa(bod)
     if len(inventario) < 50:
         raise ValueError(
             f'Respuesta de Siesa sospechosamente pequeña para {bod}: {len(inventario)} productos '
@@ -984,30 +1050,43 @@ def _verificar_respuesta_no_parcial(inventario: dict, bod: str,
     if _prev_count and len(inventario) < _prev_count * 0.70:
         raise ValueError(
             f'Respuesta parcial de Siesa para {bod}: {len(inventario)} productos recibidos, '
-            f'{_prev_count} esperados (< 70%) — abortando para evitar falsos positivos'
+            f'{_prev_count} en la última lectura completa (< 70%) — abortando para evitar '
+            f'falsos positivos'
         )
-
-    cache['data'] = inventario
-    cache['ts'] = datetime.utcnow()
     return inventario
 
 
-def _descargar_inventario_multibodega_para_reconciliar():
-    """El inventario de Siesa **por bodega**, con el mismo guard anti-parcial.
+def filas_ultima_completa(bod: str):
+    """Cuántas filas trajo `bod` en la última lectura COMPLETA de Siesa, o
+    `None` si no hay (o no se puede leer: sin base no se compara)."""
+    from app.services import registro_sync_service as _reg
+    ok = _reg.ultimo_ok('existencias_siesa')
+    try:
+        n = ((ok or {}).get('resultado') or {}).get('por_bodega', {}).get(bod, {}).get('reportadas')
+        return int(n) if n else None
+    except (TypeError, ValueError, AttributeError):
+        return None
 
-    La reconciliación necesita el diccionario completo `{bodega: {codigo: …}}`,
-    no la vista aplastada de `connekta.bodega`. Lo que no puede perder al
-    dejar de usar `_descargar_inventario_siesa()` es su guard: por eso lo llama
-    acá explícitamente sobre la bodega principal.
+
+def _descargar_inventario_multibodega_para_reconciliar():
+    """El inventario de Siesa **por bodega** para reconciliar: la última
+    lectura COMPLETA de hoy (2026-09-27: ya no lee Siesa en el momento — eran
+    11 min). Sin una de hoy, no se reconcilia: comparar el WMS de ahora contra
+    otro día daría un veredicto de otro día.
     """
-    multi = _descargar_inventario_siesa_raw(forzar=True)
-    if _cache_inventario_multibodega.get('degradado'):
-        # Comparar el WMS contra la foto guardada no es reconciliar contra
-        # Siesa: el veredicto «sin diferencias» sería de otro día (2026-09-27).
+    from app.utils.fecha import dia_operativo, dia_operativo_de
+    multi = _descargar_inventario_siesa_raw()
+    c = _cache_inventario_multibodega
+    if c.get('degradado') or not c.get('completa'):
         raise ValueError(
-            'La lectura de existencias de Siesa no quedó completa ('
-            f'{_cache_inventario_multibodega.get("motivo") or "sin motivo"}): '
-            'no se reconcilia contra la foto guardada. Reintente.')
+            'No hay una lectura completa de las existencias de Siesa ('
+            f'{c.get("motivo") or "todavía no se hizo ninguna"}): '
+            'no se reconcilia contra la foto guardada.')
+    if c.get('ts') is None or dia_operativo_de(c['ts']) != dia_operativo():
+        raise ValueError(
+            f'La última lectura completa de Siesa no es de hoy ({c.get("ts")}): se '
+            f'reconcilia con la de la próxima lectura programada '
+            f'({", ".join(h.strftime("%H:%M") for h in horas_de_lectura())}).')
     _verificar_respuesta_no_parcial(multi.get(connekta.bodega, {}),
                                     connekta.bodega)
     return multi
@@ -1099,7 +1178,7 @@ def _run_carga_inicial(app, bodega: str = None):
             ub_general = _get_o_crear_ubicacion_general(almacen.id)
             db.session.commit()
 
-            inventario_siesa = _descargar_inventario_siesa(bodega=bod, almacen_id=almacen.id)
+            inventario_siesa = _descargar_inventario_siesa(bodega=bod)
 
             # [30] Advertencia: la carga inicial sobrescribe cantidades en ubicaciones WMS
             # manuales. Si hay picking/packing activo EN ESTE ALMACÉN, el stock reservado
@@ -1396,7 +1475,10 @@ def _run_carga_inicial(app, bodega: str = None):
             # [M19] Marcar sync como completado — si Railway mata el proceso antes de
             # llegar aquí, 'ultimo_sync_completo' queda en el valor previo y el siguiente
             # sync puede detectar el gap con 'ultimo_inicio'.
-            estado['ultimo_sync_completo'] = datetime.utcnow()
+            # Con zona, como `ultimo_inicio` (que escribe `iniciar_carga_inventario`):
+            # con una naive y otra con zona, la comparación de [M19] de la carga
+            # siguiente levantaba TypeError y esa carga no corría (2026-09-27).
+            estado['ultimo_sync_completo'] = datetime.now(timezone.utc)
 
         except FuenteInventarioNoConfiable as e:
             # No se escribió nada: se declara en el registro de la corrida (lo
@@ -1448,6 +1530,8 @@ def _run_carga_inicial(app, bodega: str = None):
             'total_siesa': len(inventario_siesa),
             'puestos_en_cero': cereados,
             'lectura_completa': bool(_cache_inventario_multibodega.get('completa')),
+            'lectura_de_siesa': (_cache_inventario_multibodega['ts'].isoformat()
+                                 if _cache_inventario_multibodega.get('ts') else None),
         }
         logger.info(f'[INV-SIESA] Carga inicial de {bod} completada: {resultado}')
         estado['ultimo_resultado'] = resultado
@@ -1515,12 +1599,18 @@ def iniciar_carga_inventario(app, forzar: bool = False, bodega: str = None):
     # calibración de tiendas (2026-08-27) esto miraba picking/packing de
     # TODO el WMS: un picking activo en NB1 habría bloqueado sin motivo una
     # carga a NS1, y viceversa.
-    if not forzar:
-        with app.app_context():
+    with app.app_context():
+        if not forzar:
             motivo = motivo_carga_bloqueada(bod)
             if motivo:
                 return {'abortado': True,
                         'mensaje': f'Carga de {bod} no iniciada: {motivo}.'}
+        # La carga no le pide nada a Siesa: usa la última lectura completa de
+        # hoy. Si no sirve, se dice ya, no después de un hilo (2026-09-27).
+        motivo = fuente_para_escribir(bod)
+        if motivo:
+            return {'abortado': True, 'mensaje': f'Carga de {bod} no iniciada: {motivo}.'}
+        lectura = lectura_en_uso()
 
     estado['en_curso'] = True
     estado['ultimo_inicio'] = datetime.now(timezone.utc)
@@ -1528,7 +1618,9 @@ def iniciar_carga_inventario(app, forzar: bool = False, bodega: str = None):
     hilo = threading.Thread(target=_run_carga_inicial, args=(app, bod), daemon=True)
     hilo.start()
 
-    return {'iniciado': True, 'bodega': bod, 'mensaje': f'Carga de inventario de {bod} iniciada — refresca en ~60 seg'}
+    return {'iniciado': True, 'bodega': bod, 'lectura_de_siesa': lectura,
+            'mensaje': (f'Carga de inventario de {bod} iniciada con la lectura completa de '
+                        f'Siesa de {_hora_bogota(lectura["ts"])} — refresca en ~60 seg')}
 
 
 def _estado_carga_memoria(bod: str) -> dict:
@@ -2302,6 +2394,7 @@ def _run_reconciliacion(app):
             # `resultado` se liga a propósito: `_reg.cerrar_ok(_reg_id,
             # resultado)` de más abajo (de main, ya auto-mergeado) lo lee.
             resultado = _calcular_reconciliacion(inventario_por_bodega)
+            resultado['lectura_de_siesa'] = lectura_en_uso()
             _estado_reconciliacion['ultimo_resultado'] = resultado
             _estado_reconciliacion['ultimo_error'] = None
             _reg.cerrar_ok(_reg_id, resultado)
@@ -2343,6 +2436,15 @@ def iniciar_reconciliacion(app):
     if _estado_reconciliacion['en_curso']:
         return {'en_curso': True, 'mensaje': 'Reconciliación ya en proceso — espere a que termine'}
 
+    # La reconciliación no le pide nada a Siesa: usa la última lectura
+    # completa de hoy. Si no la hay, se dice ya (2026-09-27).
+    with app.app_context():
+        try:
+            _descargar_inventario_multibodega_para_reconciliar()
+        except ValueError as e:
+            return {'abortado': True, 'mensaje': f'Reconciliación no iniciada: {e}'}
+        lectura = lectura_en_uso()
+
     _estado_reconciliacion['en_curso'] = True
     _estado_reconciliacion['ultimo_inicio'] = datetime.now(timezone.utc)
     _estado_reconciliacion['ultimo_resultado'] = None
@@ -2351,7 +2453,17 @@ def iniciar_reconciliacion(app):
     hilo = threading.Thread(target=_run_reconciliacion, args=(app,), daemon=True)
     hilo.start()
 
-    return {'iniciado': True, 'mensaje': 'Reconciliación iniciada — refresca en ~2 min'}
+    return {'iniciado': True, 'lectura_de_siesa': lectura,
+            'mensaje': (f'Reconciliación iniciada con la lectura completa de Siesa de '
+                        f'{_hora_bogota(lectura["ts"])} — refresca en ~1 min')}
+
+
+def _hora_bogota(iso_utc):
+    """`'28/09 04:31'` (Bogotá) de una hora UTC ISO; `'—'` sin hora."""
+    if not iso_utc:
+        return '—'
+    t = datetime.fromisoformat(iso_utc) + timedelta(hours=_ZONA_UTC_OFFSET)
+    return t.strftime('%d/%m %H:%M')
 
 
 def _estado_reconciliacion_memoria():

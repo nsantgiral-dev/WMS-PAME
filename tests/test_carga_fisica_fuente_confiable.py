@@ -109,7 +109,7 @@ class TestLaPolitica:
     def test_degradado_no_sirve(self, cache_limpio):
         cache_limpio.update(data={'NB1': {'X': {}}}, ts=datetime.utcnow(),
                             degradado=True, bodegas_frescas=frozenset({'NB1'}))
-        assert 'falló' in iss.fuente_para_escribir('NB1')
+        assert 'ninguna lectura completa' in iss.fuente_para_escribir('NB1')
 
     def test_sello_de_ayer_no_sirve(self, cache_limpio):
         cache_limpio.update(data={'NB1': {'X': {}}}, ts=datetime.utcnow() - timedelta(days=1, hours=1),
@@ -193,6 +193,7 @@ class TestConFuenteDegradadaNoSeEscribeNada:
         with patch.object(iss, '_descargar_una_pasada_custom', return_value=rota), \
                 patch.object(iss.connekta, 'bodega', almacen.bodega_siesa_id), \
                 patch.object(iss, '_guardar_stock_en_bd'):
+            iss._descargar_inventario_siesa_raw(forzar=True)
             iss._run_carga_inicial(app, almacen.bodega_siesa_id)
         db.session.expire_all()
         assert _foto_inventario() == antes, (
@@ -215,7 +216,9 @@ class TestConFuenteDegradadaNoSeEscribeNada:
         fresco = iss.ResultadoDescarga(fresco, completa=True)
         with patch.object(iss, '_descargar_una_pasada_custom', return_value=fresco), \
                 patch.object(iss.connekta, 'bodega', almacen.bodega_siesa_id), \
-                patch.object(iss, '_guardar_stock_en_bd'):
+                patch.object(iss, '_guardar_stock_en_bd', return_value={}):
+            # La carga no lee Siesa (2026-09-27): usa la lectura programada.
+            iss._descargar_inventario_siesa_raw(forzar=True)
             iss._run_carga_inicial(app, almacen.bodega_siesa_id)
         db.session.expire_all()
         assert _foto_inventario() != antes

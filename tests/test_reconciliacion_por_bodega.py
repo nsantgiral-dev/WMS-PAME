@@ -108,6 +108,9 @@ def _reconciliar(app, monkeypatch, siesa_por_bodega: dict) -> dict:
     # La reconciliación se niega sobre una lectura degradada (2026-09-27): acá
     # la descarga está sustituida, así que se declara completa a mano.
     monkeypatch.setitem(inv._cache_inventario_multibodega, 'degradado', False)
+    monkeypatch.setitem(inv._cache_inventario_multibodega, 'completa', True)
+    from datetime import datetime as _dt
+    monkeypatch.setitem(inv._cache_inventario_multibodega, 'ts', _dt.utcnow())
     monkeypatch.setattr(inv, '_descargar_inventario_siesa',
                         lambda forzar=False: principal)
     # El guard anti-respuesta-parcial exige ≥50 SKU — es correcto en producción

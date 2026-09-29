@@ -110,6 +110,8 @@ def _cargar(app, almacen, datos):
     with patch.object(iss, '_descargar_una_pasada_custom', return_value=completa(datos)), \
             patch.object(iss, 'connekta') as ck:
         ck.bodega = almacen.bodega_siesa_id
+        # La carga no lee Siesa (2026-09-27): usa la lectura programada.
+        iss._descargar_inventario_siesa_raw(forzar=True)
         iss._run_carga_inicial(app, almacen.bodega_siesa_id)
 
 
@@ -135,6 +137,7 @@ class TestNadaSePoneEnCeroSinRastro:
         with patch.object(iss, '_descargar_una_pasada_custom', return_value=rota), \
                 patch.object(iss, 'connekta') as ck:
             ck.bodega = almacen.bodega_siesa_id
+            iss._descargar_inventario_siesa_raw(forzar=True)
             iss._run_carga_inicial(app, almacen.bodega_siesa_id)
         db.session.expire_all()
         assert UbicacionProducto.query.filter_by(ubicacion_id=pik.id).one().cantidad == 12

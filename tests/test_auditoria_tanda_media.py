@@ -224,7 +224,10 @@ class TestNoSeSellaComoFrescoLoViejo:
 
     def test_la_marca_de_tiempo_solo_avanza_con_datos_de_siesa(self):
         f = self._fuente()
-        i = f.find("_cache_inventario_multibodega['degradado'] = _degradado")
+        # 2026-09-27: `degradado` = no hay una lectura COMPLETA (un intento
+        # incompleto no invalida la completa anterior); el sello sigue solo
+        # avanzando con dato de Siesa.
+        i = f.find("_cache_inventario_multibodega['degradado'] = not c.get('completa')")
         assert i != -1
         assert 'if not _degradado:' in f[i:i + 200]
 

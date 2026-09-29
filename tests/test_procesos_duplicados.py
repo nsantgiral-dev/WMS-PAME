@@ -55,17 +55,15 @@ class TestElReporteSemanalSaleUnaVez:
 
 
 class TestElRefrescoDeExistencias:
+    """Desde el 2026-09-27 no hay refresco cada 45 min: dos lecturas completas
+    programadas (`INV_SIESA_LECTURAS`) y la única que lee Siesa es
+    `_ejecutar_lectura_programada`, con lock y ventana."""
 
     def test_fuera_de_la_ventana_no_descarga(self, app, db):
         from app.services import inventario_siesa_service as iss, ventana_siesa
         ventana_siesa._RELOJ_FIJO['abierta'] = False
-        capturado = {}
-        with patch('threading.Thread') as T, patch('threading.Timer'):
-            iss.iniciar_refresh_periodico(app)
-            capturado['ciclo'] = T.call_args.kwargs['target']
-        with patch.object(iss, '_descargar_inventario_siesa_raw') as raw, \
-                patch('threading.Timer'):
-            capturado['ciclo']()
+        with patch.object(iss, '_descargar_inventario_siesa_raw') as raw:
+            iss._ejecutar_lectura_programada(app)
         raw.assert_not_called()
 
     def test_con_el_lock_tomado_no_descarga(self, app, db):
@@ -74,13 +72,37 @@ class TestElRefrescoDeExistencias:
         @contextmanager
         def _tomado(*a, **k):
             yield False
-        with patch('threading.Thread') as T, patch('threading.Timer'):
-            iss.iniciar_refresh_periodico(app)
-            ciclo = T.call_args.kwargs['target']
         with patch('app.utils.lock.advisory_lock', _tomado), \
-                patch.object(iss, '_descargar_inventario_siesa_raw') as raw, patch('threading.Timer'):
-            ciclo()
+                patch.object(iss, '_descargar_inventario_siesa_raw') as raw:
+            iss._ejecutar_lectura_programada(app)
         raw.assert_not_called()
+
+    def test_con_el_lock_libre_lee_forzado(self, app, db):
+        from app.services import inventario_siesa_service as iss
+        with patch.object(iss, '_descargar_inventario_siesa_raw') as raw:
+            iss._ejecutar_lectura_programada(app)
+        raw.assert_called_once_with(forzar=True)
+
+    def test_el_arranque_no_lee_siesa_y_programa_las_lecturas(self, app, db, monkeypatch):
+        from app.services import inventario_siesa_service as iss
+        monkeypatch.setenv('INV_SIESA_LECTURAS', '04:30, 23:30, basura')
+        with patch('threading.Thread') as T, patch('threading.Timer') as Tm:
+            iss.iniciar_refresh_periodico(app)
+            arranque = T.call_args.kwargs['target']
+            with patch.object(iss, '_descargar_una_pasada_custom',
+                              side_effect=AssertionError('el arranque leyó Siesa')):
+                arranque()
+        # Dos lecturas + la carga física de las 7:00.
+        assert Tm.call_count == 3
+        assert [h.strftime('%H:%M') for h in iss.horas_de_lectura()] == ['04:30', '23:30']
+
+    def test_la_tolerancia_sale_de_las_horas(self, monkeypatch):
+        from datetime import timedelta
+        from app.services import inventario_siesa_service as iss
+        monkeypatch.setenv('INV_SIESA_LECTURAS', '04:30,23:30')
+        assert iss.tolerancia_existencias() == timedelta(hours=21)
+        monkeypatch.setenv('INV_SIESA_LECTURAS', 'nada')
+        assert [h.strftime('%H:%M') for h in iss.horas_de_lectura()] == ['04:30', '23:30']
 
 
 class TestElHookDeGunicornCorre:

@@ -170,12 +170,15 @@ def setup_inicial_estado():
 @siesa_bp.route('/reconciliacion', methods=['POST'])
 @jwt_required()
 def reconciliacion_iniciar():
-    """Inicia la reconciliación en background (puede tardar 2+ min). Solo admin."""
+    """Inicia la reconciliación en background con la última lectura completa de
+    Siesa de hoy (no lee Siesa: 409 si no la hay). Solo admin."""
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede ejecutar reconciliación'}), 403
     from flask import current_app
     from app.services.inventario_siesa_service import iniciar_reconciliacion
     resultado = iniciar_reconciliacion(current_app._get_current_object())
+    if resultado.get('abortado'):
+        return jsonify({**resultado, 'error': resultado.get('mensaje')}), 409
     return jsonify(resultado), 202
 
 

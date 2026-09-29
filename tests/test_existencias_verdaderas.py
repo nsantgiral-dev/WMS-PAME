@@ -372,10 +372,16 @@ class TestLosLectoresVenLaVerdad:
         assert f['por_bodega']['FF1']['actualizada'] > datetime.utcnow() - timedelta(minutes=5)
 
     def test_la_reconciliacion_no_usa_la_foto_vieja(self, db, cache_limpio):
-        with patch.object(iss.connekta, '_get', side_effect=SiesaExistencias(
-                universo(), falla={1})), patch('time.sleep'):
-            with pytest.raises(ValueError, match='no quedó completa'):
-                iss._descargar_inventario_multibodega_para_reconciliar()
+        refrescar(SiesaExistencias(universo(), falla={1}))
+        with pytest.raises(ValueError, match='No hay una lectura completa'):
+            iss._descargar_inventario_multibodega_para_reconciliar()
+
+    def test_la_reconciliacion_no_lee_siesa(self, db, cache_limpio):
+        refrescar(SiesaExistencias(universo()))
+        with patch.object(iss, '_descargar_una_pasada_custom',
+                          side_effect=AssertionError('la reconciliación leyó Siesa')):
+            multi = iss._descargar_inventario_multibodega_para_reconciliar()
+        assert len(multi['NB1']) == 80
 
     def test_salud_no_pide_descargar_una_bodega_que_siesa_dice_vacia(self, db, cache_limpio):
         from app.services import analitica_salud
@@ -393,13 +399,183 @@ class TestLosLectoresVenLaVerdad:
         cache_limpio['completa'] = True
         assert iss.fuente_para_escribir('NB1') == ''
 
-    def test_salud_declara_la_lectura_incompleta(self, db, cache_limpio):
+    def test_salud_declara_el_intento_incompleto_sin_tumbar_la_completa(self, db,
+                                                                         cache_limpio):
+        """Un intento que no quedó completo no invalida la última completa: vale
+        con su fecha y la salud lo dice (2026-09-27)."""
         from app.services import analitica_salud
         refrescar(SiesaExistencias(universo()))
         refrescar(SiesaExistencias(universo(), falla={1}))
         f = analitica_salud.fuente_stock(datetime.utcnow())
-        assert f['veredicto'] == analitica_salud.INCOMPLETA, f
-        assert 'no quedó completa' in f['motivo']
+        assert f['veredicto'] == analitica_salud.AL_DIA, f
+        assert 'no quedó completo' in f['motivo'] and 'página 1' in f['motivo']
+        assert f['detalle']['ultimo_intento_incompleto']
+
+    def test_salud_atrasada_dice_por_que_fallo_el_ultimo_intento(self, db, cache_limpio):
+        from app.models.stock_siesa import StockSiesa
+        from app.services import analitica_salud
+        refrescar(SiesaExistencias(universo()))
+        StockSiesa.query.update({'updated_at': datetime.utcnow() - timedelta(days=2)})
+        db.session.commit()
+        refrescar(SiesaExistencias(universo(), falla={1}))
+        f = analitica_salud.fuente_stock(datetime.utcnow())
+        assert f['veredicto'] == analitica_salud.ATRASADA, f
+        assert 'no quedó completo' in f['motivo']
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 3b · Con el volumen de producción (P0-A1 de la validación, 2026-09-27)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _mundo_de_produccion(db, almacen):
+    """`ubicaciones_productos` como producción el 27-sep: 31.740 con stock (NB1
+    7.975 · NC1 11.178 · NS1 12.587), inflado por los fantasmas. Siesa NB1
+    reporta 4.588 filas (los primeros 4.588 SKU)."""
+    from app.models.almacen import Almacen
+    from app.models.inventario import UbicacionProducto
+    from app.models.producto import Producto
+    from app.models.ubicacion import Ubicacion
+    nc1 = Almacen(codigo='ALM-NC1', nombre='Neiva Centro', bodega_siesa_id='NC1', activo=True)
+    ns1 = Almacen(codigo='ALM-NS1', nombre='Neiva Sur', bodega_siesa_id='NS1', activo=True)
+    db.session.add_all([nc1, ns1])
+    db.session.flush()
+    db.session.bulk_insert_mappings(Producto, [
+        {'codigo': f'P{i:05d}', 'nombre': 'x', 'codigo_siesa': f'P{i:05d}', 'activo': True}
+        for i in range(12587)])
+    db.session.flush()
+    ids = [p.id for p in Producto.query.order_by(Producto.codigo).all()]
+    for alm, n in ((almacen, 7975), (nc1, 11178), (ns1, 12587)):
+        u = Ubicacion(codigo=Ubicacion.CODIGO_GENERAL, almacen_id=alm.id, zona='GENERAL',
+                      activo=True)
+        db.session.add(u)
+        db.session.flush()
+        db.session.bulk_insert_mappings(UbicacionProducto, [
+            {'ubicacion_id': u.id, 'producto_id': pid, 'cantidad': 3} for pid in ids[:n]])
+    db.session.commit()
+    assert UbicacionProducto.query.filter(UbicacionProducto.cantidad > 0).count() == 31740
+    return [fila('NB1', f'P{i:05d}', 2) for i in range(4588)]
+
+
+class TestConElVolumenDeProduccion:
+
+    def test_la_lectura_completa_se_escribe_y_la_carga_limpia_nb1(self, app, db, almacen,
+                                                                  cache_limpio):
+        from app.models.inventario import UbicacionProducto
+        from app.models.ubicacion import Ubicacion
+        filas = _mundo_de_produccion(db, almacen)
+        sembrar(db, 'NB1', 'P09000', 1508)                 # fantasma de stock_siesa
+        with patch.object(iss.connekta, '_get', side_effect=SiesaExistencias(filas)), \
+                patch.object(iss.connekta, 'bodega', 'NB1'), patch('time.sleep'):
+            iss._descargar_inventario_siesa_raw(forzar=True)
+            assert not cache_limpio['degradado'], cache_limpio['motivo']
+            assert fila_bd('NB1', 'P09000').existencia == 0
+            assert iss.fuente_para_escribir('NB1') == ''
+            iss._run_carga_inicial(app, 'NB1')
+        db.session.expire_all()
+        gen = Ubicacion.query.filter_by(almacen_id=almacen.id,
+                                        codigo=Ubicacion.CODIGO_GENERAL).one()
+        con_stock = UbicacionProducto.query.filter(
+            UbicacionProducto.ubicacion_id == gen.id, UbicacionProducto.cantidad > 0).count()
+        assert con_stock == 4588, 'la carga física quedó bloqueada o no limpió los fantasmas'
+
+    def test_la_base_es_la_ultima_lectura_completa_de_siesa(self, db, cache_limpio):
+        """Sin lectura completa previa: solo el mínimo absoluto. Con una previa
+        de 4.588 en NB1, una de 1.000 es una consulta que cambió: se rechaza."""
+        grande = [fila('NB1', f'P{i:05d}') for i in range(4588)]
+        with patch.object(iss.connekta, 'bodega', 'NB1'):
+            refrescar(SiesaExistencias(grande))
+            assert iss.filas_ultima_completa('NB1') == 4588
+            refrescar(SiesaExistencias(grande[:1000]))
+        assert 'última lectura completa' in cache_limpio['ultimo_intento']['motivo']
+        assert fila_bd('NB1', 'P04000').existencia == 5, 'la chica no puso en cero nada'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 3c · La política de lecturas (P1-A2 de la validación, 2026-09-27)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _sin_siesa():
+    return patch.object(iss, '_descargar_una_pasada_custom',
+                        side_effect=AssertionError('se le pidió una lectura a Siesa'))
+
+
+class TestLaPoliticaDeLecturas:
+
+    def test_un_proceso_nuevo_usa_la_completa_de_la_base(self, db, cache_limpio):
+        refrescar(SiesaExistencias(universo()))
+        cache_limpio.update(data=None, ts=None, completa=False, degradado=False,
+                            bodegas_frescas=frozenset())           # reinicio
+        with _sin_siesa():
+            assert iss.fuente_para_escribir('NB1') == ''
+            assert iss.lectura_en_uso()['origen'] == 'bd'
+            assert len(iss._descargar_inventario_siesa_raw()['NB1']) == 80
+
+    def test_sin_forzar_nunca_se_lee_siesa(self, db, cache_limpio):
+        with _sin_siesa():
+            assert iss._descargar_inventario_siesa_raw() == {}
+            iss.precalentar_cache_multibodega()
+
+    def test_la_carga_fisica_no_lee_siesa(self, app, db, almacen, producto, cache_limpio):
+        from app.models.producto import Producto
+        for i in range(80):
+            db.session.add(Producto(codigo=f'SKU{i:03d}', nombre='x',
+                                    codigo_siesa=f'SKU{i:03d}', activo=True))
+        db.session.commit()
+        with patch.object(iss.connekta, 'bodega', 'NB1'):
+            refrescar(SiesaExistencias(universo()))
+            with _sin_siesa():
+                iss._run_carga_inicial(app, 'NB1')
+        from app.services import registro_sync_service as reg
+        u = reg.ultimo('stock')
+        assert u['ok'] is True and u['resultado']['lectura_de_siesa']
+
+    def test_los_botones_no_esperan_y_dicen_que_lectura_usan(self, app, db, almacen,
+                                                          cache_limpio, monkeypatch):
+        monkeypatch.setattr(iss.connekta, 'modo_simulacion', False)
+        monkeypatch.setattr(iss, '_run_carga_inicial', lambda *a, **k: None)
+        monkeypatch.setattr(iss, '_run_reconciliacion', lambda *a, **k: None)
+        iss._estado_reconciliacion['en_curso'] = False
+        with patch.object(iss.connekta, 'bodega', 'NB1'), _sin_siesa():
+            r = iss.iniciar_carga_inventario(app, bodega='NB1')
+            assert r.get('abortado') and 'ninguna lectura completa' in r['mensaje']
+            r = iss.iniciar_reconciliacion(app)
+            assert r.get('abortado') and 'lectura completa' in r['mensaje']
+        with patch.object(iss.connekta, 'bodega', 'NB1'):
+            refrescar(SiesaExistencias(universo()))
+            iss._estado_carga_bodega('NB1')['en_curso'] = False
+            with _sin_siesa():
+                r = iss.iniciar_carga_inventario(app, bodega='NB1')
+                assert r.get('iniciado') and 'lectura completa de Siesa de' in r['mensaje']
+                r = iss.iniciar_reconciliacion(app)
+                assert r.get('iniciado') and r['lectura_de_siesa']['completa']
+        iss._estado_carga_bodega('NB1')['en_curso'] = False
+        iss._estado_reconciliacion['en_curso'] = False
+
+    def test_una_carga_despues_de_un_boton_no_revienta(self, app, db, almacen, cache_limpio):
+        """`iniciar_carga_inventario` anota `ultimo_inicio` con zona y la carga
+        anotaba `ultimo_sync_completo` sin ella: la carga SIGUIENTE levantaba
+        TypeError al compararlas (encontrado el 2026-09-27)."""
+        from datetime import timezone
+        from app.models.producto import Producto
+        from app.services import registro_sync_service as reg
+        for i in range(80):
+            db.session.add(Producto(codigo=f'SKU{i:03d}', nombre='x',
+                                    codigo_siesa=f'SKU{i:03d}', activo=True))
+        db.session.commit()
+        with patch.object(iss.connekta, 'bodega', 'NB1'):
+            refrescar(SiesaExistencias(universo()))
+            estado = iss._estado_carga_bodega('NB1')
+            estado['ultimo_inicio'] = datetime.now(timezone.utc)      # el botón
+            iss._run_carga_inicial(app, 'NB1')
+            iss._run_carga_inicial(app, 'NB1')                         # las 7:00
+        assert reg.ultimo('stock')['ok'] is True
+        estado.update(ultimo_inicio=None, ultimo_sync_completo=None)
+
+    def test_la_reconciliacion_no_usa_una_completa_de_otro_dia(self, db, cache_limpio):
+        refrescar(SiesaExistencias(universo()))
+        cache_limpio['ts'] = datetime.utcnow() - timedelta(days=2)
+        with pytest.raises(ValueError, match='no es de hoy'):
+            iss._descargar_inventario_multibodega_para_reconciliar()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -427,6 +603,7 @@ class TestLaCargaFisicaLeeLaLectura:
         db.session.commit()
         with patch.object(iss.connekta, '_get', side_effect=SiesaExistencias(universo())), \
                 patch.object(iss.connekta, 'bodega', 'NB1'), patch('time.sleep'):
+            iss._descargar_inventario_siesa_raw(forzar=True)     # la de las 04:30
             iss._run_carga_inicial(app, 'NB1')
         db.session.expire_all()
         up = UbicacionProducto.query.filter_by(ubicacion_id=gen.id,
@@ -452,8 +629,9 @@ ESCRITORES_STOCK_SIESA = {
 
 #: Los que leen lo guardado, con su motivo. Solo encoge.
 LECTORES_DE_LO_GUARDADO = {
-    ('app/services/inventario_siesa_service.py', '_descargar_inventario_siesa_raw'):
-        'solo en la rama degradada, que no persiste nada',
+    ('app/services/inventario_siesa_service.py', '_datos_de_la_bd'):
+        'solo lee: la última completa (la base la escribió una lectura completa) '
+        'o, sin ninguna, la foto degradada; nunca se persiste de acá',
     ('app/services/inventario_siesa_service.py', 'obtener_stock_bodega'):
         'lectura para la pantalla de Pedir/traslados; no escribe',
 }
@@ -598,7 +776,7 @@ class TestNadiePersisteUnaMezcla:
         assert set(lec) <= set(LECTORES_DE_LO_GUARDADO), (
             f'lectores nuevos de lo guardado: {sorted(set(lec) - set(LECTORES_DE_LO_GUARDADO))}')
         raw = ('app/services/inventario_siesa_service.py', '_descargar_inventario_siesa_raw')
-        assert lec[raw], 'la descarga lee lo guardado fuera de la rama degradada'
+        assert raw not in lec, 'la descarga lee lo guardado por su cuenta'
 
     def test_cada_excepcion_dice_por_que(self):
         for d in (ESCRITORES_STOCK_SIESA, LECTORES_DE_LO_GUARDADO):

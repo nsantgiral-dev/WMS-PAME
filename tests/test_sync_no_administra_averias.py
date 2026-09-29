@@ -143,6 +143,8 @@ def _correr_carga(app, db, almacen, datos):
     with patch.object(iss, '_descargar_una_pasada_custom', return_value=lectura), \
          patch.object(iss, 'connekta') as ck:
         ck.bodega = almacen.bodega_siesa_id
+        # La carga no lee Siesa (2026-09-27): usa la lectura programada.
+        iss._descargar_inventario_siesa_raw(forzar=True)
         iss._run_carga_inicial(app, almacen.bodega_siesa_id)
     db.session.expire_all()
 

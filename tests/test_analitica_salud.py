@@ -173,7 +173,9 @@ class TestExistencias:
         _stock(db, 'XX9', MEDIODIA)                       # no esperada: no cuenta
         db.session.commit()
         from app.models.stock_siesa import StockSiesa
-        StockSiesa.query.filter_by(bodega='NC1').update({'updated_at': MEDIODIA - timedelta(hours=5)})
+        # La tolerancia es el hueco más largo entre dos lecturas programadas +
+        # 2 h (21 h con 04:30 y 23:30; antes 2 h, con el refresco de 45 min).
+        StockSiesa.query.filter_by(bodega='NC1').update({'updated_at': MEDIODIA - timedelta(hours=30)})
         db.session.commit()
         f = _svc().fuente_stock(MEDIODIA)
         assert f['veredicto'] == 'ATRASADA' and 'NC1' in f['motivo']
