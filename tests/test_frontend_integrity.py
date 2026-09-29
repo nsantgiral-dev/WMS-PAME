@@ -901,13 +901,6 @@ DEUDA_SIN_UI = {
         'BLOQUEADAS (picking_service.py:549). Una tarea PENDIENTE o EN_PROCESO '
         'que sobra —pedido anulado, ola mal lanzada— no se puede cerrar desde la '
         'UI: queda ocupando el pool y reteniendo stock reservado.',
-    '/api/picking/<int:id>/reabrir':
-        'Devuelve una tarea al pool. Verificado: reabrirTareaPicking (app.js:679) '
-        'no se referencia en ningún onclick. Sin ella, la tarea de un operario '
-        'que terminó el turno o perdió el equipo se queda asignada a él. OJO al '
-        'conectarla: reabrir pone cantidad_recogida en CERO '
-        '(picking_service.py:519) y eso ya produjo falsos positivos en VTA-20 — '
-        'darle un botón sin decir eso en la confirmación repite el problema.',
 
     '/api/auth/me':
         'DUPLICADO: el login ya devuelve el usuario completo. Pedirlo otra vez es un viaje de red por un dato que el cliente tiene. Candidato a BORRAR, no a conectar.',

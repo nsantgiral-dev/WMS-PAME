@@ -576,6 +576,54 @@ class ConteoService:
                     'de conteo. La verificación la tiene que hacer otra persona.')
         return None
 
+    #: Por qué se le soltó a alguien un conteo, en palabras de bodega.
+    _POR_QUE_SE_SOLTO = {
+        'INACTIVIDAD': 'estuvo más de 2 horas sin escanear ni teclear nada',
+        'AUSENCIA': 'usted figura ausente',
+        'SIN_SENAL': 'usted llevaba más de 2 horas sin actividad en la aplicación',
+        'REASIGNADO': 'un líder se lo pasó a otra persona',
+        'CONTEO_FORZADO': 'un líder le forzó otro conteo',
+        'CEDIDO_A_SEGUNDO_CONTEO': 'le tocó hacer primero un segundo conteo',
+        'OTRA_BODEGA': 'era de otra bodega',
+        'REABIERTO': 'un líder lo devolvió a la cola',
+    }
+
+    @staticmethod
+    def exigir_puede_escribir(sesion: SesionConteo, operario_id: int) -> None:
+        """¿Puede ESTA persona escribir lo contado en ESTA sesión? Si no,
+        `ValueError` con el porqué, en usted.
+
+        **Una política, una función** para las tres puertas que escriben
+        `cantidad_fisica` (escaneo, total tecleado, registrar). La sesión tiene
+        que estar a su nombre: EN_PROCESO, o PENDIENTE ya asignada a ella (el
+        intercalado). Hasta el 2026-09-29 la guarda era `if sesion.operario_id
+        and …`: una sesión **sin dueño** —devuelta a la cola por el barrido de
+        zombis o por una ausencia— aceptaba lo que tecleara quien la tenía, y el
+        siguiente que la tomaba veía en su HUD lo contado por otro. El conteo
+        dejaba de ser ciego.
+
+        A quien se la soltaron se le dice por qué (lo leído de
+        `conteos_descartados`): su pantalla tiene que decirlo, no fallar muda.
+        """
+        if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
+            raise ValueError(f'No se puede escanear ni contar en un conteo con estado {sesion.estado}')
+        if sesion.operario_id == operario_id:
+            return
+        if sesion.operario_id is not None:
+            raise ValueError('Esta tarea no está asignada a usted')
+        suyo = [d for d in sesion.lista_conteos_descartados()
+                if d.get('operario_id') == operario_id and d.get('motivo')]
+        if suyo:
+            porque = ConteoService._POR_QUE_SE_SOLTO.get(suyo[-1]['motivo'], suyo[-1]['motivo'])
+            raise ValueError(
+                f'Este conteo ya no está a su nombre: volvió a la cola porque {porque}. '
+                'Lo que usted alcanzó a contar quedó guardado aparte. Pida la siguiente tarea.')
+        # Sin dueño y sin historia suya: primero la regla de quién puede
+        # contarlo (CC3 de supervisión, doble ciego) —el porqué más útil—, y
+        # si podría, que lo abra: abrirlo es lo que lo pone a su nombre.
+        ConteoService.verificar_puede_contar(sesion, operario_id)
+        raise ValueError('Este conteo no está a su nombre: ábralo desde su tarea antes de contar.')
+
     @staticmethod
     def verificar_puede_contar(sesion: SesionConteo, operario_id: int) -> None:
         """`motivo_no_puede_contar` como excepción, para las puertas que abren,
@@ -1131,8 +1179,7 @@ class ConteoService:
             raise ValueError('Sesión no encontrada')
         if sesion_pre.estado not in ['PENDIENTE', 'EN_PROCESO']:
             raise ValueError(f'No se puede registrar conteo en estado {sesion_pre.estado}')
-        if sesion_pre.operario_id and sesion_pre.operario_id != operario_id:
-            raise ValueError('Esta tarea no está asignada a usted')
+        ConteoService.exigir_puede_escribir(sesion_pre, operario_id)
         if sesion_pre.maneja_lote and not lote_id:
             raise ValueError('Este producto maneja lotes. El campo lote_id es obligatorio.')
         ConteoService.verificar_puede_contar(sesion_pre, operario_id)
@@ -1186,15 +1233,15 @@ class ConteoService:
         sesion = (SesionConteo.query
                   .filter_by(id=sesion_id)
                   .with_for_update()
+                  .populate_existing()
                   .first())
         if not sesion:
             raise ValueError('Sesión no encontrada')
 
-        # Re-validar estado bajo lock
-        if sesion.estado not in ['PENDIENTE', 'EN_PROCESO']:
-            raise ValueError(f'No se puede registrar conteo en estado {sesion.estado}')
-        if sesion.operario_id and sesion.operario_id != operario_id:
-            raise ValueError('Esta tarea no está asignada a usted')
+        # Re-validar estado y dueño bajo lock (la fila se releyó con
+        # `populate_existing`: sin eso, el lock devolvía la `sesion_pre` del
+        # identity map y la re-validación no re-validaba nada).
+        ConteoService.exigir_puede_escribir(sesion, operario_id)
         # Re-verificado bajo lock: sesion_pre y sesion son lecturas distintas —
         # el mismo criterio que ya aplican estado y ownership dos líneas arriba.
         ConteoService.verificar_puede_contar(sesion, operario_id)

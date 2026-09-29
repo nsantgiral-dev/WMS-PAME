@@ -7725,13 +7725,14 @@ lo que no empezó vuelve solo a la cola.
   0 asignados y `motivo_sin_reparto` dice quiénes y por qué. Cada asignación va
   a la bitácora (`REASIGNAR`). Ahora lo puede hacer toda `SUPERVISION` (antes
   `LEAD`): el jefe ya reabría y reasignaba conteos.
-- **Soltar**: `devolver_trabajo_de` al declarar la ausencia (conteos pendientes
-  y en curso —lo contado queda en `conteos_descartados`, motivo `AUSENCIA`—,
-  picking pendiente, reposición en curso) y `barrer()` cada 15 min (esencial,
-  lock 2030): ausente/inactivo → todo lo soltable; sin señal → solo lo no
-  empezado (lo empezado lo cuidan los zombis de 2 h, que miden la tarea).
-  **Nunca** un picking o empaque EN_PROCESO: hay mercancía a medio mover; se
-  listan en «Por decidir» de la pestaña Operarios. Bitácora `DESASIGNAR`.
+- **Soltar**: `devolver_trabajo_de` al declarar la ausencia y `barrer()` cada
+  15 min (esencial, lock 2030): lo PENDIENTE siempre; un conteo EN_PROCESO solo
+  si estaba **abandonado** respecto de la ausencia (`en_curso_abandonado`, ver
+  «Corrección de la validación n1» abajo); sin señal → solo lo no empezado (lo
+  empezado lo cuidan los zombis de 2 h, que miden la tarea). **Nunca** un
+  picking, empaque ni reposición EN_PROCESO: hay mercancía a medio mover
+  (carro, caja, LPN); van a «Por decidir» de la pestaña Operarios con dónde se
+  resuelven. Bitácora `DESASIGNAR`.
 - **Puertas que pasan por la política**: `asignar-lote`, `reabrir_bloqueado`,
   `reasignar_operario` (`/editar`), `crear_conteo_manual` (forzado), el CC2
   (presente, elegible, primero por id — el desempate no cambió), aprobar y
@@ -7785,6 +7786,34 @@ valen para producción).
   dispensador — no se cambió sin su decisión.
 - La **salida anticipada** se declara como `PERMISO` desde hoy hasta mañana; no
   hay botón «terminó turno».
+
+### Corrección de la validación n1 (2026-09-29) — el que volvió y lo soltado
+
+La validación crítica la rechazó por dos P1 con una raíz: **la frontera
+«ausencia declarada ↔ la persona volvió»**.
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **P1-A** | Incapacidad con «Regresa el» vacío (el default, y lo normal). La persona vuelve, el dispensador le da un conteo, y el barrido —que la ve AUSENTE— se lo quita de las manos cada 15 min, todo el día | `presencia.cerrar_ausencia_si_volvio`: al dar señal (pedir trabajo o escribir), una ausencia **sin fecha de regreso que empezó antes de hoy** se cierra sola («Regresó antes», bitácora `ANULAR`). La que empezó hoy (salida anticipada, recién declarada) o trae regreso futuro (vacaciones) **no**: esa persona termina lo que tiene y no recibe trabajo nuevo, y su pantalla dice por qué (`presencia.motivo_sin_trabajo_nuevo`, una política para las tres puertas de pull: cola unificada, abastecedor, siguiente-tarea). Y el barrido suelta un conteo EN_PROCESO solo si nadie lo tocó desde 30 min antes de registrada la ausencia (`asignacion.en_curso_abandonado`): lo que empezó después, o estaba terminando, no se le quita |
+| **P1-B** | La guarda de escritura era `if sesion.operario_id and …`: una sesión devuelta a la cola aceptaba lo que tecleara quien la tenía, y el siguiente veía en su HUD lo contado por otro. El conteo dejaba de ser ciego | `ConteoService.exigir_puede_escribir`, una función para escaneo, total tecleado y registrar: la sesión tiene que estar a nombre de quien escribe. A quien se la soltaron se le dice por qué, leído de `conteos_descartados` («volvió a la cola porque usted figura ausente…») |
+| P2 | `repartir_conteos` y el lock de `registrar_conteo` releían con `with_for_update()` sin `populate_existing()`: devolvía la copia del identity map y la «re-verificación bajo lock» no verificaba (el reparto podía pisar al dueño que la tomó entre el plan y el lock) | `populate_existing()` en los dos, y en `_sesion_conteo_para_contar` |
+| P2 | El barrido leía y pisaba sin lock | `FOR UPDATE SKIP LOCKED` + `populate_existing`: lo que el dueño está tocando se salta y se mira en la próxima vuelta |
+| P2 | Reposición EN_PROCESO se soltaba al declarar la ausencia (el LPN en camino) | Misma regla que el picking: «Por decidir» (`asignacion.por_decidir_de`) |
+| P2 | «Por decidir» sin salida | Cada tarea dice dónde se resuelve; picking con «Devolver a la cola» (reabrir, con motivo), reposición con «Ir a Reposición» |
+| P2 | Marcar ausencia sin confirmar y sin `desde` | Confirmación (`_modalConfirmar`) que dice qué va a pasar, y campo «Desde» |
+
+Trinquete: los tres tests de la validación (`tests/test_validacion_asignacion_n1.py`,
+nacidos `xfail(strict)` en val-asig-n1 e81561ef) quedan verdes sin la marca, más
+los escenarios nuevos de `test_asignacion_presencia.py` (volvió sin fecha → se
+cierra sola y el barrido no le quita; ausente de hoy → termina lo suyo y la
+pantalla dice por qué; vacaciones con regreso no se cierran; el mensaje al que
+se la soltaron; reposición a «Por decidir»; confirmación y `desde` en Node).
+
+**Lo que NO cubre:** quien vuelve **antes** de una fecha de regreso declarada
+necesita que el líder quite la ausencia (su pantalla se lo dice); una ausencia
+sin fecha que empieza hoy no se cierra sola el mismo día (se cierra al día
+siguiente, en cuanto la persona trabaje). `registrar_senal` sigue haciendo `commit` dentro del dispensador (P3 de la
+validación: hoy no hay escrituras previas en ese camino).
 
 ---
 

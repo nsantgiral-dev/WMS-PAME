@@ -414,8 +414,13 @@ class TestQuienNoEstaSuelta:
         from app.models.picking import TareaPicking
         luis = nb1['luis']
         pend = _conteo(db, nb1['almacen'], operario=luis)
+        # Uno que dejó tirado hace 3 h (se suelta, lo contado queda aparte) y
+        # uno que está contando ahora mismo (no se le quita: lo está terminando).
         curso = _conteo(db, nb1['almacen'], operario=luis, estado='EN_PROCESO')
         curso.cantidad_fisica = 4
+        curso.fecha_inicio = curso.ultima_actividad_at = datetime.utcnow() - timedelta(hours=3)
+        vivo = _conteo(db, nb1['almacen'], operario=luis, estado='EN_PROCESO')
+        vivo.ultima_actividad_at = datetime.utcnow() - timedelta(minutes=5)
         db.session.commit()
         pk = _picking(db, nb1['almacen'], operario=luis)
         pk_curso = _picking(db, nb1['almacen'], operario=luis, estado='EN_PROCESO', referencia='ST-2')
@@ -425,6 +430,8 @@ class TestQuienNoEstaSuelta:
         d = r.get_json()
         assert r.status_code == 201, d
         assert (d['devuelto']['conteos'], d['devuelto']['picking']) == (2, 1), d
+        assert d['devuelto']['conservados_en_curso'] == 1
+        assert _sesion(db, vivo.id).operario_id == luis.id, 'lo que está terminando no se le quita'
         assert [x['id'] for x in d['devuelto']['requieren_decision']] == [pk_curso.id], (
             'un picking a medio recoger no se suelta solo: hay mercancía en un carro')
         assert _sesion(db, pend.id).operario_id is None
@@ -450,7 +457,9 @@ class TestQuienNoEstaSuelta:
             'lo EMPEZADO lo cuida el barrido de inactividad, que mide la tarea')
         assert _sesion(db, otra.id).operario_id == nb1['ana'].id
 
-    def test_el_barrido_suelta_la_reposicion_de_un_ausente(self, db, nb1):
+    def test_la_reposicion_en_curso_de_un_ausente_no_se_suelta_va_a_por_decidir(self, db, nb1):
+        """Un LPN camino de PICKING es mercancía a medio mover, como un carro de
+        picking: la misma regla (validación n1, P2-3). Antes se soltaba."""
         from app.models.ausencia import AusenciaUsuario
         from app.models.tarea_reposicion import TareaReposicion
         from app.services import asignacion, presencia
@@ -468,7 +477,88 @@ class TestQuienNoEstaSuelta:
         asignacion.barrer()
         db.session.expire_all()
         r = db.session.get(TareaReposicion, rep.id)
-        assert (r.abastecedor_id, r.estado) == (None, 'PENDIENTE')
+        assert (r.abastecedor_id, r.estado) == (luis.id, 'EN_PROCESO')
+        decidir = asignacion.equipo(nb1['almacen'].id)['requieren_decision']
+        (fila,) = [x for x in decidir if x['id'] == luis.id]
+        assert [t['tipo'] for t in fila['tareas']] == ['REPOSICION']
+        assert 'LPN' in fila['tareas'][0]['donde']
+
+    def test_volvio_sin_fecha_de_regreso_la_ausencia_se_cierra_sola(self, db, nb1):
+        """Incapacidad de ayer sin «Regresa el» (lo normal): hoy pide trabajo →
+        la ausencia se cierra sola, con «regresó antes» en la bitácora, y recibe
+        su conteo. El barrido ya no se lo quita (validación n1, P1-A)."""
+        from app.models.ausencia import AusenciaUsuario
+        from app.models.bitacora import BitacoraAccion
+        from app.services import asignacion, presencia
+        from app.services.mobile_service import MobileService
+        luis = nb1['luis']
+        luis.ultima_senal_at = datetime.utcnow() - timedelta(days=1)
+        a = AusenciaUsuario(usuario_id=luis.id, motivo='INCAPACIDAD',
+                            desde=presencia._dia() - timedelta(days=1),
+                            registrada_en=datetime.utcnow() - timedelta(days=1))
+        db.session.add(a)
+        db.session.commit()
+        _conteo(db, nb1['almacen'])
+        t = MobileService.get_tarea_actual(luis.id)
+        assert t and t['tipo'] == 'CONTEO', t
+        db.session.expire_all()
+        assert db.session.get(AusenciaUsuario, a.id).anulada_en is not None
+        fila = BitacoraAccion.query.filter_by(entidad='AusenciaUsuario', accion='ANULAR').one()
+        assert 'Regresó antes' in fila.motivo
+        asignacion.barrer()
+        assert _sesion(db, t['id']).operario_id == luis.id
+
+    def test_ausente_de_hoy_no_recibe_trabajo_nuevo_y_se_le_dice(self, app, db, client, nb1):
+        """Ausencia que empezó hoy (una salida anticipada, o recién declarada):
+        no se cierra sola —puede estar terminando lo suyo—, lo que tiene en
+        curso lo termina, y trabajo nuevo no le llega: la pantalla dice por qué."""
+        from app.services import presencia
+        luis = nb1['luis']
+        suyo = _conteo(db, nb1['almacen'], operario=luis, estado='EN_PROCESO')
+        suyo.ultima_actividad_at = datetime.utcnow()
+        db.session.commit()
+        presencia.declarar_ausencia(luis.id, 'PERMISO', por_id=nb1['sup'].id)
+        _conteo(db, nb1['almacen'])
+        h = _tok(app, luis)
+        d = client.get('/api/mobile/tarea-actual', headers=h).get_json()
+        assert d['id'] == suyo.id, 'lo que estaba contando lo termina'
+        _sesion(db, suyo.id).estado = 'MATCH'
+        db.session.commit()
+        d = client.get('/api/mobile/tarea-actual', headers=h).get_json()
+        assert d.get('ausente') and 'figura ausente' in d['mensaje'] and 'jefe' in d['mensaje'], d
+        assert presencia.estado(luis)['codigo'] == 'AUSENTE', 'de hoy: no se cierra sola'
+
+    def test_vacaciones_con_regreso_futuro_no_se_cierran_solas(self, db, nb1):
+        from app.models.ausencia import AusenciaUsuario
+        from app.services import presencia
+        luis = nb1['luis']
+        db.session.add(AusenciaUsuario(usuario_id=luis.id, motivo='VACACIONES',
+                                       desde=presencia._dia() - timedelta(days=2),
+                                       regreso=presencia._dia() + timedelta(days=3)))
+        luis.ultima_senal_at = None
+        db.session.commit()
+        presencia.registrar_senal(luis.id)
+        assert presencia.estado(luis)['codigo'] == 'AUSENTE'
+        assert 'vacaciones' in presencia.motivo_sin_trabajo_nuevo(luis)
+
+    def test_a_quien_se_le_solto_su_pantalla_le_dice_por_que(self, db, nb1):
+        """P1-B: la sesión soltada no se escribe, y el mensaje dice por qué."""
+        from app.services import asignacion
+        from app.services.mobile_service import MobileService
+        luis = nb1['luis']
+        s = _conteo(db, nb1['almacen'], operario=luis, estado='EN_PROCESO')
+        s.ultima_actividad_at = datetime.utcnow() - timedelta(hours=3)
+        db.session.commit()
+        asignacion.devolver_trabajo_de(luis.id, motivo=asignacion.MOTIVO_AUSENCIA,
+                                       en_curso_desde=datetime.utcnow())
+        db.session.commit()
+        with pytest.raises(ValueError, match='ya no está a su nombre: volvió a la cola porque usted figura ausente'):
+            MobileService.fijar_total_conteo(luis.id, s.id, 5)
+        from app.services.conteo_service import ConteoService
+        with pytest.raises(ValueError, match='ya no está a su nombre'):
+            ConteoService.registrar_conteo(s.id, luis.id, 5)
+        with pytest.raises(ValueError, match='ábralo desde su tarea'):
+            MobileService.fijar_total_conteo(nb1['ana'].id, s.id, 5)
 
     def test_anular_la_ausencia_la_vuelve_a_poner_en_turno(self, app, db, client, nb1):
         from app.services import presencia
@@ -819,7 +909,11 @@ const PLAN = (ids) => ({
   no_disponibles: [{ id: 9, nombre: 'Pedro', presencia_texto: 'está ausente: incapacidad — regresa el 30/09' }],
   saltadas_doble_ciego: 0, motivo_sin_reparto: null });
 const EQUIPO = { en_turno: 1, ventana_senal_horas: 2, requieren_decision: [
-    { id: 9, nombre: 'Pedro', presencia_texto: 'ausente', picking_en_curso: 1, empaque_en_curso: 0 }],
+    { id: 9, nombre: 'Pedro', presencia_texto: 'ausente', picking_en_curso: 1, empaque_en_curso: 0,
+      tareas: [{ tipo: 'PICKING', id: 77, codigo: 'PK-77', referencia: 'ST-9',
+                 donde: 'Tareas de bodega: reabrir la línea' },
+               { tipo: 'REPOSICION', id: 78, codigo: 'REP-78', referencia: null,
+                 donde: 'Reposición: ubicar el LPN' }] }],
   personas: [
     { id: 1, nombre: 'Ana', rol: 'operario', presencia: 'EN_TURNO', presencia_texto: 'en turno',
       disponible: true, ausencia: null, hace: ['CONTEO', 'PICKING'], carga: { conteos_en_cola: 3 },
@@ -870,7 +964,16 @@ const out = {};
   await R('cargarOperarios()');
   out.equipo = els['lista-operarios'].innerHTML;
   el('aus-motivo-1').value = 'INCAPACIDAD'; el('aus-regreso-1').value = '2026-10-01'; el('aus-nota-1').value = '';
-  await R('operarioGuardarAusencia(1)');
+  el('aus-desde-1').value = '2026-09-30';
+  // Marcar ausencia pide confirmación: «Volver» no manda nada.
+  const cancelada = R('operarioGuardarAusencia(1)');
+  cuerpo[cuerpo.length - 1].querySelector('#_mconf-no').onclick();
+  await cancelada;
+  out.postsTrasCancelar = posts.filter(p => p[0] === '/api/asignacion/ausencias').length;
+  const guardar = R('operarioGuardarAusencia(1)');
+  out.confirmaAusencia = cuerpo[cuerpo.length - 1].innerHTML;
+  cuerpo[cuerpo.length - 1].querySelector('#_mconf-si').onclick();
+  await guardar;
   out.postAusencia = posts.filter(p => p[0] === '/api/asignacion/ausencias').pop();
   out.alertaAusencia = alertas.pop();
   const anular = R('operarioAnularAusencia(55)');
@@ -927,7 +1030,9 @@ class TestLasPantallas:
         assert 'En turno: 1 de 2' in eq
         assert 'Ausente' in eq and 'regresa el 30/09' in eq
         assert 'Tiene: 3 conteo(s) en su cola' in eq
-        assert 'Por decidir' in eq and 'picking a medio recoger' in eq
+        assert 'Por decidir' in eq and 'Picking a medio recoger' in eq
+        assert 'operarioReabrirPicking(77)' in eq and 'Tareas de bodega' in eq, 'con su salida'
+        assert "tab('tab-reposicion')" in eq and 'LPN en camino' in eq
         assert 'Ya volvió' in eq and 'Marcar ausencia' in eq
 
     def test_el_gerente_ve_el_equipo_sin_botones_de_ausencia(self, js):
@@ -937,6 +1042,9 @@ class TestLasPantallas:
 
     def test_declarar_y_quitar_la_ausencia(self, js):
         url, body = js['postAusencia']
-        assert body == {'usuario_id': 1, 'motivo': 'INCAPACIDAD', 'regreso': '2026-10-01', 'nota': None}
+        assert js['postsTrasCancelar'] == 0, 'cancelar la confirmación no marca a nadie'
+        assert 'Marcar ausencia' in js['confirmaAusencia'] and '2026-09-30' in js['confirmaAusencia']
+        assert body == {'usuario_id': 1, 'motivo': 'INCAPACIDAD', 'desde': '2026-09-30',
+                        'regreso': '2026-10-01', 'nota': None}
         assert 'Volvieron a la cola: 3 conteo(s)' in js['alertaAusencia'][0]
         assert js['postAnular'][0] == '/api/asignacion/ausencias/55/anular'

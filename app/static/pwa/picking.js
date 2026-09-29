@@ -16,6 +16,18 @@ async function pedirTarea() {
     if (d && d.avisos_pendientes && d.avisos_pendientes.length) {
       d.avisos_pendientes.forEach(a => alerta(a.mensaje, a.tipo || 'advertencia'));
     }
+    if (d && d.sin_tareas && d.ausente) {
+      // Figura ausente: no le llega trabajo nuevo. Se le dice por qué y qué
+      // hacer, en vez de «Sin tareas» (que se lee como «no hay trabajo»).
+      TAREA_ACTUAL = null;
+      document.getElementById('contenido-tarea').innerHTML = `
+        <div style="text-align:center;padding:40px 20px 16px;">
+          <div style="font-size:48px;">🚫</div>
+          <div style="font-size:var(--fs-lg);font-weight:700;margin-top:12px;">No le llegan tareas nuevas</div>
+          <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:8px;line-height:1.5;">${esc(d.mensaje)}</div>
+        </div>`;
+      return;
+    }
     if (!d || d.sin_tareas) {
       TAREA_ACTUAL = null;
       const _esTiendaOp = OPERARIO && ['picker_traslado', 'packer_traslado'].includes(OPERARIO.rol);

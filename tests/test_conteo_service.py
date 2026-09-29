@@ -447,6 +447,8 @@ class TestRegistrarConteo:
 
         # inv_picking has cantidad=30; Siesa is in simulation mode so it falls
         # back to WMS. Counting 30 must produce a MATCH.
+        # Se abre antes de contar: sin dueño no se escribe (validación n1, P1-B).
+        ConteoService.obtener_tarea_operario(sesion_pendiente.id, usuario.id)
         result = ConteoService.registrar_conteo(
             sesion_id=sesion_pendiente.id,
             operario_id=usuario.id,
@@ -470,6 +472,8 @@ class TestRegistrarConteo:
         from app.models.conteo import SesionConteo
 
         # Count 25 but WMS says 30 → difference of -5
+        # Se abre antes de contar: sin dueño no se escribe (validación n1, P1-B).
+        ConteoService.obtener_tarea_operario(sesion_pendiente.id, usuario.id)
         result = ConteoService.registrar_conteo(
             sesion_id=sesion_pendiente.id,
             operario_id=usuario.id,
@@ -507,6 +511,8 @@ class TestRegistrarConteo:
         from app.services.conteo_service import ConteoService
 
         with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(50.0)):
+            # Se abre antes de contar: sin dueño no se escribe (validación n1, P1-B).
+            ConteoService.obtener_tarea_operario(sesion_pendiente.id, usuario.id)
             result = ConteoService.registrar_conteo(
                 sesion_id=sesion_pendiente.id,
                 operario_id=usuario.id,
@@ -526,6 +532,8 @@ class TestRegistrarConteo:
 
         with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(100.0)):
             for _ in range(2):
+                # Se abre antes de contar: sin dueño no se escribe (validación n1, P1-B).
+                ConteoService.obtener_tarea_operario(sesion_pendiente.id, usuario.id)
                 result = ConteoService.registrar_conteo(
                     sesion_id=sesion_pendiente.id,
                     operario_id=usuario.id,
@@ -574,6 +582,8 @@ class TestCancelarConteo:
 
         # Register a mismatch (and its own recount) to create CC2
         for _ in range(2):
+            # Se abre antes de contar: sin dueño no se escribe (validación n1, P1-B).
+            ConteoService.obtener_tarea_operario(padre.id, usuario.id)
             padre_result = ConteoService.registrar_conteo(
                 sesion_id=padre.id,
                 operario_id=usuario.id,

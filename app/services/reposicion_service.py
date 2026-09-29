@@ -302,22 +302,32 @@ def verificar_stock_picking(almacen_id: int = None):
 # 2. Asignación al abastecedor
 # ──────────────────────────────────────────────────────────────────────────────
 
+def tarea_en_curso_de(abastecedor_id: int):
+    """La reposición EN_PROCESO de este abastecedor (`to_dict`), o `None`."""
+    activa = TareaReposicion.query.filter_by(
+        abastecedor_id=abastecedor_id,
+        estado='EN_PROCESO',
+    ).first()
+    return activa.to_dict() if activa else None
+
+
 def get_tarea_abastecedor(abastecedor_id: int):
     """
     Devuelve la tarea activa del abastecedor, o asigna la siguiente PENDIENTE.
     """
     # Pedir trabajo es estar trabajando (`presencia`, m051asignacion): la
     # pantalla del abastecedor puro pregunta por GET, que no deja señal solo.
-    from app.services.presencia import registrar_senal
+    from app.models.usuario import Usuario
+    from app.services.presencia import motivo_sin_trabajo_nuevo, registrar_senal
     registrar_senal(abastecedor_id)
 
     # ¿Ya tiene tarea en proceso?
-    activa = TareaReposicion.query.filter_by(
-        abastecedor_id=abastecedor_id,
-        estado='EN_PROCESO',
-    ).first()
+    activa = tarea_en_curso_de(abastecedor_id)
     if activa:
-        return activa.to_dict()
+        return activa
+    # Ausente: termina lo que tiene, no recibe nada nuevo (la ruta dice por qué).
+    if motivo_sin_trabajo_nuevo(db.session.get(Usuario, abastecedor_id)):
+        return None
 
     # Tomar la más antigua PENDIENTE con LPN asignado (las más urgentes primero)
     # with_for_update(skip_locked=True): si dos abastecedores piden al mismo tiempo,

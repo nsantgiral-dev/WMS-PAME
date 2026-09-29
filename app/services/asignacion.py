@@ -413,7 +413,11 @@ def repartir_conteos(almacen_id, *, por_id: int, cantidad=None, operario_ids=Non
     hechas = {}
     for sid, uid in asignaciones:
         s = (SesionConteo.query.filter_by(id=sid)
-             .with_for_update(skip_locked=True).first())
+             .with_for_update(skip_locked=True)
+             # Releída: la fila ya está en el identity map (la cargó el plan)
+             # y sin esto el lock devolvía la copia vieja — «sin dueño» aunque
+             # alguien la hubiera tomado entre el plan y el lock (n1, P2).
+             .populate_existing().first())
         if s is None or s.estado != EstadoConteo.PENDIENTE or s.operario_id is not None:
             continue
         u = db.session.get(Usuario, uid)
@@ -471,19 +475,54 @@ def elegir_para_segundo_conteo(cc2, *, excluir_ids=()):
 # Soltar: ausencia declarada, o sin señal
 # ─────────────────────────────────────────────────────────────────────────────
 
-def devolver_trabajo_de(usuario_id: int, *, motivo: str, incluir_en_curso: bool,
+#: Minutos sin tocar una tarea EN_PROCESO, antes de que se declarara la
+#: ausencia, para considerarla abandonada. Menos que eso es alguien terminando.
+GRACIA_EN_CURSO_MIN = 30
+
+
+def en_curso_abandonado(ultima_actividad, referencia) -> bool:
+    """¿Una tarea EN_PROCESO de alguien que ya no está se considera abandonada?
+
+    **Una política, una función** (validación n1, P1-A). Solo si nadie la tocó
+    desde `GRACIA_EN_CURSO_MIN` antes de `referencia` (cuándo se registró la
+    ausencia o se vio al usuario inactivo) **ni después**. Así:
+
+    - lo que la persona empezó DESPUÉS de declarada la ausencia (volvió a
+      trabajar) no se le quita;
+    - lo que estaba terminando cuando se declaró (la salida anticipada) no se le
+      quita;
+    - lo que dejó tirado antes de irse sí vuelve a la cola.
+
+    Lo que se conserva y después se abandona lo suelta el barrido de
+    inactividad de la tarea (2 h desde el último escaneo), que mide la tarea.
+    Sin `ultima_actividad` (nunca se tocó) se mide desde el inicio; sin nada,
+    se considera abandonada.
+    """
+    from datetime import timedelta
+    if ultima_actividad is None:
+        return True
+    return ultima_actividad < referencia - timedelta(minutes=GRACIA_EN_CURSO_MIN)
+
+
+def devolver_trabajo_de(usuario_id: int, *, motivo: str, en_curso_desde=None,
                         por_id: int = None, origen: str = None) -> dict:
     """Devuelve a la cola lo que `usuario_id` tenía asignado. No hace commit.
 
     - Conteos PENDIENTES con su nombre → cola (`devolver_al_pool`).
     - Picking PENDIENTE con su nombre (un traslado asignado) → cola
       (`PickingService._soltar_operario`, que conserva quién lo tenía).
-    - Con `incluir_en_curso` (ausencia declarada, usuario inactivo): también
-      sus conteos EN_PROCESO (lo contado queda en `conteos_descartados`) y su
-      reposición EN_PROCESO.
-    - **Nunca** un picking o un empaque EN_PROCESO: hay mercancía física a
-      medio mover (en un carro, en una caja). Esos se listan en
-      `requieren_decision` y los ve el líder (`equipo`).
+    - Con `en_curso_desde` (ausencia declarada: su `registrada_en`; usuario
+      inactivo: ahora): también sus conteos EN_PROCESO **abandonados**
+      (`en_curso_abandonado`); lo contado queda en `conteos_descartados` y a la
+      persona su pantalla le dice por qué (`ConteoService.exigir_puede_escribir`).
+    - **Nunca** un picking, un empaque ni una reposición EN_PROCESO: hay
+      mercancía física a medio mover (en un carro, en una caja, un LPN camino
+      de PICKING). Esos van a `requieren_decision` y los resuelve el líder.
+
+    Cada fila se lee con `FOR UPDATE SKIP LOCKED` y releída
+    (`populate_existing`): si el dueño la está tocando en este momento, el
+    barrido la salta y la mira en la próxima vuelta; nunca pisa lo que el
+    dueño acaba de escribir.
     """
     from app.models.conteo import EstadoConteo, MotivoDescarteConteo, SesionConteo
     from app.models.packing import TareaPacking
@@ -492,7 +531,6 @@ def devolver_trabajo_de(usuario_id: int, *, motivo: str, incluir_en_curso: bool,
     from app.services.bitacora import registrar_accion
     from app.services.conteo_service import ConteoService
     from app.services.picking_service import PickingService
-    from app.services.reposicion_service import soltar_abastecedor
 
     motivo_conteo = MotivoDescarteConteo.SIN_SENAL if motivo == MOTIVO_SIN_SENAL \
         else MotivoDescarteConteo.AUSENCIA
@@ -500,11 +538,20 @@ def devolver_trabajo_de(usuario_id: int, *, motivo: str, incluir_en_curso: bool,
              MOTIVO_SIN_SENAL: f'Su dueño lleva más de {presencia.VENTANA_SENAL_HORAS} h sin señal',
              MOTIVO_INACTIVO: 'Su dueño está inactivo'}.get(motivo, motivo)
     origen = origen or ('barrido de asignaciones' if por_id is None else None)
-    out = {'conteos': 0, 'picking': 0, 'reposicion': 0, 'requieren_decision': []}
+    out = {'conteos': 0, 'picking': 0, 'reposicion': 0, 'conservados_en_curso': 0,
+           'requieren_decision': []}
 
-    estados_conteo = [EstadoConteo.PENDIENTE] + ([EstadoConteo.EN_PROCESO] if incluir_en_curso else [])
-    for s in SesionConteo.query.filter(SesionConteo.operario_id == usuario_id,
-                                       SesionConteo.estado.in_(estados_conteo)).all():
+    def _bloqueadas(q):
+        return q.with_for_update(skip_locked=True).populate_existing().all()
+
+    estados_conteo = [EstadoConteo.PENDIENTE] + (
+        [EstadoConteo.EN_PROCESO] if en_curso_desde is not None else [])
+    for s in _bloqueadas(SesionConteo.query.filter(SesionConteo.operario_id == usuario_id,
+                                                   SesionConteo.estado.in_(estados_conteo))):
+        if s.estado == EstadoConteo.EN_PROCESO and not en_curso_abandonado(
+                s.ultima_actividad_at or s.fecha_inicio, en_curso_desde):
+            out['conservados_en_curso'] += 1
+            continue
         antes = {'operario_id': s.operario_id, 'estado': s.estado}
         ConteoService.devolver_al_pool(s, motivo_conteo)
         registrar_accion('DESASIGNAR', s, usuario_id=por_id, motivo=f'{texto}: vuelve a la cola',
@@ -512,39 +559,48 @@ def devolver_trabajo_de(usuario_id: int, *, motivo: str, incluir_en_curso: bool,
                          origen=origen)
         out['conteos'] += 1
 
-    for t in TareaPicking.query.filter(TareaPicking.operario_id == usuario_id,
-                                       TareaPicking.estado == EstadoPicking.PENDIENTE).all():
+    for t in _bloqueadas(TareaPicking.query.filter(TareaPicking.operario_id == usuario_id,
+                                                   TareaPicking.estado == EstadoPicking.PENDIENTE)):
         PickingService._soltar_operario(t)
         registrar_accion('DESASIGNAR', t, usuario_id=por_id, motivo=f'{texto}: vuelve a la cola',
                          antes={'operario_id': usuario_id}, despues={'operario_id': None},
                          origen=origen)
         out['picking'] += 1
 
-    if incluir_en_curso:
-        for r in TareaReposicion.query.filter(TareaReposicion.abastecedor_id == usuario_id,
-                                              TareaReposicion.estado == 'EN_PROCESO').all():
-            soltar_abastecedor(r)
-            registrar_accion('DESASIGNAR', r, usuario_id=por_id, motivo=f'{texto}: vuelve a la cola',
-                             antes={'abastecedor_id': usuario_id}, despues={'abastecedor_id': None},
-                             origen=origen)
-            out['reposicion'] += 1
+    out['requieren_decision'] = por_decidir_de(usuario_id)
+    return out
 
+
+def por_decidir_de(usuario_id: int) -> list:
+    """Lo EN_PROCESO de alguien con mercancía a medio mover: picking (carro),
+    empaque (caja) y reposición (LPN). Nunca se suelta solo: lo decide el
+    líder, en la pantalla que dice `donde`."""
+    from app.models.packing import TareaPacking
+    from app.models.picking import EstadoPicking, TareaPicking
+    from app.models.tarea_reposicion import TareaReposicion
+    out = []
     for t in TareaPicking.query.filter(TareaPicking.operario_id == usuario_id,
                                        TareaPicking.estado == EstadoPicking.EN_PROCESO).all():
-        out['requieren_decision'].append({'tipo': 'PICKING', 'id': t.id, 'codigo': t.codigo,
-                                          'referencia': t.referencia_documento})
+        out.append({'tipo': 'PICKING', 'id': t.id, 'codigo': t.codigo,
+                    'referencia': t.referencia_documento,
+                    'donde': 'Tareas de bodega: reabrir la línea (vuelve a la cola desde cero) '
+                             'o reportar el problema'})
     for k in TareaPacking.query.filter(TareaPacking.empacador_id == usuario_id,
                                        TareaPacking.estado == 'EN_PROCESO').all():
-        out['requieren_decision'].append({'tipo': 'PACKING', 'id': k.id,
-                                          'codigo': getattr(k, 'codigo', None),
-                                          'referencia': k.numero_pedido_siesa})
+        out.append({'tipo': 'PACKING', 'id': k.id, 'codigo': getattr(k, 'codigo', None),
+                    'referencia': k.numero_pedido_siesa,
+                    'donde': 'Empaque: otro empacador lo retoma o se cierra la caja'})
+    for r in TareaReposicion.query.filter(TareaReposicion.abastecedor_id == usuario_id,
+                                          TareaReposicion.estado == 'EN_PROCESO').all():
+        out.append({'tipo': 'REPOSICION', 'id': r.id, 'codigo': r.codigo, 'referencia': None,
+                    'donde': 'Reposición: ubicar el LPN y liberar la tarea (o se libera sola '
+                             'a las 2 h sin avance)'})
     return out
 
 
 def _duenos_con_trabajo():
     from app.models.conteo import EstadoConteo, SesionConteo
     from app.models.picking import EstadoPicking, TareaPicking
-    from app.models.tarea_reposicion import TareaReposicion
     ids = set()
     ids |= {r[0] for r in db.session.query(SesionConteo.operario_id).filter(
         SesionConteo.operario_id.isnot(None),
@@ -552,16 +608,16 @@ def _duenos_con_trabajo():
     ids |= {r[0] for r in db.session.query(TareaPicking.operario_id).filter(
         TareaPicking.operario_id.isnot(None),
         TareaPicking.estado == EstadoPicking.PENDIENTE).distinct()}
-    ids |= {r[0] for r in db.session.query(TareaReposicion.abastecedor_id).filter(
-        TareaReposicion.abastecedor_id.isnot(None),
-        TareaReposicion.estado == 'EN_PROCESO').distinct()}
     return ids
 
 
 def barrer(ahora=None) -> dict:
     """Suelta lo asignado a quien no está disponible. Hace commit.
 
-    - Ausente o inactivo: todo lo que se puede soltar, empezado o no.
+    - Ausente: lo que no empezó, y lo EN_PROCESO **abandonado** respecto de
+      cuándo se registró la ausencia (`en_curso_abandonado`): lo que empezó o
+      tocó después —volvió a trabajar, o estaba terminando— no se le quita.
+    - Inactivo: lo mismo, con «ahora» como referencia.
     - Sin señal: solo lo que no empezó. Lo empezado lo cuidan los barridos de
       inactividad de conteo y reposición (2 h desde el último escaneo), que
       miden la tarea y no a la persona.
@@ -579,8 +635,12 @@ def barrer(ahora=None) -> dict:
             continue
         motivo = {presencia.AUSENTE: MOTIVO_AUSENCIA, presencia.INACTIVO: MOTIVO_INACTIVO}.get(
             p['codigo'], MOTIVO_SIN_SENAL)
-        r = devolver_trabajo_de(u.id, motivo=motivo,
-                                incluir_en_curso=p['codigo'] != presencia.SIN_SENAL)
+        desde = None
+        if p['codigo'] == presencia.AUSENTE and p['ausencia'] and p['ausencia'].get('registrada_en'):
+            desde = datetime.fromisoformat(p['ausencia']['registrada_en'])
+        elif p['codigo'] in (presencia.AUSENTE, presencia.INACTIVO):
+            desde = ahora or datetime.utcnow()
+        r = devolver_trabajo_de(u.id, motivo=motivo, en_curso_desde=desde)
         if r['conteos'] or r['picking'] or r['reposicion']:
             tot['personas'] += 1
             for k in ('conteos', 'picking', 'reposicion'):
@@ -641,10 +701,13 @@ def equipo(almacen_id=None) -> dict:
                          'disponible': p['disponible'], 'visto_at': p['visto_at'],
                          'ausencia': p['ausencia'], 'hace': hace, 'carga': carga,
                          'cupo_conteo': cupo_conteo(u) if CONTEO in hace else None})
-        if not p['disponible'] and (carga['picking_en_curso'] or carga['empaque_en_curso']):
+        if not p['disponible'] and (carga['picking_en_curso'] or carga['empaque_en_curso']
+                                    or carga['reposicion_en_curso']):
             decidir.append({'id': u.id, 'nombre': u.nombre, 'presencia_texto': p['texto'],
                             'picking_en_curso': carga['picking_en_curso'],
-                            'empaque_en_curso': carga['empaque_en_curso']})
+                            'empaque_en_curso': carga['empaque_en_curso'],
+                            'reposicion_en_curso': carga['reposicion_en_curso'],
+                            'tareas': por_decidir_de(u.id)})
     orden = {presencia.EN_TURNO: 0, presencia.SIN_SENAL: 1, presencia.AUSENTE: 2}
     personas.sort(key=lambda x: (orden.get(x['presencia'], 3), x['nombre']))
     return {

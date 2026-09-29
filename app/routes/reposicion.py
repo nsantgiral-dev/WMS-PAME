@@ -55,6 +55,10 @@ def tarea_actual():
         return jsonify({'error': 'Sin permiso — se requiere permiso de abastecedor'}), 403
     tarea = get_tarea_abastecedor(abastecedor_id)
     if not tarea:
+        from app.services.presencia import motivo_sin_trabajo_nuevo
+        ausente = motivo_sin_trabajo_nuevo(u)
+        if ausente:
+            return jsonify({'sin_tareas': True, 'ausente': True, 'mensaje': ausente}), 200
         return jsonify({'sin_tareas': True, 'mensaje': 'No hay reposiciones pendientes'}), 200
     return jsonify(tarea), 200
 

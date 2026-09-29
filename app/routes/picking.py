@@ -391,6 +391,13 @@ def siguiente_tarea():
             'mensaje': 'Tiene una tarea en proceso'
         }), 200
 
+    # Ausente: no recibe trabajo nuevo, y se le dice (`presencia`). La señal
+    # ya la dejó el before_request (es un POST) y, si volvió, cerró su ausencia.
+    from app.services.presencia import motivo_sin_trabajo_nuevo
+    ausente = motivo_sin_trabajo_nuevo(u)
+    if ausente:
+        return jsonify({'sin_tareas': True, 'ausente': True, 'mensaje': ausente}), 200
+
     # PickingService.siguiente_tarea_para(): prioridad -> mismo documento en
     # curso -> orden físico de caminata (pasillo/fila/cuerpo/nivel/hueco) ->
     # fecha_creacion. Row-lock (with_for_update skip_locked) incluido — evita

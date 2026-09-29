@@ -214,6 +214,22 @@ class MobileService:
                 'cantidad_pedida': float(tarea_activa.cantidad_pedida) if tarea_activa.cantidad_pedida is not None else None,
             }
 
+        # Ausente (con la ausencia todavía vigente: la que no traía fecha y
+        # empezó antes de hoy ya la cerró `registrar_senal` al llegar): lo que
+        # ya tiene empezado lo termina; trabajo NUEVO no recibe. La ruta le dice
+        # por qué (`presencia.motivo_sin_trabajo_nuevo`, una política para toda
+        # puerta de pull). Sin esto el dispensador le daba trabajo y el barrido
+        # se lo quitaba cada 15 min (validación n1, P1-A).
+        from app.models.usuario import Usuario as _U_aus
+        if _presencia.motivo_sin_trabajo_nuevo(db.session.get(_U_aus, operario_id)):
+            _conteo_suyo = (SesionConteo.query
+                            .filter_by(operario_id=operario_id, estado=EstadoConteo.EN_PROCESO)
+                            .first())
+            if _conteo_suyo:
+                return MobileService._conteo_a_dict(_conteo_suyo)
+            from app.services.reposicion_service import tarea_en_curso_de as _rep_en_curso
+            return _rep_en_curso(operario_id)
+
         # Tomar siguiente tarea de la cola global — más prioritaria y más antigua.
         # REGLA ESTRICTA: el picker solo puede ir a ubicaciones tipo_zona = PICKING o GENERAL.
         # Las zonas RESERVA (pacas selladas en alto) son exclusivas del Abastecedor.
@@ -894,18 +910,15 @@ class MobileService:
                   .options(_sl_conteo(SesionConteo.producto))
                   .filter_by(id=tarea_id)
                   .with_for_update()
+                  .populate_existing()
                   .first())
         if not sesion:
             raise ValueError('Sesión de conteo no encontrada')
-        # Ownership + estado — mismo criterio que `ConteoService.registrar_conteo`
-        # y `bloquear_conteo`. Sin esto, cualquier operario de almacén podía
-        # escribir en el sesion_id de OTRO (rompiendo el double-blind de
-        # CC2/CC3) o en una sesión ya cerrada (MATCH, DESCUADRE, AJUSTADO — ya
-        # enviada a Siesa), sobrescribiendo cantidad_fisica en silencio.
-        if sesion.operario_id and sesion.operario_id != operario_id:
-            raise ValueError('Esta sesión de conteo no está asignada a usted')
-        if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
-            raise ValueError(f'No se puede escanear ni contar en un conteo con estado {sesion.estado}')
+        # Dueño + estado: `ConteoService.exigir_puede_escribir`, la misma que
+        # `registrar_conteo`. Sin dueño NO se escribe (2026-09-29): una sesión
+        # devuelta a la cola aceptaba lo que tecleara quien la tenía, y el
+        # siguiente veía en su HUD lo contado por otro.
+        ConteoService.exigir_puede_escribir(sesion, operario_id)
         # CC3 (conteo definitivo) nace sin dueño a propósito — sin este
         # chequeo, cualquier operario podía "tomarlo" escaneando directo
         # aquí sin pasar por /api/conteo/definitivos, que sí exige

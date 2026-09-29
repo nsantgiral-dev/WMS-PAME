@@ -1852,11 +1852,46 @@ function _ausenciaHTML(p) {
         <option value="INCAPACIDAD">Incapacidad</option><option value="VACACIONES">Vacaciones</option>
         <option value="PERMISO">Permiso</option><option value="CALAMIDAD">Calamidad</option><option value="OTRO">Otro</option>
       </select>
-      <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:3px;">Regresa el (vacío = sin fecha todavía)</label>
+      <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:3px;">Desde (vacío = hoy)</label>
+      <input id="aus-desde-${esc(p.id)}" type="date" style="width:100%;padding:8px;margin-bottom:6px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
+      <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:3px;">Regresa el (vacío = sin fecha todavía: se cierra sola cuando vuelva a trabajar otro día)</label>
       <input id="aus-regreso-${esc(p.id)}" type="date" style="width:100%;padding:8px;margin-bottom:6px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
       <input id="aus-nota-${esc(p.id)}" type="text" placeholder="Nota (opcional)" style="width:100%;padding:8px;margin-bottom:6px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);box-sizing:border-box;">
       <button onclick="operarioGuardarAusencia(${esc(p.id)})" style="width:100%;padding:8px;background:var(--pm-fill);border:none;color:#fff;border-radius:6px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">Guardar ausencia</button>
     </div>`;
+}
+
+/** Una tarea a medio hacer de alguien que no está, con su salida: dónde se
+ * resuelve y, si se puede desde acá, el botón. Nunca se suelta sola: hay
+ * mercancía a medio mover (carro, caja, LPN). */
+function _porDecidirHTML(t) {
+  const etiqueta = { PICKING: 'Picking a medio recoger', PACKING: 'Empaque a medio cerrar',
+                     REPOSICION: 'Reposición con el LPN en camino' }[t.tipo] || t.tipo;
+  const boton = t.tipo === 'PICKING'
+    ? `<button onclick="operarioReabrirPicking(${esc(t.id)})" style="margin-left:6px;padding:3px 8px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">Devolver a la cola</button>`
+    : t.tipo === 'REPOSICION'
+      ? `<button onclick="tab('tab-reposicion')" style="margin-left:6px;padding:3px 8px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx);border-radius:6px;font-size:var(--fs-xs);cursor:pointer;">Ir a Reposición</button>`
+      : '';
+  return `<div style="margin:4px 0 0 8px;">· ${esc(etiqueta)} ${esc(t.codigo || '')}${t.referencia ? ` (${esc(t.referencia)})` : ''}${boton}
+    <div style="color:var(--tx3);margin-left:8px;">${esc(t.donde || '')}</div></div>`;
+}
+
+/** Devuelve a la cola el picking a medio recoger de alguien que no está (pide
+ * el motivo) y refresca el equipo. @param {number} id */
+async function operarioReabrirPicking(id) {
+  // Reabrir pone lo recogido en CERO (`picking_service.reabrir_picking`): se
+  // dice antes, porque lo que esté en el carro hay que resolverlo a mano.
+  const motivo = await _modalTexto('Devolver a la cola',
+    'Lo que alcanzó a recoger queda en <b>cero</b>: quien retome la línea la recoge desde el principio. '
+    + 'Lo que esté en el carro de la persona que no está hay que devolverlo al hueco o entregárselo a quien la retome.<br><br>'
+    + '¿Por qué se devuelve? (obligatorio)',
+    { textoConfirmar: 'Devolver a la cola', textoCancelar: 'Volver' });
+  if (!motivo) return;
+  try {
+    const r = await put(`/api/picking/${id}/reabrir`, { motivo });
+    alerta((r && r.mensaje) || 'La línea volvió a la cola ✓', r && r.faltante_sin_caja ? 'advertencia' : 'exito');
+    await cargarOperarios();
+  } catch (e) { alerta(e.message || 'Error al devolver a la cola', 'error'); }
 }
 
 /** Fetch and render the team: presence, what each one has, and 7-day productivity. */
@@ -1875,7 +1910,7 @@ async function cargarOperarios() {
     if (!personas.length) { el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:40px;">Sin personal de bodega en este almacén</div>'; return; }
 
     const decidir = (eq.requieren_decision || []).map(d =>
-      `<div>· ${esc(d.nombre)} (${esc(d.presencia_texto)}): ${d.picking_en_curso ? `${esc(d.picking_en_curso)} picking a medio recoger` : ''}${d.picking_en_curso && d.empaque_en_curso ? ' y ' : ''}${d.empaque_en_curso ? `${esc(d.empaque_en_curso)} empaque a medio cerrar` : ''}</div>`).join('');
+      `<div style="margin-top:6px;"><b>${esc(d.nombre)}</b> (${esc(d.presencia_texto)}):${(d.tareas || []).map(_porDecidirHTML).join('')}</div>`).join('');
     const cabeza = `
       <div class="tabla-card" style="margin-bottom:8px;">
         <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);">En turno: ${esc(eq.en_turno)} de ${esc(personas.length)}</div>
@@ -1917,16 +1952,24 @@ function operarioFormAusencia(id) {
 /** Declara la ausencia; lo que tenía asignado vuelve a la cola. @param {number} id */
 async function operarioGuardarAusencia(id) {
   const motivo = document.getElementById(`aus-motivo-${id}`)?.value;
+  const desde = document.getElementById(`aus-desde-${id}`)?.value || null;
   const regreso = document.getElementById(`aus-regreso-${id}`)?.value || null;
   const nota = (document.getElementById(`aus-nota-${id}`)?.value || '').trim() || null;
+  // Un clic equivocado le devuelve a la cola lo pendiente de alguien que sí
+  // vino: se confirma, diciendo qué va a pasar.
+  const cuando = desde ? `desde el ${desde}` : 'desde hoy';
+  if (!await _modalConfirmar(
+      `Queda ausente ${cuando}${regreso ? ` hasta el día anterior al ${regreso}` : ', sin fecha de regreso'}.\n\n`
+      + 'Lo que tenga asignado y no haya empezado vuelve a la cola. Lo que esté haciendo en este momento no se le quita.',
+      { titulo: 'Marcar ausencia', textoConfirmar: 'Sí, marcar ausencia', textoCancelar: 'Volver' })) return;
   try {
-    const r = await post('/api/asignacion/ausencias', { usuario_id: id, motivo, regreso, nota });
+    const r = await post('/api/asignacion/ausencias', { usuario_id: id, motivo, desde, regreso, nota });
     const d = r.devuelto || {};
     const vuelven = [[d.conteos, 'conteo(s)'], [d.picking, 'picking'], [d.reposicion, 'reposición']]
       .filter(([n]) => n > 0).map(([n, t]) => `${n} ${t}`).join(', ');
     const pendiente = (d.requieren_decision || []).length;
     alerta('Ausencia registrada.' + (vuelven ? ` Volvieron a la cola: ${vuelven}.` : '')
-      + (pendiente ? ` Quedan ${pendiente} tarea(s) a medio hacer que usted tiene que decidir.` : ''),
+      + (pendiente ? ` Quedan ${pendiente} tarea(s) a medio hacer: están en «Por decidir», arriba de la lista, con dónde se resuelve cada una.` : ''),
       pendiente ? 'advertencia' : 'exito');
     await cargarOperarios();
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }

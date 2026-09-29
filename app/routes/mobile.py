@@ -78,6 +78,13 @@ def tarea_actual():
 
     avisos = obtener_avisos_pendientes(operario_id)
     if not resultado:
+        # Si no le llega nada porque figura ausente, se le dice (y qué hacer):
+        # una pantalla vacía no se distingue de «no hay trabajo».
+        from app.services.presencia import motivo_sin_trabajo_nuevo
+        ausente = motivo_sin_trabajo_nuevo(u)
+        if ausente:
+            return jsonify({'sin_tareas': True, 'ausente': True, 'mensaje': ausente,
+                            'avisos_pendientes': avisos}), 200
         return jsonify({'sin_tareas': True, 'mensaje': 'No tiene tareas pendientes', 'avisos_pendientes': avisos}), 200
     resultado['avisos_pendientes'] = avisos
     return jsonify(resultado), 200

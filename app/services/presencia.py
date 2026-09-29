@@ -93,14 +93,82 @@ def registrar_senal(usuario_id, ahora=None) -> None:
         return
     t = _ahora(ahora)
     try:
-        db.session.execute(
+        r = db.session.execute(
             db.text('UPDATE usuarios SET ultima_senal_at = :t '
                     'WHERE id = :uid AND (ultima_senal_at IS NULL OR ultima_senal_at < :antes)'),
             {'t': t, 'uid': int(usuario_id), 'antes': t - timedelta(minutes=1)})
+        if r.rowcount:
+            cerrar_ausencia_si_volvio(int(usuario_id), ahora=t)
         db.session.commit()
     except Exception as e:  # pragma: no cover — defensivo
         db.session.rollback()
         logger.warning('[PRESENCIA] no se pudo registrar la señal de #%s: %s', usuario_id, e)
+
+
+def cerrar_ausencia_si_volvio(usuario_id: int, *, ahora=None):
+    """La persona está trabajando (dio señal) y tiene una ausencia vigente
+    que **no dice hasta cuándo** y **empezó antes de hoy**: volvió. La ausencia
+    se cierra sola —queda anulada, con «regresó antes» en la bitácora— y la
+    persona recibe trabajo como cualquiera. No hace commit.
+
+    Existe porque «Regresa el» vacío es lo normal en una incapacidad (nadie
+    sabe cuándo termina), y sin esto el que volvió trabajaba con la ausencia
+    puesta: el barrido le quitaba de las manos lo que estaba contando cada
+    15 min hasta que el líder se acordara de quitarla (validación n1, P1-A).
+
+    Lo que **no** se cierra solo, a propósito:
+    - una ausencia con fecha de regreso futura: la declaró alguien que sabe
+      cuándo vuelve (unas vacaciones); si volvió antes, que la quite el líder;
+    - una que empezó **hoy**: puede ser la salida anticipada de quien está
+      terminando lo que tiene. Mientras tanto no recibe trabajo nuevo
+      (`motivo_sin_trabajo_nuevo`) y lo que tiene en curso no se le quita
+      (`asignacion.en_curso_abandonado`).
+
+    Devuelve la ausencia cerrada, o `None`.
+    """
+    from app.services.bitacora import registrar_accion
+    t = _ahora(ahora)
+    hoy = _dia(t)
+    a = ausencias_vigentes([usuario_id], hoy).get(usuario_id)
+    if a is None or a.regreso is not None or a.desde >= hoy:
+        return None
+    antes = a.to_dict()
+    a.anulada_en = t
+    a.anulada_por_id = None
+    a.motivo_anulacion = 'Regresó antes: volvió a trabajar (la ausencia no tenía fecha de regreso)'
+    registrar_accion('ANULAR', a, usuario_id=None, motivo=a.motivo_anulacion,
+                     antes=antes, despues=a.to_dict(), origen='señal de trabajo')
+    logger.info('[PRESENCIA] #%s volvió: se cierra su ausencia %s sin fecha de regreso',
+                usuario_id, a.id)
+    return a
+
+
+def motivo_sin_trabajo_nuevo(usuario, *, ahora=None):
+    """Por qué a ESTA persona, que está pidiendo trabajo, no se le da una tarea
+    nueva — o `None`. **Una política** para toda puerta de pull (cola unificada,
+    abastecedor, siguiente-tarea): el texto es el que ve en su pantalla.
+
+    Solo la ausencia vigente la frena (la que no se cerró sola por
+    `cerrar_ausencia_si_volvio`). Lo que ya tiene empezado lo puede terminar.
+    """
+    if usuario is None:
+        return None
+    e = estado(usuario, ahora=ahora)
+    if e['codigo'] != AUSENTE:
+        return None
+    return (f'Usted figura ausente ({texto_ausencia_de(e["ausencia"])}), así que no recibe '
+            'tareas nuevas. Si ya volvió a trabajar, pídale a su jefe que le quite la '
+            'ausencia en Operarios.')
+
+
+def texto_ausencia_de(d: dict) -> str:
+    """`texto_ausencia` a partir del `to_dict()` de la ausencia."""
+    from app.models.ausencia import MotivoAusencia
+    base = MotivoAusencia.TEXTO.get(d.get('motivo'), d.get('motivo') or 'ausencia').lower()
+    if d.get('regreso'):
+        r = datetime.strptime(d['regreso'], '%Y-%m-%d').date()
+        return f'{base} — regresa el {_fecha_corta(r)}'
+    return f'{base} — sin fecha de regreso'
 
 
 def registrar_senal_de_peticion() -> None:
@@ -284,7 +352,7 @@ def declarar_ausencia(usuario_id: int, motivo: str, *, por_id: int, desde=None,
     if a.cubre(hoy):
         from app.services import asignacion
         devuelto = asignacion.devolver_trabajo_de(
-            u.id, motivo=asignacion.MOTIVO_AUSENCIA, incluir_en_curso=True, por_id=por_id)
+            u.id, motivo=asignacion.MOTIVO_AUSENCIA, en_curso_desde=a.registrada_en, por_id=por_id)
     db.session.commit()
     logger.info('[PRESENCIA] Ausencia %s de #%s (%s → %s) por #%s; devuelto: %s',
                 motivo, u.id, d_desde, d_regreso, por_id, devuelto)

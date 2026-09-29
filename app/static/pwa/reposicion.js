@@ -676,6 +676,17 @@ async function abastCargarTarea() {
   const cont = document.getElementById('abast-contenido');
   try {
     const d = await get('/api/reposicion/tarea-actual');
+    if (d.sin_tareas && d.ausente) {
+      // Figura ausente: se le dice por qué no le llega nada, y qué hacer.
+      ABAST_TAREA = null;
+      if (cont) cont.innerHTML = `
+        <div style="text-align:center;padding:60px 20px;">
+          <div style="font-size:48px;margin-bottom:16px;">🚫</div>
+          <div style="font-size:var(--fs-lg);font-weight:700;color:var(--tx);">No le llegan tareas nuevas</div>
+          <div style="font-size:var(--fs-sm);color:var(--tx2);margin-top:8px;line-height:1.5;">${esc(d.mensaje)}</div>
+        </div>`;
+      return;
+    }
     if (d.sin_tareas) {
       ABAST_TAREA = null;
       if (cont) cont.innerHTML = `
