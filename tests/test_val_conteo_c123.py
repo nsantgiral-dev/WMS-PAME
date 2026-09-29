@@ -212,7 +212,8 @@ class TestLaCosturaConSinFilaEsCero:
         assert raiz.estado == 'DESCUADRE'
         assert (_svc().motivo_no_sale_solo(raiz) or {}).get('codigo') == 'SIN_FILA_EN_SIESA'
 
-    def test_el_admin_la_firma_y_el_costo_llega_al_142951(self, db, siesa, dos_huecos):
+    def test_el_admin_la_firma_y_el_costo_llega_al_142951(self, db, siesa, dos_huecos,
+                                                           monkeypatch):
         """La firma es de VAL-12 (el admin); el COSTO es la política de David
         (f74ff44e, `costo_entrada_ajuste`: en vivo contra InvFecha de las otras
         bodegas al aprobar). Sin foto de costo, el tope no la valoriza."""
@@ -230,6 +231,33 @@ class TestLaCosturaConSinFilaEsCero:
         _svc().confirmar_ajuste(raiz.id, admin.id)
         job = SiesaJob.query.filter_by(tipo='AJUSTE_CONTEO', referencia_id=raiz.id).one()
         assert json.loads(job.payload)['costo_unitario'] == 250
+        # Y el job se lo pasa al 142951.
+        from app.services.connekta_gateway import ConnektaGateway
+        from app.services.siesa_job_service import _ejecutar_job
+        vistos = []
+        monkeypatch.setattr(ConnektaGateway, 'enviar_ajuste_inventario',
+                            lambda self, **kw: vistos.append(kw) or {'codigo': 0})
+        _ejecutar_job(job)
+        assert [v.get('costo_unitario') for v in vistos] == [250]
+
+    def test_si_solo_el_segundo_conteo_no_tenia_fila_la_raiz_lo_sabe(
+            self, db, siesa, dos_huecos):
+        """La raíz lleva la observación que resolvió (`_copiar_observacion`),
+        con su marca: si el CC2 se contó contra la fila en cero, la entrada sigue
+        siendo del admin."""
+        from app.models.conteo import SesionConteo
+        siesa.poner(existencia=0, costo=1000.0)            # CC1: fila real en 0
+        s = _raiz_manual(dos_huecos)
+        _svc().obtener_tarea_operario(s.id, dos_huecos['a'].id)
+        r1 = contar_primero(s.id, dos_huecos['a'].id, 5)
+        siesa.fila = None                                   # CC2: Siesa ya no tiene fila
+        siesa.en_maestro = True
+        _svc().obtener_tarea_operario(r1['segundo_conteo_id'], dos_huecos['b'].id)
+        _svc().registrar_conteo(r1['segundo_conteo_id'], dos_huecos['b'].id, 5)
+        raiz = db.session.get(SesionConteo, s.id)
+        assert raiz.sin_fila_en_siesa is True
+        assert 'la aprueba el admin' in (_svc().motivo_no_puede_aprobar(
+            dos_huecos['supervisor'], raiz) or '')
 
 
 class TestUnSoloAdmin:
