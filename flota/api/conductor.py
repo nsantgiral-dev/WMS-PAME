@@ -111,6 +111,7 @@ def _rendimiento_del_turno(vehiculo_id):
         # prestada.
         'ventanas': r['ventanas'],
         'tanqueos_fuera_por_parcial': r['tanqueos_fuera_por_parcial'],
+        'tanqueos_fuera_por_km': r['tanqueos_fuera_por_km'],
         'dias_historia': r['dias_historia'],
         'base': ('kilómetros y galones sumados sobre las ventanas de tanque '
                  'lleno a tanque lleno de ESTE vehículo'),
@@ -296,9 +297,10 @@ def mi_turno():
         candidatos=candidatos,
     )
 
+    from flota.api.custodia import _lecturas_dominio, km_plausible_json
+
     km = SIN_DATO
     if turno.vehiculo_id is not None:
-        from flota.api.custodia import _lecturas_dominio
         km = dom_odo.odometro_actual(_lecturas_dominio(turno.vehiculo_id))
 
     return jsonify({
@@ -346,6 +348,11 @@ def mi_turno():
         'requiere_confirmacion': turno.requiere_confirmacion,
         # `sin_dato` viaja como palabra: un vehículo sin lecturas no tiene 0 km.
         'odometro_actual': km if km is not SIN_DATO else str(SIN_DATO),
+        # Con qué compara el teléfono el km que se escriba (2026-09-27): el
+        # último que cuenta y el techo de km por día. La pantalla PREGUNTA,
+        # no rechaza; el servidor no lo usa para nada.
+        'km_plausible': (km_plausible_json(turno.vehiculo_id)
+                         if turno.vehiculo_id is not None else None),
         'tiene_turno_abierto': vigente is not None,
         # Todas sus rutas de hoy ya se cerraron: sin turno abierto, el día
         # terminó (la tarjeta no ofrece recibir otra vez; queda el escape).

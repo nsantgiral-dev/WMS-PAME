@@ -131,12 +131,13 @@ class TestLaFronteraHTTP:
     def test_la_correccion_sigue_exigiendo_motivo(
             self, client, jwt_token_admin, vehiculo):
         """Habilitarla en el selector no relajó su regla."""
-        client.post('/flota/odometro',
-                    json={'placa': vehiculo, 'valor_km': 5000, 'origen': 'tanqueo'},
-                    headers=_auth(jwt_token_admin))
+        previa = client.post('/flota/odometro',
+                             json={'placa': vehiculo, 'valor_km': 5000, 'origen': 'tanqueo'},
+                             headers=_auth(jwt_token_admin))
         r = client.post('/flota/odometro',
                         json={'placa': vehiculo, 'valor_km': 4000,
-                              'origen': 'correccion'},
+                              'origen': 'correccion',
+                              'anula_lectura_id': previa.get_json()['lectura_id']},
                         headers=_auth(jwt_token_admin))
         assert r.status_code == 409
 

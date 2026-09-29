@@ -89,8 +89,16 @@ class TestElCasoTHP696:
         assert '16697948' in str(e.value)
 
     def test_la_correccion_se_acepta(self, envenenada):
-        """Ya funcionaba: `correccion` salta la monotonía. No es el arreglo."""
-        validar_lectura(envenenada, _correccion(55400, minutos=400 * 60))
+        """Una corrección NUEVA dice qué lectura anula (2026-09-27); sin eso se
+        rechaza. Las de este archivo que ya están en la serie son correcciones
+        VIEJAS —sin `anula_lectura_id`— y conservan su ventana: es lo que prueba
+        el resto del archivo. La semántica nueva: `test_odometro_no_se_envenena`."""
+        from dataclasses import replace
+        serie = [replace(envenenada[0], id=1), replace(envenenada[1], id=2)]
+        validar_lectura(serie, replace(_correccion(55400, minutos=400 * 60),
+                                       anula_lectura_id=2))
+        with pytest.raises(LecturaRechazada, match='anula UNA lectura'):
+            validar_lectura(serie, _correccion(55400, minutos=400 * 60))
 
     def test_y_DESPUES_de_la_correccion_el_camion_vuelve_a_medirse(self, envenenada):
         """**El arreglo.** Antes del 2026-09-01 esto levantaba `LecturaRechazada`

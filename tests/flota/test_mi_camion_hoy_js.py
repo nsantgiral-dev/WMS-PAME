@@ -153,6 +153,10 @@ def _turno(**extra):
         },
         'rendimiento': None, 'origen': 'ruta', 'vehiculo_id': 3, 'placa': 'THP696',
         'requiere_confirmacion': True, 'odometro_actual': 120500,
+        # Con qué compara el teléfono el km escrito (2026-09-27). `None` =
+        # sin lecturas que cuenten: la pantalla no pregunta. Los tests de
+        # plausibilidad lo siembran.
+        'km_plausible': None,
         'tiene_turno_abierto': False, 'ruta_de_hoy_cerrada': False,
         'candidatos': [{'vehiculo_id': 3, 'placa': 'THP696', 'tipo': 'NHR',
                         'ocupado_por': None}],

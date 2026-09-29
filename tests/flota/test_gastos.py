@@ -171,16 +171,27 @@ class TestLaLecturaSeAnclaNoSeFabrica:
         assert LecturaOdometro.query.filter_by(
             vehiculo_id=mundo['vehiculo_id']).count() == 2
 
-    def test_un_odometro_que_retrocede_no_entra_por_esta_puerta(self, app, db, mundo):
+    def test_un_odometro_que_retrocede_entra_TARDIO_y_no_mueve_el_odometro(
+            self, app, db, mundo):
         """La validación de monotonía es del dominio y la hereda el gasto por
-        usar la misma política. Una segunda puerta con su propia validación es
-        cómo se abre el agujero."""
-        from flota.dominio.errores import ErrorFlota
+        usar la misma política — pero un gasto NO se pierde por el km
+        (2026-09-27, P1-5): el tanqueo que llega después de lecturas con más
+        km entra `tardia`, en duda, con su motivo, y sin mover el odómetro.
+        Antes era un 409 que se llevaba la plata del registro."""
+        from flota.adaptadores.modelos import LecturaOdometro
+        from flota.dominio import odometro as dom_odo
 
         _tanquear(mundo, km=100392)
-        with pytest.raises(ErrorFlota):
-            _tanquear(mundo, km=100000, documento_numero='F-2',
+        g = _tanquear(mundo, km=100000, documento_numero='F-2',
                       ts=datetime(2026, 3, 20, 10, 0))
+        lectura = g.gasto.lectura
+        assert lectura.valor_km == 100000
+        assert lectura.serie == dom_odo.SERIE_TARDIA
+        assert lectura.confianza == 'dudosa'
+        assert dom_odo.MOTIVO_TARDIA in lectura.motivo_dudosa
+        filas = LecturaOdometro.query.filter_by(
+            vehiculo_id=mundo['vehiculo_id']).all()
+        assert dom_odo.odometro_actual([l.a_dominio() for l in filas]) == 100392
 
 
 class TestElGastoDeEscritorioNoInventaUnOrigen:
@@ -806,14 +817,18 @@ class TestLaFronteraNoAflojaNingunaPolitica:
                         headers=_auth(mundo['t_flota']))
         assert r.status_code == 400
 
-    def test_un_odometro_que_retrocede_da_409_no_500(self, client, mundo):
-        client.post('/flota/tanqueos', json=_cuerpo_tanqueo(mundo['placa'], km=100392),
-                    headers=_auth(mundo['t_flota']))
+    def test_un_odometro_que_retrocede_entra_tardio_y_lo_dice(self, client, mundo):
+        """Antes: 409 y el gasto perdido. Ahora: 201 y la pantalla sabe que
+        quedó en revisión (`km_tardio`)."""
+        r0 = client.post('/flota/tanqueos', json=_cuerpo_tanqueo(mundo['placa'], km=100392),
+                         headers=_auth(mundo['t_flota']))
+        assert r0.get_json()['km_tardio'] is False
         r = client.post('/flota/tanqueos',
                         json=_cuerpo_tanqueo(mundo['placa'], km=100000,
                                              documento_numero='F-2'),
                         headers=_auth(mundo['t_flota']))
-        assert r.status_code == 409
+        assert r.status_code == 201, r.get_json()
+        assert r.get_json()['km_tardio'] is True
 
 
 class TestLoQueLaPantallaRecibe:

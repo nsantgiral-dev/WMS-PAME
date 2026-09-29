@@ -16,6 +16,18 @@ from flota.dominio.errores import LecturaRechazada
 from flota.dominio.valores import SIN_DATO, Confianza, Lectura, OrigenLectura
 
 
+#: El lugar de una lectura en la serie del odómetro (2026-09-27). Palabras y
+#: no un booleano (regla 4). `None` en la base = anterior a la marca: cuenta.
+SERIE_CUENTA = 'cuenta'
+#: Un salto que no se explica (×10 o km en cero tiempo): NO sube el tope ni
+#: mueve el odómetro hasta que una persona lo verifique.
+SERIE_SALTO = 'salto'
+#: Llegó DESPUÉS de lecturas con más km (un tanqueo sincronizado tarde): se
+#: guarda para no perder el gasto, en duda, y nunca mueve el odómetro.
+SERIE_TARDIA = 'tardia'
+SERIES = (SERIE_CUENTA, SERIE_SALTO, SERIE_TARDIA)
+
+
 def validar_lectura(previas: Sequence[Lectura], nueva: Lectura) -> None:
     """Acepta o rechaza una lectura nueva contra el historial del vehículo.
 
@@ -26,10 +38,17 @@ def validar_lectura(previas: Sequence[Lectura], nueva: Lectura) -> None:
     foto del tablero es otra cosa y vive en otra parte. Esto solo dice que la
     serie sigue siendo una serie.
 
-    Regla: el odómetro nunca decrece. La única excepción es una lectura con
-    `origen = correccion`, que además exige motivo escrito y autor — porque una
-    corrección sin motivo es indistinguible de un error de digitación, y el
-    punto de permitirla es dejar rastro de quién decidió y por qué.
+    Regla: el odómetro nunca decrece **respecto de las lecturas que cuentan**
+    (`lecturas_que_cuentan`: sin las anuladas, sin los saltos que nadie
+    verificó, sin las tardías). Un salto de ×10 tecleado por error ya no sube
+    el tope para las siguientes (2026-09-27): antes, 125.000 donde iba 12.500
+    dejaba el camión trabado — todo lo que viniera después daba 409.
+
+    **La corrección anula UNA lectura** (`anula_lectura_id`), con motivo
+    escrito y autor, y su propio valor es el odómetro de ahora: tiene que
+    cuadrar con el resto de la serie, sin la anulada. Hasta el 2026-09-27 la
+    corrección no apuntaba a nada, no se validaba, y dejaba atrás TODA la
+    historia anterior (el CPK del mes salía +61%).
 
     Levanta `LecturaRechazada` si no se puede aceptar. No devuelve un valor
     corregido: en la frontera no se degrada hacia el éxito (regla 5).
@@ -43,56 +62,88 @@ def validar_lectura(previas: Sequence[Lectura], nueva: Lectura) -> None:
             )
         if not nueva.autor_usuario_id:
             raise LecturaRechazada('una corrección exige autor: el punto es dejar rastro')
+        if nueva.anula_lectura_id is None:
+            raise LecturaRechazada(
+                'una corrección anula UNA lectura: diga cuál (anula_lectura_id). '
+                'Sin eso borraría la historia entera, no el error')
+        anulada = next((l for l in previas if l.id == nueva.anula_lectura_id), None)
+        if anulada is None:
+            raise LecturaRechazada(
+                f'la lectura {nueva.anula_lectura_id} no es de este vehículo')
+        if nueva.anula_lectura_id in anuladas(previas):
+            raise LecturaRechazada(
+                f'la lectura {nueva.anula_lectura_id} ya se anuló: una lectura '
+                f'se anula una sola vez')
+        resto = [l for l in previas if l.id != nueva.anula_lectura_id]
+        _exigir_que_no_decrezca(resto, nueva)
         return
 
     if not previas:
         return
+    _exigir_que_no_decrezca(previas, nueva)
 
-    # El tope es el MÁXIMO histórico, no la última lectura: si ya se registró
-    # 100.450, una lectura de 100.000 decrece aunque la anterior fuera menor.
-    #
-    # …pero solo desde la última CORRECCIÓN. Una corrección declara «de acá en
-    # adelante, esto es lo cierto», y lo anterior deja de ser el piso.
-    #
-    # ── POR QUÉ, Y QUÉ COSTABA (2026-09-01) ──────────────────────────────────
-    # Sin esta ventana, una lectura envenenada trababa el vehículo PARA
-    # SIEMPRE, y la vía de escape que este mismo mensaje recomienda no
-    # funcionaba. Medido sobre el caso real de THP696, que tiene una lectura de
-    # 16.697.948 km registrada el 2026-08-18 (+16.354.514 en 312 horas):
-    #
-    #     lectura real 55.400                → RECHAZADA
-    #     se corrige con un registro nuevo   → aceptada
-    #     lectura normal 55.450 después      → RECHAZADA otra vez
-    #
-    # El máximo seguía incluyendo los 16,7 millones. El operario quedaba
-    # obligado a marcar TODA lectura futura como `correccion` con motivo
-    # escrito —o sea, a mentir— y `correccion` salta la validación entera: el
-    # vehículo perdía la protección justo por usar el mecanismo diseñado para
-    # protegerlo.
-    #
-    # La tabla es append-only por trigger (`UPDATE` y `DELETE` bloqueados), así
-    # que la corrección **no puede** ser editar la fila mala. Tiene que ser un
-    # registro nuevo que la supersede — que es lo que el mensaje del propio
-    # trigger dice: «se corrige con un registro nuevo». Esto lo vuelve cierto.
-    #
-    # Empates de `ts` cuentan hacia adentro de la ventana, o sea hacia el lado
-    # ESTRICTO: en producción hay diez lecturas con el mismo timestamp al
-    # segundo, y ante el empate conviene rechazar de más y no de menos.
-    # ─────────────────────────────────────────────────────────────────────────
-    vigentes, desde = vigentes_tras_la_ultima_correccion(previas)
 
-    if not vigentes:            # pragma: no cover — `desde` sale de `previas`
+def _exigir_que_no_decrezca(previas: Sequence[Lectura], nueva: Lectura) -> None:
+    """El tope es el MÁXIMO de las lecturas que cuentan, no la última: si ya se
+    registró 100.450, una lectura de 100.000 decrece aunque la anterior fuera
+    menor. Empates de `ts` cuentan hacia adentro (el lado estricto)."""
+    vigentes = lecturas_que_cuentan(previas)
+    if not vigentes:
         return
-
     tope = max(l.valor_km for l in vigentes)
     if nueva.valor_km < tope:
-        _desde = (f' (desde la corrección del {desde:%Y-%m-%d %H:%M})'
-                  if desde is not None else '')
+        _vig, desde = vigentes_tras_la_ultima_correccion(previas)
+        _cuando = (f' (desde la corrección del {desde:%Y-%m-%d %H:%M})'
+                   if desde is not None else '')
         raise LecturaRechazada(
             f'el odómetro no puede decrecer: {nueva.valor_km} < {tope}'
-            f'{_desde}. Si el valor es correcto, se registra con '
-            f'origen=correccion y motivo.'
+            f'{_cuando}. Si el número del tablero es ese, control de flota '
+            f'anula la lectura equivocada.'
         )
+
+
+def anuladas(lecturas: Sequence[Lectura]) -> set:
+    """Los ids de las lecturas que una corrección anuló."""
+    return {l.anula_lectura_id for l in lecturas if l.anula_lectura_id is not None}
+
+
+def cuenta_en_la_serie(l: Lectura, ids_anulados) -> bool:
+    """¿Esta lectura dice cuánto marca el odómetro? La pregunta, UNA vez.
+
+    No cuenta: la anulada; el salto que nadie verificó; la tardía (llegó
+    después de lecturas con más km: es del pasado, nunca mueve el odómetro).
+    """
+    if l.id is not None and l.id in ids_anulados:
+        return False
+    if l.serie == SERIE_TARDIA:
+        return False
+    if l.serie == SERIE_SALTO and l.confianza != Confianza.VERIFICADA:
+        return False
+    return True
+
+
+def lecturas_que_cuentan(previas: Sequence[Lectura]) -> List[Lectura]:
+    """Las lecturas con las que se decide: el tope, el odómetro vigente, el
+    ritmo y el preventivo. Las que una corrección vieja (sin
+    `anula_lectura_id`) dejó atrás tampoco — esa ventana se conserva para las
+    correcciones de antes del 2026-09-27."""
+    vigentes, _desde = vigentes_tras_la_ultima_correccion(previas)
+    ids = anuladas(previas)
+    return [l for l in vigentes if cuenta_en_la_serie(l, ids)]
+
+
+def fuera_de_la_serie(previas: Sequence[Lectura]) -> dict:
+    """Cuántas lecturas NO cuentan, y por qué — para declararlo, no esconderlo."""
+    ids = anuladas(previas)
+    return {
+        'anuladas': sum(1 for l in previas if l.id is not None and l.id in ids),
+        'saltos_sin_verificar': sum(
+            1 for l in previas if l.serie == SERIE_SALTO
+            and l.confianza != Confianza.VERIFICADA
+            and not (l.id is not None and l.id in ids)),
+        'tardias': sum(1 for l in previas if l.serie == SERIE_TARDIA
+                       and not (l.id is not None and l.id in ids)),
+    }
 
 
 def vigentes_tras_la_ultima_correccion(
@@ -121,12 +172,18 @@ def vigentes_tras_la_ultima_correccion(
     Empates de `ts` cuentan hacia ADENTRO de la ventana: en producción hay diez
     lecturas con el mismo segundo, y ante el empate conviene incluir de más.
     """
+    ids = anuladas(previas)
+    sin_anuladas = [l for l in previas if not (l.id is not None and l.id in ids)]
+    # Solo las correcciones VIEJAS —sin `anula_lectura_id`, de antes del
+    # 2026-09-27— abren ventana. La nueva anula una sola lectura y la historia
+    # anterior sigue contando.
     correcciones = [l.ts for l in previas
-                    if l.origen == OrigenLectura.CORRECCION]
+                    if l.origen == OrigenLectura.CORRECCION
+                    and l.anula_lectura_id is None]
     if not correcciones:
-        return list(previas), None
+        return sin_anuladas, None
     desde = max(correcciones)
-    return [l for l in previas if l.ts >= desde], desde
+    return [l for l in sin_anuladas if l.ts >= desde], desde
 
 
 def odometro_actual(lecturas: Sequence[Lectura]) -> Union[int, str]:
@@ -143,11 +200,14 @@ def odometro_actual(lecturas: Sequence[Lectura]) -> Union[int, str]:
     todo CPK y todo preventivo por kilometraje aguas abajo en un número
     inventado con cara de medición.
     """
-    if not lecturas:
+    cuentan = lecturas_que_cuentan(lecturas)
+    if not cuentan:
         return SIN_DATO
     # La más reciente por marca de tiempo, no la de mayor kilometraje: una
-    # corrección posterior debe ganarle a la lectura que corrige.
-    return max(lecturas, key=lambda l: l.ts).valor_km
+    # corrección posterior debe ganarle a la lectura que corrige. Solo entre
+    # las que cuentan (2026-09-27): un salto sin verificar, una anulada o una
+    # tardía no son «el odómetro de ahora».
+    return max(cuentan, key=lambda l: (l.ts, l.valor_km)).valor_km
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -202,6 +262,48 @@ def odometro_actual(lecturas: Sequence[Lectura]) -> Union[int, str]:
 FACTOR_SALTO_SOSPECHOSO = 10
 
 
+def _salto_en_cero_tiempo(valor_km, ts, previa_valor_km, previa_ts) -> Optional[str]:
+    """Regla 2 · Δt = 0 con Δkm > 0: velocidad infinita (un hecho, no un umbral)."""
+    if previa_valor_km is None or previa_ts is None:
+        return None
+    delta_km = valor_km - previa_valor_km
+    if ts == previa_ts and delta_km > 0:
+        return (f'{delta_km} km recorridos en cero tiempo: la lectura anterior '
+                f'tiene exactamente la misma marca de tiempo')
+    return None
+
+
+def _salto_de_orden_de_magnitud(valor_km, previa_valor_km) -> Optional[str]:
+    """Regla 3 · salto de ×10 (EL umbral, ver `FACTOR_SALTO_SOSPECHOSO`)."""
+    if previa_valor_km is None:
+        return None
+    if previa_valor_km > 0 and valor_km >= previa_valor_km * FACTOR_SALTO_SOSPECHOSO:
+        veces = valor_km // previa_valor_km
+        return (f'salto de ×{veces} respecto de la lectura anterior '
+                f'({previa_valor_km} → {valor_km}): un orden de magnitud no se '
+                f'explica por un dígito mal tecleado')
+    return None
+
+
+#: El motivo escrito de una lectura tardía.
+MOTIVO_TARDIA = ('llegó después de lecturas con más kilómetros (se registró sin '
+                 'señal y se mandó tarde): se guarda para no perder el gasto, '
+                 'queda para revisión y no mueve el odómetro')
+
+
+def serie_al_nacer(*, valor_km: int, ts: datetime, previa_valor_km: Optional[int],
+                   previa_ts: Optional[datetime], tardia: bool) -> str:
+    """Dónde entra una lectura nueva en la serie. Mismas reglas de salto que
+    `confianza_al_nacer` (las mismas funciones): un salto nace dudoso Y fuera
+    del tope, nunca una cosa sin la otra. `previa` es la última que CUENTA."""
+    if tardia:
+        return SERIE_TARDIA
+    if (_salto_en_cero_tiempo(valor_km, ts, previa_valor_km, previa_ts)
+            or _salto_de_orden_de_magnitud(valor_km, previa_valor_km)):
+        return SERIE_SALTO
+    return SERIE_CUENTA
+
+
 def confianza_al_nacer(
     *,
     valor_km: int,
@@ -209,6 +311,7 @@ def confianza_al_nacer(
     tiene_foto: bool,
     previa_valor_km: Optional[int],
     previa_ts: Optional[datetime],
+    tardia: bool = False,
 ) -> Tuple[Confianza, Optional[str]]:
     """Con qué confianza nace una lectura, y **por qué**.
 
@@ -250,38 +353,27 @@ def confianza_al_nacer(
         motivos.append('sin foto del tablero: el número no se puede cotejar '
                        'contra el vehículo')
 
-    if previa_valor_km is not None and previa_ts is not None:
-        delta_km = valor_km - previa_valor_km
+    # ── Regla 2 · Δt = 0 con Δkm > 0 (un hecho, no un umbral) ────────────
+    # Velocidad infinita. La comparación es de igualdad exacta y no «menos de
+    # N segundos» justamente para que siga siendo un hecho (regla 13). En
+    # producción hay diez lecturas con el mismo segundo (reintento del
+    # 2026-08-03) con Δkm = 0: el mismo km dos veces es un duplicado, no un
+    # viaje imposible, y no se marca.
+    #
+    # ── Regla 3 · salto de ×10 (EL umbral, ver FACTOR_SALTO_SOSPECHOSO) ──
+    # `previa_valor_km > 0` no es defensiva: con un odómetro anterior en 0 el
+    # factor no está definido. 0 → 100 son 100 km, lo más normal del mundo.
+    #
+    # Las dos viven en funciones que `serie_al_nacer` también usa: lo que nace
+    # dudoso por salto nace fuera del tope, con la misma definición.
+    for regla in (_salto_en_cero_tiempo(valor_km, ts, previa_valor_km, previa_ts),
+                  _salto_de_orden_de_magnitud(valor_km, previa_valor_km)):
+        if regla:
+            motivos.append(regla)
 
-        # ── Regla 2 · Δt = 0 con Δkm > 0 (un hecho, no un umbral) ────────────
-        # Velocidad infinita. No hace falta saber cuánto rinde un camión para
-        # afirmar que no recorre kilómetros en cero tiempo.
-        #
-        # La comparación es de igualdad exacta y no «menos de N segundos»
-        # justamente para que siga siendo un hecho: cualquier ventana sería un
-        # umbral inventado, y la regla 13 lo prohíbe hasta que haya medición.
-        #
-        # No es hipotético: en producción hay diez lecturas con el mismo segundo
-        # (`lecturas_ts_duplicado`), del reintento del 2026-08-03. Las de aquel
-        # reintento traen Δkm = 0 y por eso NO se marcan — el mismo kilometraje
-        # dos veces es un duplicado, no un viaje imposible.
-        if ts == previa_ts and delta_km > 0:
-            motivos.append(
-                f'{delta_km} km recorridos en cero tiempo: la lectura anterior '
-                f'tiene exactamente la misma marca de tiempo')
-
-        # ── Regla 3 · salto de ×10 (EL umbral, ver FACTOR_SALTO_SOSPECHOSO) ──
-        #
-        # `previa_valor_km > 0` no es una guarda defensiva: con un odómetro
-        # anterior en 0 el factor **no está definido** (0 × 10 = 0, y cualquier
-        # número sería un salto infinito). Un vehículo cuya primera lectura fue 0
-        # y que ahora marca 100 hizo 100 km, que es lo más normal del mundo.
-        if previa_valor_km > 0 and valor_km >= previa_valor_km * FACTOR_SALTO_SOSPECHOSO:
-            veces = valor_km // previa_valor_km
-            motivos.append(
-                f'salto de ×{veces} respecto de la lectura anterior '
-                f'({previa_valor_km} → {valor_km}): un orden de magnitud no se '
-                f'explica por un dígito mal tecleado')
+    # ── Regla 4 · tardía (2026-09-27): un hecho que el adaptador comprobó ──
+    if tardia:
+        motivos.append(MOTIVO_TARDIA)
 
     if motivos:
         return Confianza.DUDOSA, ' · '.join(motivos)
@@ -415,7 +507,7 @@ def km_por_dia(lecturas: Sequence[Lectura]) -> RitmoDeUso:
     sola lectura devuelve `SIN_DATO`. Confundirlos convertiría «no sabemos» en
     «está parado», y de ahí en «nunca va a llegar al cambio de correa».
     """
-    vigentes, _desde = vigentes_tras_la_ultima_correccion(lecturas)
+    vigentes = lecturas_que_cuentan(lecturas)
     n = len(vigentes)
 
     if n < 2:
@@ -462,7 +554,47 @@ def km_por_dia(lecturas: Sequence[Lectura]) -> RitmoDeUso:
                       n=n, dias=dias)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ¿Es creíble este kilometraje? — la pregunta del teléfono (2026-09-27)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# **No es una regla de confianza ni un rechazo.** Es el techo a partir del cual
+# la PANTALLA del conductor le pregunta «¿seguro?» antes de mandar: 125.000
+# donde iba 12.500 se ataja en el patio, no en la cola de verificación tres
+# días después. El servidor no lo usa para nada: su única marca por salto
+# sigue siendo el ×10 (regla 13: un umbral de km/día no se fija sin
+# medición). Por eso los números van con nombre, son provisionales, y viajan
+# en la respuesta para que se vea de dónde salió la pregunta.
+
+#: Cuántas veces el ritmo medido de ESTE vehículo se tolera antes de preguntar.
+FACTOR_RITMO_PLAUSIBLE = 3
+#: Piso del techo con ritmo medido: un vehículo que casi no rueda también
+#: puede hacer un viaje largo.
+KM_DIA_PLAUSIBLE_MINIMO = 400
+#: Techo sin ritmo medido (menos de dos lecturas que cuenten, o tramo dudoso).
+KM_DIA_PLAUSIBLE_SIN_HISTORIA = 800
+
+
+def techo_km_por_dia(ritmo: 'RitmoDeUso') -> dict:
+    """El techo de km por día a partir del cual el teléfono pregunta, y de
+    dónde sale. Provisional y declarado (ver el encabezado de la sección)."""
+    if isinstance(ritmo.km_dia, Decimal) and ritmo.marca != SIN_DATO:
+        techo = max(KM_DIA_PLAUSIBLE_MINIMO,
+                    int(ritmo.km_dia * FACTOR_RITMO_PLAUSIBLE))
+        return {'km_dia': techo, 'base': (
+            f'{FACTOR_RITMO_PLAUSIBLE} veces lo que suele rodar este vehículo '
+            f'(~{int(ritmo.km_dia)} km por día sobre {ritmo.n} lecturas), '
+            f'mínimo {KM_DIA_PLAUSIBLE_MINIMO}')}
+    return {'km_dia': KM_DIA_PLAUSIBLE_SIN_HISTORIA, 'base': (
+        f'sin ritmo medido de este vehículo: {KM_DIA_PLAUSIBLE_SIN_HISTORIA} '
+        f'km por día, provisional')}
+
+
 __all__ = ['validar_lectura', 'odometro_actual', 'confianza_al_nacer',
+           'serie_al_nacer', 'lecturas_que_cuentan', 'cuenta_en_la_serie',
+           'fuera_de_la_serie', 'anuladas', 'techo_km_por_dia',
+           'SERIE_CUENTA', 'SERIE_SALTO', 'SERIE_TARDIA', 'SERIES',
+           'MOTIVO_TARDIA',
            'confianza_del_tramo', 'vigentes_tras_la_ultima_correccion',
            'km_por_dia', 'RitmoDeUso',
            'FACTOR_SALTO_SOSPECHOSO', 'SIN_DATO']

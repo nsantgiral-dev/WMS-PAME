@@ -57,6 +57,7 @@ const FLOTA_CLASE_SENAL = {
   galones: 'Más combustible del que el recorrido gasta',
   precio_galon: 'Galón más caro que el resto de la flota',
   turno_de_la_ruta: 'La ruta de hoy no es de quien tiene el turno',
+  tanqueos_no_llenos: 'Casi ningún tanqueo se marca lleno',
 };
 
 /** Los códigos que viajan como VALOR en la evidencia de una señal. Antes se
@@ -491,6 +492,8 @@ const FLOTA_EVIDENCIA = {
   valor: ['Valor de la factura', 'pesos'], precio_galon: ['Precio del galón', 'pesos'],
   mediana_flota: ['Lo habitual en la flota (mediana)', 'pesos'],
   conductor_de_la_ruta: ['Conductor de la ruta', 'texto'],
+  tanqueos: ['Tanqueos en la ventana', 'entero'],
+  no_llenos: ['Marcados «no lo llené»', 'entero'],
 };
 
 function flotaEvidenciaValor(tipo, v) {

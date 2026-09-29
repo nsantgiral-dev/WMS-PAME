@@ -51,13 +51,15 @@ _T0 = datetime(2026, 8, 1, 5, 0)
 _AUTOR = 77
 
 
-def _lectura(km, minutos, origen=OrigenLectura.ENTREGA, motivo=None):
+def _lectura(km, minutos, origen=OrigenLectura.ENTREGA, motivo=None,
+             id=None, anula=None):
     return Lectura(
         valor_km=km,
         ts=_T0 + timedelta(minutes=minutos),
         origen=origen,
         autor_usuario_id=_AUTOR,
         motivo_correccion=motivo,
+        id=id, anula_lectura_id=anula,
     )
 
 
@@ -89,20 +91,22 @@ class TestInvarianteMonotonia:
 
     def test_una_correccion_con_motivo_y_autor_si_puede_decrecer(self):
         """La única puerta. Existe para dejar rastro de quién decidió y por qué."""
-        previas = [_lectura(100_000, 0)]
+        previas = [_lectura(100_000, 0, id=1)]
         correccion = _lectura(
             99_500, 60,
             origen=OrigenLectura.CORRECCION,
             motivo='digitación: se registró 100000 en vez de 99500',
+            anula=1,
         )
         dom_odometro.validar_lectura(previas, correccion)  # no levanta
 
     def test_una_correccion_sin_motivo_se_rechaza(self):
         """Sin motivo, una corrección es indistinguible de un error de digitación."""
-        previas = [_lectura(100_000, 0)]
+        previas = [_lectura(100_000, 0, id=1)]
         with pytest.raises(LecturaRechazada):
             dom_odometro.validar_lectura(
-                previas, _lectura(99_500, 60, origen=OrigenLectura.CORRECCION)
+                previas, _lectura(99_500, 60, origen=OrigenLectura.CORRECCION,
+                                  anula=1)
             )
 
     def test_igual_o_mayor_siempre_se_acepta(self):

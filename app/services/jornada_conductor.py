@@ -1301,6 +1301,13 @@ def _casos_km_entre_turnos(m: Mundo):
                             dom_sen.NO_EVALUABLE,
                             'falta la lectura de odómetro de uno de los dos '
                             'traspasos: el tramo no se puede sostener')
+                    elif _alguna_anulada(a, b):
+                        # 2026-09-27: una corrección anuló una de las dos: su
+                        # número ya no dice cuánto marcaba el camión.
+                        ver = dom_sen.Veredicto(
+                            dom_sen.NO_EVALUABLE,
+                            'una corrección anuló la lectura de uno de los dos '
+                            'traspasos: el tramo no se puede sostener')
                     else:
                         marca = confianza_del_tramo(a.a_dominio(), b.a_dominio())
                         ver = dom_sen.km_sin_explicar(
@@ -1312,6 +1319,16 @@ def _casos_km_entre_turnos(m: Mundo):
             ultimo = i
     m._casos_km = casos
     return casos
+
+
+def _alguna_anulada(*lecturas) -> bool:
+    """¿Alguna de estas lecturas la anuló una corrección? (2026-09-27)"""
+    from flota.adaptadores.modelos import LecturaOdometro
+
+    ids = [l.id for l in lecturas]
+    return (LecturaOdometro.query
+            .filter(LecturaOdometro.anula_lectura_id.in_(ids)).first()
+            is not None)
 
 
 def _s_km_entre_turnos(ctx):

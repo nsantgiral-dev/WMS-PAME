@@ -161,15 +161,20 @@ class TestTraspaso:
 class TestOdometro:
 
     def test_una_correccion_sin_motivo_es_409(self, client, jwt_token_admin, flota_mundo):
-        client.post('/flota/odometro',
-                    json={'placa': flota_mundo['placa'], 'valor_km': 100_000,
-                          'origen': 'entrega'}, headers=_auth(jwt_token_admin))
+        previa = client.post('/flota/odometro',
+                             json={'placa': flota_mundo['placa'], 'valor_km': 100_000,
+                                   'origen': 'cierre_dia'}, headers=_auth(jwt_token_admin))
         r = client.post('/flota/odometro',
                         json={'placa': flota_mundo['placa'], 'valor_km': 99_000,
-                              'origen': 'correccion'}, headers=_auth(jwt_token_admin))
+                              'origen': 'correccion',
+                              'anula_lectura_id': previa.get_json()['lectura_id']},
+                        headers=_auth(jwt_token_admin))
         assert r.status_code == 409
 
-    def test_una_correccion_con_motivo_si_entra(self, client, jwt_token_admin, flota_mundo):
+    def test_una_correccion_sin_decir_que_anula_es_400(
+            self, client, jwt_token_admin, flota_mundo):
+        """Una corrección anula UNA lectura (2026-09-27): sin decir cuál,
+        dejaría atrás la historia entera — que es lo que hacía antes."""
         client.post('/flota/odometro',
                     json={'placa': flota_mundo['placa'], 'valor_km': 100_000,
                           'origen': 'entrega'}, headers=_auth(jwt_token_admin))
@@ -177,6 +182,19 @@ class TestOdometro:
                         json={'placa': flota_mundo['placa'], 'valor_km': 99_000,
                               'origen': 'correccion',
                               'motivo_correccion': 'digitación: sobraba un cero'},
+                        headers=_auth(jwt_token_admin))
+        assert r.status_code == 400
+        assert 'anula' in r.get_json()['error']
+
+    def test_una_correccion_con_motivo_si_entra(self, client, jwt_token_admin, flota_mundo):
+        previa = client.post('/flota/odometro',
+                             json={'placa': flota_mundo['placa'], 'valor_km': 100_000,
+                                   'origen': 'cierre_dia'}, headers=_auth(jwt_token_admin))
+        r = client.post('/flota/odometro',
+                        json={'placa': flota_mundo['placa'], 'valor_km': 99_000,
+                              'origen': 'correccion',
+                              'motivo_correccion': 'digitación: sobraba un cero',
+                              'anula_lectura_id': previa.get_json()['lectura_id']},
                         headers=_auth(jwt_token_admin))
         assert r.status_code == 201
 

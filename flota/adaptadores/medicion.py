@@ -294,16 +294,16 @@ class MedidorSQL:
         siguen contando tras la última corrección). Un porcentaje de flota sobre
         26 lecturas escondería que las cuatro de un camión son todas dudosas.
 
-        `vigentes` sale de `vigentes_tras_la_ultima_correccion`, la misma
-        política que usan el CPK y el traspaso — **no un `WHERE` escrito acá**.
+        `vigentes` sale de `lecturas_que_cuentan` (sin anuladas, saltos ni
+        tardías sin verificar), la misma política que usan el CPK y el
+        traspaso — **no un `WHERE` escrito acá**.
         La copia del tablero sería la que diverge, y sería la que decide si un
         número se publica (regla 0).
         """
         from app.models.vehiculo import Vehiculo
         from flota.adaptadores.modelos import LecturaOdometro
         from flota.dominio import odometro as dom_odo
-        from flota.dominio.procedencia import Ventana
-        from flota.dominio.valores import Confianza, Lectura, OrigenLectura
+        from flota.dominio.valores import Confianza
 
         if not (_tabla_existe('flota_lectura_odometro')
                 and _tabla_existe('vehiculos')):
@@ -315,12 +315,8 @@ class MedidorSQL:
             todas = (LecturaOdometro.query
                      .filter_by(vehiculo_id=v.id)
                      .order_by(LecturaOdometro.ts, LecturaOdometro.id).all())
-            vigentes, _ = dom_odo.vigentes_tras_la_ultima_correccion([
-                Lectura(valor_km=l.valor_km, ts=l.ts,
-                        origen=OrigenLectura(l.origen),
-                        autor_usuario_id=l.autor_usuario_id,
-                        motivo_correccion=l.motivo_correccion)
-                for l in todas])
+            vigentes = dom_odo.lecturas_que_cuentan(
+                [l.a_dominio() for l in todas])
             # Los tres estados van SEPARADOS y ninguno se suma a otro: se
             # atienden distinto. `verificada` es trabajo hecho, `dudosa` es
             # trabajo pendiente, `declarada` es lo normal y no hay nada que
@@ -390,6 +386,7 @@ class MedidorSQL:
                 'ventanas': r['ventanas'],
                 'tanqueos': r['tanqueos'],
                 'tanqueos_fuera_por_parcial': r['tanqueos_fuera_por_parcial'],
+                'tanqueos_fuera_por_km': r['tanqueos_fuera_por_km'],
                 'dias_historia': r['dias_historia'],
                 'base': ('kilómetros y galones sumados sobre las ventanas de '
                          'tanque lleno a tanque lleno de este vehículo'),
@@ -1656,7 +1653,8 @@ class MedidorSQL:
         se pueda fijar. Cada entrada trae su `motivo`.
         """
         from app.models.vehiculo import Vehiculo
-        from flota.adaptadores.preventivo import ritmo_de
+        from flota.adaptadores.preventivo import _lecturas_dominio
+        from flota.dominio import odometro as dom_odo
         from flota.dominio.valores import SIN_DATO, palabra_de_confianza
 
         if not _tabla_existe('flota_lectura_odometro'):
@@ -1664,7 +1662,8 @@ class MedidorSQL:
         salida = []
         for v in (Vehiculo.query.filter(Vehiculo.activo.is_(True))
                   .order_by(Vehiculo.placa).all()):
-            r = ritmo_de(v.id)
+            lecturas = _lecturas_dominio(v.id)
+            r = dom_odo.km_por_dia(lecturas)
             salida.append({
                 'placa': v.placa,
                 # `str` y no `float`: un `Decimal` no es serializable y
@@ -1685,6 +1684,10 @@ class MedidorSQL:
                 'dias': str(round(r.dias, 1)) if r.dias is not SIN_DATO
                         else str(r.dias),
                 'motivo': r.motivo,
+                # Lo que quedó FUERA del ritmo, y por qué (2026-09-27): una
+                # lectura anulada, un salto sin verificar o un tanqueo tardío
+                # no mueven el km/día — y se dice, no se esconde.
+                'fuera_de_la_serie': dom_odo.fuera_de_la_serie(lecturas),
             })
         return salida
 

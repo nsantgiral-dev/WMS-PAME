@@ -195,6 +195,13 @@ FUERA_DEL_RELOJ = {
         'lectura de la bandeja; no escribe horas y recibe `ahora` por parámetro'),
     'flota.api.bandeja': (
         'usa `datetime` solo para reconocer el tipo al serializar; no lo produce'),
+    # La cola del conductor (T2, 2026-09-27).
+    'flota.dominio.cola': (
+        'funciones puras: recibe `ts_dispositivo` y `ahora`, no lee el reloj'),
+    'flota.adaptadores.rechazos_cola': (
+        'anota los RECHAZOS de la cola (primera y última vez que el servidor '
+        'dijo que no); el día sano del arnés no produce ninguno, y la hora del '
+        'gesto del conductor sigue siendo la del hecho, no la del rechazo'),
 }
 
 

@@ -110,6 +110,10 @@ def _json_gasto(g: Gasto) -> dict:
         'cubre_periodo': costos.exige_periodo(g.categoria),
         'lectura_id': g.lectura_id,
         'km': g.lectura.valor_km,
+        # El gasto entró aunque su km fuera menor que el último registrado
+        # (llegó tarde): la lectura quedó en revisión y no mueve el odómetro
+        # (2026-09-27). Se dice; no se rechaza.
+        'km_tardio': g.lectura.serie == 'tardia',
         'registrado_por_usuario_id': g.registrado_por_usuario_id,
         'tanqueo': None,
     }

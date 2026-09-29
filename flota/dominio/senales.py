@@ -83,6 +83,16 @@ VENTANA_PRECIO_DIAS = 90
 #: misma región en tres meses.
 FACTOR_PRECIO = Decimal('1.15')
 
+#: Tanqueos en la ventana a partir de los cuales se mira la proporción de «no
+#: lo llené» (2026-09-27). Con menos, dos parciales seguidos son normales.
+MIN_TANQUEOS_LLENADO = 5
+
+#: Desde qué proporción de tanqueos marcados «no lo llené» se señala. La mitad:
+#: con tan pocos llenos, casi no quedan ventanas de lleno a lleno, y el
+#: detector de galones queda ciego — que es la forma más barata de apagarlo
+#: (regla 11: marcar todo «parcial»).
+PROPORCION_NO_LLENOS = Decimal('0.5')
+
 
 def umbrales() -> Dict[str, str]:
     """Las varas, como texto, para que viajen con la respuesta."""
@@ -96,6 +106,8 @@ def umbrales() -> Dict[str, str]:
         'min_tanqueos_precio': str(MIN_TANQUEOS_PRECIO),
         'ventana_precio_dias': str(VENTANA_PRECIO_DIAS),
         'factor_precio': str(FACTOR_PRECIO),
+        'min_tanqueos_llenado': str(MIN_TANQUEOS_LLENADO),
+        'proporcion_no_llenos': str(PROPORCION_NO_LLENOS),
     }
 
 
@@ -236,6 +248,26 @@ def galones_de_ventana(*, km: int, galones: Decimal, km_galon,
         return Veredicto(SENAL, datos={'esperados': esperados,
                                        'exceso': Decimal(galones) - esperados})
     return Veredicto(NORMAL, datos={'esperados': esperados})
+
+
+def tanqueos_no_llenos(*, total: int, no_llenos: int) -> Veredicto:
+    """¿Se marcan tantos tanqueos «no lo llené» que el rendimiento no se puede
+    medir? (2026-09-27, hallazgo P1-12: marcar todo «parcial» apagaba el
+    detector de galones para siempre, sin que nada lo dijera.)
+
+    QUÉ AFIRMA: la proporción de tanqueos no llenos del vehículo en la ventana.
+    QUÉ NO AFIRMA: que alguien lo haga a propósito — un conductor que tanquea
+    de a poco por falta de efectivo produce exactamente lo mismo.
+    """
+    if total < MIN_TANQUEOS_LLENADO:
+        return Veredicto(NO_EVALUABLE, (
+            f'{total} tanqueos en la ventana: con menos de '
+            f'{MIN_TANQUEOS_LLENADO} la proporción de «no lo llené» no dice nada'))
+    proporcion = Decimal(no_llenos) / Decimal(total)
+    datos = {'total': total, 'no_llenos': no_llenos, 'proporcion': proporcion}
+    if proporcion >= PROPORCION_NO_LLENOS:
+        return Veredicto(SENAL, None, datos)
+    return Veredicto(NORMAL, None, datos)
 
 
 def precio_de_galon(*, precio, historico: Sequence[Decimal]) -> Veredicto:

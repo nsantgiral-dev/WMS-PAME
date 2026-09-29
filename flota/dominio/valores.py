@@ -528,6 +528,14 @@ class Lectura:
     autor_usuario_id: int
     motivo_correccion: Optional[str] = None
     confianza: Confianza = Confianza.DECLARADA
+    #: La fila de la que salió. `None` en una lectura propuesta (todavía no
+    #: existe). Sin él, una anulación no se puede aplicar (2026-09-27).
+    id: Optional[int] = None
+    #: Una corrección ANULA una lectura puntual (su id), no la historia.
+    anula_lectura_id: Optional[int] = None
+    #: Su lugar en la serie: `SERIE_CUENTA`, `SERIE_SALTO` o `SERIE_TARDIA`
+    #: (`flota/dominio/odometro.py`). `None` = anterior a la marca: cuenta.
+    serie: Optional[str] = None
 
 
 @dataclass(frozen=True)

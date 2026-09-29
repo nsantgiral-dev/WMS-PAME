@@ -388,16 +388,22 @@ def serie_envenenada(client, db, almacen):
 
     Los kilómetros REALES del mes son 251 (55.600 − 55.349). Con $1.200.000
     imputados, el CPK honesto es ~$4.780/km.
+
+    Desde el 2026-09-27 la corrección ANULA la lectura envenenada (y solo
+    esa): los 55.349 siguen contando.
     """
     veh = _vehiculo(db, 'THP696')
     u, t = _usuario(db, almacen, 'mi_envenenada@test.com')
+    ids = {}
     for km in (55349, 16697948):
         r = client.post('/flota/odometro', headers=_auth(t), json={
             'placa': 'THP696', 'valor_km': km, 'origen': 'cierre_dia'})
         assert r.status_code == 201, r.get_json()
+        ids[km] = r.get_json()['lectura_id']
     r = client.post('/flota/odometro', headers=_auth(t), json={
         'placa': 'THP696', 'valor_km': 55600, 'origen': 'correccion',
-        'motivo_correccion': 'los 16.697.948 fueron un dedo en el teclado'})
+        'motivo_correccion': 'los 16.697.948 fueron un dedo en el teclado',
+        'anula_lectura_id': ids[16697948]})
     assert r.status_code == 201, r.get_json()
 
     desde, hasta = _ventana_del_mes()
@@ -431,21 +437,23 @@ class TestLaCorreccionNoCorrigeLaPlata:
             self, client, serie_envenenada):
         """El contraste que hace el defecto visible.
 
-        La cola aplica `vigentes_tras_la_ultima_correccion` y ofrece **una sola**
-        fila: no le pide a nadie que confirme un número que la corrección ya
-        reemplazó. La política existe, está escrita una vez y funciona.
+        La cola no le pide a nadie que confirme un número que la corrección
+        ANULÓ (2026-09-27): los 16.697.948 no aparecen. Los 55.349 sí —siguen
+        contando y nadie los miró—, y la corrección misma, sin foto.
         """
         d = client.get('/flota/odometro/dudosas',
                        headers=_auth(serie_envenenada['t'])).get_json()
-        assert d['total'] == 1
-        assert d['pendientes'][0]['valor_km'] == 55600
+        valores = sorted(p['valor_km'] for p in d['pendientes'])
+        assert 16697948 not in valores
+        assert valores == [55349, 55600]
 
     def test_el_ritmo_de_uso_si_respeta_la_correccion(
             self, client, serie_envenenada):
-        """`km_por_dia` llama a la función y por eso no hereda los 16 millones."""
+        """`km_por_dia` mide sobre las lecturas que cuentan: sin los 16
+        millones (anulados), con los 55.349 y la corrección."""
         r = MedidorSQL().km_dia_por_vehiculo()
         fila = [x for x in r if x['placa'] == 'THP696'][0]
-        assert fila['n'] == 1
+        assert fila['n'] == 2
         assert fila['km_dia'] == 'sin_dato'
 
     # xfail retirado el 2026-09-03: el defecto se arregló (`cpk_de` ya aplica
@@ -485,26 +493,27 @@ class TestLaCorreccionNoCorrigeLaPlata:
             f'el health publica {fila!r}; el CPK real del mes es ~$4.780/km '
             f'sobre 251 km vigentes')
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'DEFECTO — MISMA CAUSA en el rendimiento. Un tanqueo cargado con el '
-        'kilometraje envenenado produce 834.847,40 km/galón, y la corrección '
-        'posterior no lo mueve: `tanqueos_de` lee la lectura de cada tanqueo '
-        'sin pasar por `vigentes_tras_la_ultima_correccion`. '
-        'FALLA EN SILENCIO — y sin marca de confianza, la pantalla no tiene con '
-        'qué señalarlo (ver el `xfail` del mundo 3).'))
+    # xfail retirado el 2026-09-27: `tanqueos_de` ya no usa un tanqueo cuya
+    # lectura no cuenta (anulada, salto sin verificar, tardía), y la
+    # corrección anula la lectura envenenada puntual.
     def test_el_rendimiento_deberia_respetar_la_correccion(
             self, client, db, almacen):
         veh = _vehiculo(db, 'RENVEN')
         u, t = _usuario(db, almacen, 'mi_renven@test.com')
         hoy = dia_operativo()
         for km, f in ((1000, hoy - timedelta(days=1)), (16697948, hoy)):
-            client.post('/flota/tanqueos', headers=_auth(t), json={
+            r = client.post('/flota/tanqueos', headers=_auth(t), json={
                 'placa': 'RENVEN', 'fecha': str(f), 'valor': '300000',
                 'galones': '20', 'tanque': 'lleno', 'estacion': 'T', 'km': km,
                 'proveedor': 'T', 'origen_costo': 'tarjeta_convenio'})
-        client.post('/flota/odometro', headers=_auth(t), json={
+            assert r.status_code == 201, r.get_json()
+        envenenada = LecturaOdometro.query.filter_by(
+            vehiculo_id=veh.id, valor_km=16697948).one()
+        r = client.post('/flota/odometro', headers=_auth(t), json={
             'placa': 'RENVEN', 'valor_km': 1400, 'origen': 'correccion',
-            'motivo_correccion': 'el tanqueo se cargó con dígitos de más'})
+            'motivo_correccion': 'el tanqueo se cargó con dígitos de más',
+            'anula_lectura_id': envenenada.id})
+        assert r.status_code == 201, r.get_json()
         d = _cpk(client, t, 'RENVEN')
         r = d['rendimiento_km_galon']
         assert r == 'sin_dato' or Decimal(r) < Decimal('100'), (

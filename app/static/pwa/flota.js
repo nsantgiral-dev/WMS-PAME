@@ -905,6 +905,7 @@ function flotaAbrirOdometro(placa) {
       <option value="correccion">Corrección de una lectura anterior</option>
     </select>
     <div id="od-motivo-caja" style="display:none">
+      <p id="od-anula" style="font-size:var(--fs-sm);color:var(--tx2)">Buscando la última lectura…</p>
       <label style="color:var(--yellow)">Motivo de la corrección (obligatorio)</label>
       <input id="od-motivo" style="width:100%;padding:6px">
     </div>
@@ -915,10 +916,32 @@ function flotaAbrirOdometro(placa) {
   </div>`;
 }
 
-/** Muestra el motivo solo cuando el origen es una corrección. */
-function flotaOrigenCambio() {
+/** La lectura que anula la corrección del formulario de escritorio: la última
+ * del vehículo. `null` si no hay ninguna o no se pudo saber. */
+let FLOTA_OD_ANULA = null;
+
+/** Muestra el motivo solo cuando el origen es una corrección, y dice QUÉ
+ * lectura se anula (2026-09-27): una corrección anula UNA lectura —la última,
+ * desde acá; una de más atrás, desde «Kilometrajes por verificar»— y no borra
+ * la historia. */
+async function flotaOrigenCambio() {
   const es = document.getElementById('od-origen').value === 'correccion';
   document.getElementById('od-motivo-caja').style.display = es ? 'block' : 'none';
+  if (!es) return;
+  const aviso = document.getElementById('od-anula');
+  FLOTA_OD_ANULA = null;
+  try {
+    const d = await get('/flota/custodia/activa/' + encodeURIComponent(FLOTA_PLACA));
+    FLOTA_OD_ANULA = d.ultima_lectura || null;
+  } catch (e) {
+    FLOTA_OD_ANULA = null;
+  }
+  if (aviso) {
+    aviso.textContent = FLOTA_OD_ANULA
+      ? `Se anula la última lectura: ${flotaKm(FLOTA_OD_ANULA.valor_km)} km (${horaColombia(FLOTA_OD_ANULA.ts)}). ` +
+        'El kilometraje de arriba es el que marca el tablero ahora.'
+      : 'No se pudo saber cuál es la última lectura: sin eso no se corrige.';
+  }
 }
 
 /** Valida y envía la lectura suelta. */
@@ -933,6 +956,10 @@ async function flotaEnviarOdometro() {
     err.textContent = 'Una corrección sin motivo es indistinguible de un error de digitación.';
     return;
   }
+  if (origen === 'correccion' && !FLOTA_OD_ANULA) {
+    err.textContent = 'No se sabe qué lectura anular: vuelva a elegir «Corrección».';
+    return;
+  }
   const placa = flotaPlacaDelFormulario('od-guardar', 'od-error');
   if (!placa) return;
   try {
@@ -943,7 +970,8 @@ async function flotaEnviarOdometro() {
     // su número quedó firme, y quedaba dudoso: fuera del CPK hasta que alguien
     // pase por la cola de verificación con una foto que él pudo haber sacado
     // ahí mismo, parado al lado del camión.
-    const guardada = await flotaRegistrarOdometro(placa, km, origen, motivo);
+    const guardada = await flotaRegistrarOdometro(placa, km, origen, motivo,
+      origen === 'correccion' ? FLOTA_OD_ANULA.id : null);
     if (guardada && guardada.confianza === 'dudosa') {
       alerta(`Lectura registrada, pero queda DUDOSA: ${guardada.motivo_dudosa}`,
              'advertencia');
@@ -957,9 +985,11 @@ async function flotaEnviarOdometro() {
 }
 
 /** Registra una lectura suelta de odómetro contra el endpoint. */
-async function flotaRegistrarOdometro(placa, valorKm, origen, motivo) {
+async function flotaRegistrarOdometro(placa, valorKm, origen, motivo, anulaLecturaId) {
   const cuerpo = { placa: placa, valor_km: valorKm, origen: origen };
   if (motivo) cuerpo.motivo_correccion = motivo;
+  // Una corrección anula UNA lectura: cuál (2026-09-27).
+  if (anulaLecturaId) cuerpo.anula_lectura_id = anulaLecturaId;
   const r = await fetch(API + '/flota/odometro', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
@@ -990,6 +1020,8 @@ async function flotaRegistrarOdometro(placa, valorKm, origen, motivo) {
 // razón, porque no se puede auditar leyendo el repo. Mismo motivo que
 // `FLOTA_HALLAZGO_URL`.
 const FLOTA_DUDOSAS_URL = '/flota/odometro/dudosas';
+/** La cola que se pintó: «Corregir» busca acá la fila por su id. */
+let FLOTA_DUDOSAS = [];
 const FLOTA_VERIFICAR_URL = (id) => `/flota/odometro/${id}/verificar`;
 
 /** Abre la cola. La foto grande, el número al lado, y dos salidas. */
@@ -1015,6 +1047,7 @@ async function flotaRenderVerificacion() {
     return;
   }
   const pendientes = (d && d.pendientes) || [];
+  FLOTA_DUDOSAS = pendientes;
   if (!pendientes.length) {
     cont.innerHTML = `<div class="tabla-card">
       <p>No hay kilometrajes en duda.</p>
@@ -1064,7 +1097,7 @@ function flotaFilaDudosa(p) {
       <button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
               onclick="flotaConfirmarKm(${esc(p.lectura_id)})">Confirmar</button>
       <button class="btn-flota" style="padding:4px 10px;font-size:var(--fs-xs)"
-              onclick="flotaCorregirKm('${esc(p.placa)}', ${esc(p.valor_km)})">Corregir</button>
+              onclick="flotaCorregirKm(${esc(p.lectura_id)})">Corregir</button>
     </div>
   </li>`;
 }
@@ -1089,20 +1122,22 @@ async function flotaConfirmarKm(lecturaId) {
   }
 }
 
-/** Corrige: **no edita la fila, registra una lectura nueva.**
+/** Corrige: **no edita la fila, registra una lectura nueva que la ANULA.**
  *
  * Reusa `flotaRegistrarOdometro` con `origen=correccion` — la única puerta que
- * existe para eso y la que exige motivo. Una segunda puerta desde acá sería la
- * misma política escrita dos veces, y la de esta pantalla sería la que un día
- * deje de pedir el motivo.
- *
- * La lectura vieja no se borra ni se marca: la tabla es append-only. Lo que
- * pasa es que sale de la cola, porque una corrección declara «de acá en
- * adelante, esto es lo cierto» y el servidor aplica esa misma ventana.
+ * existe para eso y la que exige motivo. Desde el 2026-09-27 la corrección
+ * dice QUÉ lectura anula (`anula_lectura_id`): esa sale de todo cálculo y de
+ * la cola, y la historia anterior sigue contando (antes la corrección dejaba
+ * atrás TODO lo anterior). El kilometraje que se escribe es el que marca el
+ * tablero ahora. En el `onclick` viaja solo el id de la fila.
  */
-async function flotaCorregirKm(placa, kmActual) {
+async function flotaCorregirKm(lecturaId) {
+  const p = FLOTA_DUDOSAS.find(x => x.lectura_id === lecturaId);
+  if (!p) return;
+  const placa = p.placa;
   const km = await _modalCantidad('Corregir el kilometraje',
-    `Kilometraje correcto de ${esc(placa)} (el registrado dice ${esc(kmActual)}):`,
+    `Se anula la lectura de ${esc(flotaKm(p.valor_km))} km del ${esc(placa)}. ` +
+    `¿Cuánto marca el tablero ahora?`,
     { min: 0, textoConfirmar: 'Siguiente' });
   if (km === null) return;
   const motivo = await _modalTexto('¿Por qué se corrige?',
@@ -1115,7 +1150,7 @@ async function flotaCorregirKm(placa, kmActual) {
     return;
   }
   try {
-    await flotaRegistrarOdometro(placa, km, 'correccion', motivo.trim());
+    await flotaRegistrarOdometro(placa, km, 'correccion', motivo.trim(), lecturaId);
     alerta('Corrección registrada ✓', 'exito');
     await flotaRenderVerificacion();
   } catch (e) {
@@ -2434,6 +2469,11 @@ function flotaCondRendimiento(r) {
          ${esc(r.dias_historia)} día(s) de historia${
            r.tanqueos_fuera_por_parcial
              ? ` · ${esc(r.tanqueos_fuera_por_parcial)} tanqueo(s) quedaron fuera por no estar marcados «lleno»`
+             : ''}${
+           r.tanqueos_fuera_por_km
+             ? ` · ${esc(r.tanqueos_fuera_por_km)} ${r.tanqueos_fuera_por_km === 1
+                 ? 'tanqueo quedó fuera porque su kilometraje está en revisión'
+                 : 'tanqueos quedaron fuera porque su kilometraje está en revisión'}`
              : ''}</div>`
     : `<b style="color:var(--tx2)">Midiendo todavía</b>
        <div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px">${esc(r.motivo)}</div>`;
@@ -2911,6 +2951,74 @@ function flotaCondKmLeido(pref) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// ¿ES CREÍBLE EL KILOMETRAJE? — antes de mandar (2026-09-27)
+//
+// 125.000 donde iba 12.500 se ataja en el patio, no en la cola de
+// verificación tres días después: la pantalla compara contra el último km que
+// cuenta y el techo de km por día que manda el servidor (`km_plausible`,
+// `dominio.odometro.techo_km_por_dia`). **Menor** que el último: no se manda
+// (el servidor lo rechazaría) — salvo un tanqueo, que se registra tarde y
+// queda en revisión. **Mucho mayor**: se pregunta en la pantalla, con el
+// cálculo a la vista; si el conductor confirma, sale igual. La confirmación
+// es una pregunta, no un permiso: el servidor marca sus saltos por su cuenta.
+// ══════════════════════════════════════════════════════════════════════
+
+/** Con qué comparar: lo último que el teléfono sabe de esta placa —su cola
+ * (lo más nuevo) o lo que mandó el servidor— y el techo de km por día. */
+function flotaKmReferencia(placa) {
+  const deServidor = [FLOTA_ESTADO && FLOTA_ESTADO.placa === placa ? FLOTA_ESTADO.km_plausible : null,
+                      FLOTA_COND && FLOTA_COND.placa === placa ? FLOTA_COND.km_plausible : null]
+    .find(x => x && Number.isFinite(Number(x.km)));
+  let ref = deServidor ? { km: Number(deServidor.km), ts: deServidor.ts,
+                           km_dia: Number(deServidor.km_dia) } : null;
+  flotaColaDe(placa).forEach(o => {
+    const k = o.cuerpo ? Number(o.cuerpo.km) : NaN;
+    if (Number.isFinite(k) && (!ref || Date.parse(o.creado) >= Date.parse(ref.ts || 0))) {
+      ref = { km: k, ts: o.creado, km_dia: ref ? ref.km_dia : NaN };
+    }
+  });
+  return ref;
+}
+
+/** El juicio, puro: `null` si no hay nada que decir; si no,
+ * `{bloquea|pregunta, texto}`. */
+function flotaKmPlausible(placa, km, opts) {
+  const ref = flotaKmReferencia(placa);
+  if (!ref || !Number.isFinite(km)) return null;
+  if (km < ref.km) {
+    if (opts && opts.tanqueo) {
+      return { pregunta: true, texto: `Es menor que el último kilometraje registrado ` +
+        `(${flotaKm(ref.km)} km). Si es un tanqueo de antes, se registra y queda en revisión. ` +
+        `Si no, revise el tablero.` };
+    }
+    return { bloquea: true, texto: `El kilometraje no puede ser menor que el último registrado ` +
+      `(${flotaKm(ref.km)} km). Revise el tablero; si de verdad marca ${flotaKm(km)}, ` +
+      `avise a control de flota.` };
+  }
+  if (!Number.isFinite(ref.km_dia) || !ref.ts) return null;
+  // Redondeado y no hacia arriba: 24 h y unos segundos son «un día», no dos.
+  const dias = Math.max(1, Math.round((Date.now() - Date.parse(ref.ts)) / 86400000));
+  if (km <= ref.km + ref.km_dia * dias) return null;
+  return { pregunta: true, texto: `El camión marcaba ${flotaKm(ref.km)} km ${flotaHoraDe(ref.ts)}. ` +
+    `${flotaKm(km)} serían ${flotaKm(km - ref.km)} km en ${dias === 1 ? 'un día' : dias + ' días'}: ` +
+    `mucho más de lo que suele rodar. Revise el tablero.` };
+}
+
+/** Antes de mandar: `true` si sigue. Lo que bloquea se dice en el formulario;
+ * lo que se pregunta, en la pantalla (nunca con el diálogo del sistema). */
+async function flotaKmCreible(placa, km, idError, opts) {
+  const v = flotaKmPlausible(placa, km, opts);
+  if (!v) return true;
+  if (v.bloquea) {
+    const err = document.getElementById(idError);
+    if (err) err.textContent = v.texto;
+    return false;
+  }
+  return _modalConfirmar(esc(v.texto), { titulo: '¿Es ese el kilometraje?',
+    textoConfirmar: 'El tablero marca eso', textoCancelar: 'Corregir' });
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // EL RECIBO — un ángulo por pantalla
 //
 // Era una grilla de trece botones con nombres como «lateral izq»: el conductor
@@ -3139,6 +3247,7 @@ async function flotaCondGuardar() {
   }
   const placa = flotaPlacaDelFormulario('cf-guardar', 'cf-error');
   if (!placa) return;
+  if (!(await flotaKmCreible(placa, km, 'cf-error'))) return;
 
   // El que recibe es el conductor de la sesión. El servidor lo resuelve por el
   // token; el id viaja porque el contrato del traspaso lo pide.
@@ -3323,6 +3432,7 @@ async function flotaCondEntregar() {
   // a la sede — sigue siendo del conductor, que es quien lo tiene.
   const placa = flotaPlacaDelFormulario('cf-guardar', 'cf-error');
   if (!placa) return;
+  if (!(await flotaKmCreible(placa, km, 'cf-error'))) return;
 
   const payload = {
     placa: placa, km: km, ubicacion: ubicacion,
@@ -3942,6 +4052,7 @@ async function flotaCondGuardarDano() {
   if (km === null) { err.textContent = 'Falta el kilometraje del tablero.'; return; }
   const placa = flotaPlacaDelFormulario('hz-guardar', 'hz-error');
   if (!placa) return;
+  if (!(await flotaKmCreible(placa, km, 'hz-error'))) return;
 
   const cuerpo = {
     placa: placa, km: km, criticidad: FLOTA_DANO.gravedad,
@@ -4126,6 +4237,7 @@ async function flotaCondGuardarTanqueo() {
       { titulo: '¿Registrar sin la foto del tablero?', textoConfirmar: 'Registrar así' }))) return;
   const placa = flotaPlacaDelFormulario('tq-guardar', 'tq-error');
   if (!placa) return;
+  if (!(await flotaKmCreible(placa, km, 'tq-error', { tanqueo: true }))) return;
 
   const cuerpo = {
     placa: placa, fecha: hoyBogota(), valor: valor, galones: galones,
@@ -4140,11 +4252,17 @@ async function flotaCondGuardarTanqueo() {
   } finally {
     listo();
   }
-  // El exceso de capacidad se dice al registrar, y sin acusar a nadie.
+  // El exceso de capacidad se dice al registrar, y sin acusar a nadie. Y un
+  // tanqueo que llegó tarde (su km es menor que el último) entra igual: se
+  // dice que su km quedó en revisión (2026-09-27).
   const excede = res.datos && res.datos.tanqueo && res.datos.tanqueo.excede_capacidad === true;
-  if (flotaCondTrasRegistrar(res, 'tq-error', excede
-      ? 'Tanqueo registrado. Ojo: entraron más galones de los que la ficha dice que caben — uno de los dos datos está mal.'
-      : 'Tanqueo registrado ✓', excede ? 'advertencia' : 'exito')) {
+  const tardio = res.datos && res.datos.km_tardio === true;
+  const texto = excede
+    ? 'Tanqueo registrado. Ojo: entraron más galones de los que la ficha dice que caben — uno de los dos datos está mal.'
+    : tardio
+      ? 'Tanqueo registrado. Su kilometraje es menor que el último registrado: queda en revisión y no mueve el odómetro.'
+      : 'Tanqueo registrado ✓';
+  if (flotaCondTrasRegistrar(res, 'tq-error', texto, (excede || tardio) ? 'advertencia' : 'exito')) {
     FLOTA_TQ = null;
   }
 }
@@ -4366,6 +4484,7 @@ async function flotaCondGuardarInspeccion() {
   }
   const placa = flotaPlacaDelFormulario('insp-guardar', 'insp-error');
   if (!placa) return;
+  if (!(await flotaKmCreible(placa, km, 'insp-error'))) return;
 
   const faltan = items.filter(i => !FLOTA_INSP_RESP[i.item_id]);
   const bloqueantesEnBlanco = faltan.filter(i => i.bloqueante).length;

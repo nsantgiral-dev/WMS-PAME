@@ -308,10 +308,13 @@ class TestElTanqueoQueSeRegistraTarde:
     **Desde ese día el conductor no registra sobre un camión que ya entregó**
     (403 `sin_derecho`) ni corrige odómetros (`MAESTROS_FLOTA`). Las dos salidas
     malas le quedaron cerradas a él. El tanqueo tardío lo registra control de
-    flota con la factura en la mano — y ahí **el hueco sigue**: el km real
-    todavía da 409 y el de cierre todavía pasa sin marca. Falta la tercera
-    salida que ya se nombraba acá: exponer `lectura_id` en `POST /flota/tanqueos`
-    para anclar el gasto a una lectura que ya existe. Declarado, no arreglado.
+    flota con la factura en la mano.
+
+    **Desde el 2026-09-27 (T3) el km real ya no da 409**: entra como lectura
+    `tardia` —en duda, con su motivo, fuera del odómetro y del rendimiento—, y
+    la plata del tanqueo no se pierde. El km de cierre prestado sigue pasando
+    sin marca (queda colgado de la lectura `entrega`): exponer `lectura_id` en
+    `POST /flota/tanqueos` sigue sin hacer, declarado.
     """
 
     @pytest.fixture
@@ -338,13 +341,16 @@ class TestElTanqueoQueSeRegistraTarde:
         assert r.status_code == 403, r.get_json()
         assert arnes.health(client, mundo)['km_dia_por_vehiculo'][0]['n'] >= 3
 
-    def test_control_de_flota_lo_registra_pero_el_hueco_del_km_sigue(
+    def test_control_de_flota_lo_registra_con_el_km_real_como_tardio(
             self, client, mundo, turno_entregado):
-        """Lo que queda abierto, medido para que no se lea como cerrado."""
+        """El km real entra tardío (T3); el prestado sigue sin marca."""
         real = arnes.tanquear(client, mundo, 100_320, galones='10',
                               token=mundo['t_flota'])
-        assert real.status_code == 409
-        assert 'no puede decrecer' in real.get_json()['error']
+        assert real.status_code == 201, real.get_json()
+        assert real.get_json()['km_tardio'] is True
+        tardia = [l for l in arnes.lecturas_de(mundo['vehiculo_id'])
+                  if l.id == real.get_json()['lectura_id']][0]
+        assert (tardia.serie, tardia.confianza) == ('tardia', 'dudosa')
 
         prestado = arnes.tanquear(client, mundo, 100_400, galones='10',
                                   token=mundo['t_flota'])

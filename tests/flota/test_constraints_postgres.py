@@ -219,7 +219,7 @@ class TestElEsquemaSeCreaEnPostgres:
         # `flota_llanta`+`flota_montaje_llanta` (6).
         # 102 → 103 el 2026-09-24: `flota_idempotencia` (la operación de la
         # clave de reenvío de la cola del conductor, m039flcond).
-        assert n == 106, f"Se esperaban 106 CHECK de flota en PostgreSQL, hay {n}"
+        assert n == 109, f"Se esperaban 109 CHECK de flota en PostgreSQL, hay {n}"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -370,6 +370,89 @@ class TestTriggersEnPostgres:
         _insertar_lectura(esquema, semilla, 1_600, 120)
         with pytest.raises(Exception, match='decrecer'):
             _insertar_lectura(esquema, semilla, 1_400, 180)
+
+
+def _lectura_serie(motor, s, km, minutos=0, origen='entrega', serie=None,
+                   anula=None, motivo=None):
+    """Una lectura con su lugar en la serie (m051flotakm), cruda, y su id."""
+    with motor.begin() as c:
+        return c.execute(text(
+            "INSERT INTO flota_lectura_odometro (vehiculo_id, valor_km, ts, origen, "
+            "autor_usuario_id, motivo_correccion, confianza, motivo_dudosa, serie, "
+            "anula_lectura_id) VALUES (:v, :km, :ts, :o, :u, :m, 'dudosa', "
+            "'sembrada por un test', :serie, :anula) RETURNING id"),
+            {'v': s['veh'], 'km': km, 'ts': _ts(minutos), 'o': origen,
+             'u': s['usr'], 'm': motivo, 'serie': serie, 'anula': anula}).scalar()
+
+
+class TestLaSerieEnPostgres:
+    """T3 (2026-09-27), contra el motor real: los mismos casos que
+    `test_odometro_no_se_envenena.py` ejerce en SQLite."""
+
+    def test_un_salto_no_sube_el_tope(self, esquema, semilla):
+        _lectura_serie(esquema, semilla, 12_500)
+        _lectura_serie(esquema, semilla, 125_000, 60, serie='salto')
+        _lectura_serie(esquema, semilla, 12_600, 120)          # entra
+
+    def test_debajo_de_lo_que_cuenta_sigue_rechazada(self, esquema, semilla):
+        _lectura_serie(esquema, semilla, 12_500)
+        _lectura_serie(esquema, semilla, 125_000, 60, serie='salto')
+        with pytest.raises(Exception, match='decrecer'):
+            _lectura_serie(esquema, semilla, 12_400, 120)
+
+    def test_el_salto_verificado_si_sube_el_tope(self, esquema, semilla):
+        _lectura_serie(esquema, semilla, 12_500)
+        salto = _lectura_serie(esquema, semilla, 125_000, 60, serie='salto')
+        with esquema.begin() as c:
+            c.execute(text(
+                "UPDATE flota_lectura_odometro SET confianza = 'verificada', "
+                "verificada_por_usuario_id = :u, verificada_ts = now() WHERE id = :i"),
+                {'u': semilla['usr'], 'i': salto})
+        with pytest.raises(Exception, match='decrecer'):
+            _lectura_serie(esquema, semilla, 12_700, 120)
+
+    def test_la_anulacion_es_puntual(self, esquema, semilla):
+        _lectura_serie(esquema, semilla, 1_000)
+        mala = _lectura_serie(esquema, semilla, 5_000, 60)
+        _lectura_serie(esquema, semilla, 1_200, 120, origen='correccion',
+                       anula=mala, motivo='era 1.200')
+        _lectura_serie(esquema, semilla, 1_300, 180)           # la mala ya no traba
+        with pytest.raises(Exception, match='decrecer'):
+            _lectura_serie(esquema, semilla, 1_100, 240)       # la historia sigue
+
+    def test_la_tardia_no_la_frena_la_monotonia(self, esquema, semilla):
+        _lectura_serie(esquema, semilla, 1_500)
+        _lectura_serie(esquema, semilla, 1_400, 60, origen='tanqueo', serie='tardia')
+
+    def test_una_lectura_se_anula_una_sola_vez(self, esquema, semilla):
+        _lectura_serie(esquema, semilla, 1_000)
+        mala = _lectura_serie(esquema, semilla, 5_000, 60)
+        _lectura_serie(esquema, semilla, 1_200, 120, origen='correccion',
+                       anula=mala, motivo='x')
+        with pytest.raises(IntegrityError):
+            _lectura_serie(esquema, semilla, 1_250, 180, origen='correccion',
+                           anula=mala, motivo='y')
+
+    def test_solo_una_correccion_anula(self, esquema, semilla):
+        uno = _lectura_serie(esquema, semilla, 1_000)
+        with pytest.raises(IntegrityError):
+            _lectura_serie(esquema, semilla, 1_100, 60, anula=uno)
+
+    def test_un_salto_no_nace_declarado(self, esquema, semilla):
+        with pytest.raises(IntegrityError):
+            with esquema.begin() as c:
+                c.execute(text(
+                    "INSERT INTO flota_lectura_odometro (vehiculo_id, valor_km, ts, "
+                    "origen, autor_usuario_id, confianza, serie) VALUES "
+                    "(:v, 90000, :ts, 'entrega', :u, 'declarada', 'salto')"),
+                    {'v': semilla['veh'], 'ts': _ts(), 'u': semilla['usr']})
+
+    def test_la_serie_no_se_edita(self, esquema, semilla):
+        i = _lectura_serie(esquema, semilla, 1_000)
+        with pytest.raises(Exception, match='append-only'):
+            with esquema.begin() as c:
+                c.execute(text("UPDATE flota_lectura_odometro SET serie = 'tardia' "
+                               "WHERE id = :i"), {'i': i})
 
 
 class TestElScriptDeLimpiezaDejaElTriggerComoEstaba:

@@ -99,8 +99,7 @@ from flota.dominio import costos
 from flota.dominio import odometro as dom_odo
 from flota.dominio.costos import SIN_DATO
 from flota.dominio.errores import ErrorFlota, PermisoInsuficiente
-from flota.dominio.valores import (Lectura, OrigenLectura,
-                                   palabra_de_confianza)
+from flota.dominio.valores import OrigenLectura, palabra_de_confianza
 
 
 class GastoInvalido(ErrorFlota):
@@ -256,9 +255,12 @@ def _lectura_para(*, vehiculo_id: int, categoria: str, km: Optional[int],
             )
         # Con el km de siempre se reutiliza la última lectura (no nace una
         # dudosa); si cambió, la foto del tablero —cuando viene— la respalda.
+        # Un gasto NUNCA se rechaza por el km (2026-09-27): el que llega tarde
+        # nace `tardia` —en duda, a revisión, sin mover el odómetro— en vez de
+        # un 409 que se llevaba la plata del registro.
         return anclar_odometro(vehiculo_id, km, usuario_id, ahora,
                                origen=ORIGEN_DE_LECTURA[categoria],
-                               foto_tablero=foto_tablero)
+                               foto_tablero=foto_tablero, permitir_tardia=True)
 
     if km is not None:
         raise GastoInvalido(
@@ -633,6 +635,30 @@ def excede_capacidad_de(tanqueo: Tanqueo) -> Union[bool, str]:
         capacidad_galones=capacidad_de_tanque(tanqueo.gasto.vehiculo_id))
 
 
+def _tanqueo_cuenta(lectura, ids_anulados) -> bool:
+    """¿El km de este tanqueo sirve para medir el rendimiento? (2026-09-27)
+
+    No: si su lectura se anuló, o si es un salto o una tardía que nadie
+    verificó. Un 125.000 tecleado por 12.500 daba 445 km/galón «publicable» y
+    una señal de galones en cada tanqueo sano. Una tardía VERIFICADA sí cuenta:
+    acá el orden es por km, no por hora, y su km ya lo confirmó una persona.
+    """
+    from flota.dominio.valores import Confianza
+
+    if lectura.id in ids_anulados:
+        return False
+    if lectura.serie in (dom_odo.SERIE_SALTO, dom_odo.SERIE_TARDIA):
+        return lectura.confianza == Confianza.VERIFICADA.value
+    return True
+
+
+def _filas_de_tanqueo(vehiculo_id: int):
+    return (db.session.query(Tanqueo, Gasto, LecturaOdometro)
+            .join(Gasto, Tanqueo.gasto_id == Gasto.id)
+            .join(LecturaOdometro, Gasto.lectura_id == LecturaOdometro.id)
+            .filter(Gasto.vehiculo_id == vehiculo_id).all())
+
+
 def tanqueos_de(vehiculo_id: int) -> List[dict]:
     """Los tanqueos del vehículo en el formato que el dominio consume.
 
@@ -640,11 +666,16 @@ def tanqueos_de(vehiculo_id: int) -> List[dict]:
     arman sobre el odómetro, y una factura cargada tarde con la fecha del día en
     que se digitó desordenaría la serie por el lado que importa. El empate se
     rompe por `id` para que la lista sea estable.
+
+    Sin los que tienen el km anulado o en duda por salto o por tardía
+    (`_tanqueo_cuenta`); cuántos quedaron fuera lo dice
+    `rendimiento_publicable_de` (`tanqueos_fuera_por_km`).
     """
-    filas = (db.session.query(Tanqueo, Gasto, LecturaOdometro)
-             .join(Gasto, Tanqueo.gasto_id == Gasto.id)
-             .join(LecturaOdometro, Gasto.lectura_id == LecturaOdometro.id)
-             .filter(Gasto.vehiculo_id == vehiculo_id).all())
+    filas = _filas_de_tanqueo(vehiculo_id)
+    anulados = {l.anula_lectura_id for l in LecturaOdometro.query.filter(
+        LecturaOdometro.vehiculo_id == vehiculo_id,
+        LecturaOdometro.anula_lectura_id.isnot(None)).all()}
+    filas = [f for f in filas if _tanqueo_cuenta(f[2], anulados)]
     ordenadas = sorted(filas, key=lambda f: (f[2].valor_km, f[0].gasto_id))
     # `lectura_id` viaja para que quien juzgue una ventana pueda preguntar con
     # qué confianza se sostienen sus dos extremos (la bandeja: una ventana con
@@ -760,14 +791,13 @@ def cpk_de(vehiculo_id: int, desde: date, hasta: date) -> dict:
     # supersede lecturas de la ventana pasada, y filtrar primero por fecha la
     # dejaría fuera del cálculo que la invalida.
     _todas = LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id).all()
-    _vigentes, _ = dom_odo.vigentes_tras_la_ultima_correccion([
-        Lectura(valor_km=l.valor_km, ts=l.ts, origen=OrigenLectura(l.origen),
-                autor_usuario_id=l.autor_usuario_id,
-                motivo_correccion=l.motivo_correccion)
-        for l in _todas])
-    _claves = {(v.valor_km, v.ts) for v in _vigentes}
+    # Las que CUENTAN (2026-09-27): sin anuladas, sin saltos sin verificar,
+    # sin tardías. Por id y no por (km, ts): dos lecturas del mismo segundo y
+    # el mismo km se distinguen así.
+    _cuentan = {l.id for l in dom_odo.lecturas_que_cuentan(
+        [l.a_dominio() for l in _todas])}
     lecturas = [l for l in _todas
-                if (l.valor_km, l.ts) in _claves
+                if l.id in _cuentan
                 and desde <= _dia_operativo_de(l.ts) <= hasta]
     # Una sola lectura no delimita un tramo, y cero lecturas tampoco. **No es 0
     # km recorridos**: es que no se puede medir el tramo, y el dominio traduce
@@ -820,7 +850,11 @@ def rendimiento_publicable_de(vehiculo_id: int) -> dict:
     filas = tanqueos_de(vehiculo_id)
     fechas = [f['fecha'] for f in filas if f.get('fecha') is not None]
     dias = (max(fechas) - min(fechas)).days if len(fechas) >= 2 else 0
-    return costos.rendimiento_publicable(filas, dias_historia=dias)
+    r = costos.rendimiento_publicable(filas, dias_historia=dias)
+    # Lo que quedó fuera por el km (anulado, salto o tardía sin verificar) se
+    # declara al lado de lo que quedó fuera por no estar lleno (2026-09-27).
+    r['tanqueos_fuera_por_km'] = len(_filas_de_tanqueo(vehiculo_id)) - len(filas)
+    return r
 
 
 __all__ = ['registrar_gasto', 'registrar_tanqueo', 'cpk_de', 'rendimiento_de',

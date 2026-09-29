@@ -91,6 +91,9 @@ ABIERTAS_POR_ROL = {
         'POST /api/mobile/sync': _SYNC,
         'POST /flota/avisos/barrer': 'flota: el barrido de avisos es del encargado de flota',
         'POST /flota/avisos/entrega': 'flota: webhook del canal de mensajería (503 sin configurar)',
+        'POST /flota/conductor/rechazos/<clave>': (
+            'la cola del conductor (T2): marca un rechazo propio para que lo vea '
+            'control de flota; el derecho se verifica adentro (solo el suyo)'),
         'POST /flota/custodia/traspaso': 'flota: su registro',
         'POST /flota/gastos': 'flota: su registro',
         'POST /flota/hallazgos': 'flota: su registro',
@@ -103,6 +106,8 @@ ABIERTAS_POR_ROL = {
         'POST /flota/ordenes/<int:orden_id>/factura': 'flota: su registro',
         'POST /flota/ordenes/<int:orden_id>/intervenciones': 'flota: su registro',
         'POST /flota/preventivo/tarea/<int:plan_id>/ejecucion': 'flota: su registro',
+        'POST /flota/rechazos/<int:rechazo_id>/cerrar': (
+            'flota: cierra un registro del conductor que no entró (T2), con motivo'),
         'POST /flota/tanqueos': 'flota: su registro',
         'PUT /flota/preventivo/tarea/<int:plan_id>': 'flota: su registro',
     },
@@ -114,6 +119,9 @@ ABIERTAS_POR_ROL = {
         'POST /api/cartera/retenciones/<int:rid>/reevaluar': _SERVICIO,
         'POST /api/mobile/sync': _SYNC,
         'POST /flota/avisos/entrega': 'flota: webhook del canal de mensajería (503 sin configurar)',
+        'POST /flota/conductor/rechazos/<clave>': (
+            'su cola (T2): pide ayuda o descarta un registro SUYO que no entró; '
+            'el derecho se verifica adentro (`sin_derecho_sobre_rechazo`)'),
         'POST /flota/custodia/traspaso': 'su turno: recibe y entrega el camión',
         'POST /flota/hallazgos': 'su turno: reporta un daño de SU camión (derecho verificado adentro)',
         'POST /flota/inspeccion': 'su turno: el preoperacional',

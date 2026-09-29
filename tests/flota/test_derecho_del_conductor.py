@@ -593,8 +593,16 @@ class TestLaCorreccionEsDeMaestros:
         assert r.status_code == 403
 
     def test_control_de_flota_si_corrige(self, client, mundo):
+        # Una corrección anula UNA lectura (2026-09-27): la del turno.
+        from app.models.vehiculo import Vehiculo
+        from flota.adaptadores.modelos import LecturaOdometro
+
+        v = Vehiculo.query.filter_by(placa='DRA100').one()
+        ultima = (LecturaOdometro.query.filter_by(vehiculo_id=v.id)
+                  .order_by(LecturaOdometro.id.desc()).first())
         r = _odometro(client, mundo, 'cf', 'DRA100', origen='correccion',
-                      motivo_correccion='el tablero decía 1.050', valor_km=1050)
+                      motivo_correccion='el tablero decía 1.050', valor_km=1050,
+                      anula_lectura_id=ultima.id)
         assert r.status_code == 201, r.get_json()
 
 

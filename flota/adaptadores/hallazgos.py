@@ -41,7 +41,7 @@ from flota.adaptadores.modelos import Hallazgo, LecturaOdometro
 from flota.adaptadores.traspaso import custodia_activa
 from flota.dominio import inspeccion as dom_insp
 from flota.dominio import odometro as dom_odo
-from flota.dominio.errores import ErrorFlota
+from flota.dominio.errores import LecturaRechazada, ErrorFlota
 from flota.dominio.hallazgo import EstadoHallazgo
 from flota.dominio.valores import Lectura, OrigenLectura
 
@@ -81,6 +81,7 @@ def anclar_odometro(vehiculo_id: int, km: int, autor_usuario_id: int,
                     ahora: datetime,
                     origen: OrigenLectura = OrigenLectura.HALLAZGO,
                     foto_tablero: Optional[dict] = None,
+                    permitir_tardia: bool = False,
                     ) -> LecturaOdometro:
     """La lectura a la que se ata un evento de flota. Regla 3, con un hecho.
 
@@ -126,23 +127,44 @@ def anclar_odometro(vehiculo_id: int, km: int, autor_usuario_id: int,
     La foto va PRIMERO y la lectura nace con el vínculo puesto: la tabla de
     lecturas es append-only por trigger. La foto se crea con el padre en 0 y
     se le pone el id de la lectura en la misma transacción.
+
+    ## `permitir_tardia` — un gasto nunca se pierde por el km (2026-09-27)
+
+    El tanqueo de las 15:00 (13.400 km) hecho sin señal llega a las 19:00,
+    después de la entrega en la sede con 13.480: la monotonía lo rechazaba y
+    **el gasto nunca entraba** (si fue con el efectivo del conductor, tampoco
+    quedaba rastro para reembolsarlo). Con `permitir_tardia` —solo los gastos
+    lo piden— la lectura nace `tardia`: en duda, con su motivo, a la cola de
+    verificación, y sin mover el odómetro. El `before_insert` comprueba que de
+    verdad quede por debajo de lo que cuenta.
     """
     previas = LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id).all()
 
-    ultima = max(previas, key=lambda l: (l.ts, l.id), default=None)
+    # Se reutiliza la última lectura QUE CUENTA con ese mismo km (2026-09-27):
+    # colgar un gasto de una lectura anulada, de un salto o de una tardía lo
+    # dejaría fuera del rendimiento por una lectura que no es la suya.
+    cuentan = {l.id for l in dom_odo.lecturas_que_cuentan(
+        [l.a_dominio() for l in previas])}
+    ultima = max((l for l in previas if l.id in cuentan),
+                 key=lambda l: (l.ts, l.id), default=None)
     if ultima is not None and ultima.valor_km == km:
         return ultima
 
     # El dominio juzga ANTES de escribir: un odómetro que retrocede no entra
-    # por esta puerta más de lo que entra por el recibo de turno.
-    dom_odo.validar_lectura(
-        [Lectura(valor_km=l.valor_km, ts=l.ts, origen=OrigenLectura(l.origen),
-                 autor_usuario_id=l.autor_usuario_id,
-                 motivo_correccion=l.motivo_correccion)
-         for l in previas],
-        Lectura(valor_km=km, ts=ahora, origen=origen,
-                autor_usuario_id=autor_usuario_id),
-    )
+    # por esta puerta más de lo que entra por el recibo de turno. Las filas se
+    # traducen con `a_dominio` (la única traducción): sin el id y la serie,
+    # una lectura anulada o un salto seguirían subiendo el tope.
+    serie = None
+    try:
+        dom_odo.validar_lectura(
+            [l.a_dominio() for l in previas],
+            Lectura(valor_km=km, ts=ahora, origen=origen,
+                    autor_usuario_id=autor_usuario_id),
+        )
+    except LecturaRechazada:
+        if not permitir_tardia:
+            raise
+        serie = dom_odo.SERIE_TARDIA
     foto = None
     if foto_tablero is not None:
         from flota.adaptadores.almacen_fotos import colgar_fotos
@@ -155,6 +177,7 @@ def anclar_odometro(vehiculo_id: int, km: int, autor_usuario_id: int,
         origen=origen.value,
         autor_usuario_id=autor_usuario_id,
         foto_id=foto.id if foto is not None else None,
+        serie=serie,
     )
     db.session.add(nueva)
     db.session.flush()

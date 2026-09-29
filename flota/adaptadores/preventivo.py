@@ -412,14 +412,10 @@ def _lecturas_dominio(vehiculo_id: int) -> List[Lectura]:
     usarla acá diría que ninguna es dudosa. El ritmo saldría publicable sobre
     los mismos números que `confianza_del_tramo` existe para excluir.
     """
-    from flota.dominio.valores import Confianza
-
-    return [Lectura(valor_km=l.valor_km, ts=l.ts,
-                    origen=OrigenLectura(l.origen),
-                    autor_usuario_id=l.autor_usuario_id,
-                    motivo_correccion=l.motivo_correccion,
-                    confianza=Confianza(l.confianza))
-            for l in LecturaOdometro.query.filter_by(
+    # `a_dominio`, la única traducción (2026-09-27): con el id, la anulación
+    # y la serie, el odómetro del preventivo excluye lo anulado y los saltos.
+    # Un 125.000 tecleado por 12.500 ponía todo el plan en rojo.
+    return [l.a_dominio() for l in LecturaOdometro.query.filter_by(
                 vehiculo_id=vehiculo_id).all()]
 
 
@@ -453,6 +449,18 @@ def _ultimas_ejecuciones(plan_ids) -> Dict[int, int]:
              .join(LecturaOdometro,
                    EjecucionTarea.lectura_id == LecturaOdometro.id)
              .filter(EjecucionTarea.plan_id.in_(list(plan_ids))).all())
+    # Una ejecución colgada de una lectura que ya no cuenta (anulada, o salto
+    # o tardía sin verificar) no es línea base (2026-09-27): con un 125.000
+    # tecleado por 12.500 la próxima correa quedaba 112.500 km adelante. Se
+    # usa la anterior que sí cuenta; si no hay, «sin línea base» (no se sabe).
+    from flota.dominio.odometro import cuenta_en_la_serie
+
+    ids = [lec.id for _ej, lec in filas]
+    anulados = {a for (a,) in db.session.query(LecturaOdometro.anula_lectura_id)
+                .filter(LecturaOdometro.anula_lectura_id.in_(ids)).all()} if ids else set()
+    filas = [(ej, lec) for ej, lec in filas
+             if cuenta_en_la_serie(lec.a_dominio(), anulados)
+             or lec.serie == 'tardia' and lec.confianza == 'verificada']
     ultima: Dict[int, tuple] = {}
     for ej, lec in filas:
         clave = (ej.ejecutado_ts, ej.id)

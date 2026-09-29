@@ -4121,7 +4121,7 @@ veces). `cargarFlota()` delega en la bandeja.
 |---|---|---|
 | Hoy | una fila por vehículo activo: «turno de Ana desde las 06:05», dónde, km y su confianza, inspección de hoy, ruta de hoy, **semáforo con su porqué** | `custodia_activa`, `odometro_actual`, `Inspeccion` del día, `RutaDespacho` |
 | Pendientes | papeles, **cola de daños de toda la flota** (Reparado / Aplazar / No era nada, solo si `puede_decidir` = `DECIDE_FLOTA`), km en duda, cierres forzados de la semana (fuga 11), turnos sin fotos de inicio (fuga 10), ficha, preventivo vencido | `MedidorSQL.documentos_por_vehiculo` / `custodias_por_vehiculo`, `verificacion.pendientes`, `diagnostico_de_la_flota` |
-| Señales | km en días sin ruta (fuga 4), km de una ruta vs la mediana de su ruta maestra, galones vs esperados y precio del galón (fuga 5), ruta de hoy con conductor/vehículo ≠ custodio (fuga 12) | `vigentes_tras_la_ultima_correccion`, `confianza_del_tramo`, `rendimiento_publicable_de`, `ventanas_lleno_a_lleno`, `precio_por_galon` |
+| Señales | km en días sin ruta (fuga 4), km de una ruta vs la mediana de su ruta maestra, galones vs esperados y precio del galón (fuga 5), ruta de hoy con conductor/vehículo ≠ custodio (fuga 12) | `lecturas_que_cuentan` (antes `vigentes_tras_la_ultima_correccion`), `confianza_del_tramo`, `rendimiento_publicable_de`, `ventanas_lleno_a_lleno`, `precio_por_galon` |
 
 - **Semáforo**: rojo = no debería salir o hay que actuar hoy (papel vencido,
   daño bloqueante o vencido, inspección no apta, ruta de hoy sin inspección
@@ -4238,9 +4238,10 @@ no cero; piso 13). **13 mutaciones, las 13 rojas.** Helper de tests:
 - **El tanqueo tardío** (registrado después de entregar el turno, caso que el
   módulo declara habitual): el conductor ya no puede, ni por el km de cierre
   (que entraba sin marca) ni por `correccion` (que borraba la historia). Lo
-  registra control de flota — y para él el hueco sigue: el km real del
-  surtidor da 409 y el de cierre pasa colgado de la lectura `entrega`. Falta
-  exponer `lectura_id` en `POST /flota/tanqueos`. Medido en
+  registra control de flota. *(2026-09-27, T3: el km real del surtidor ya
+  no da 409 — entra `tardia`, ver «el odómetro no se envenena».)* El de
+  cierre sigue colgado de la lectura `entrega`: falta exponer `lectura_id`
+  en `POST /flota/tanqueos`. Medido en
   `tests/flujo/test_flujo_dia_torcido.py`, que también cambió: la inspección
   antes de recibir el turno ahora es 403 (antes 201 con daños que no contaban
   y nadie lo decía).
@@ -8069,4 +8070,36 @@ nueva del conductor (`POST /flota/conductor/rechazos/<clave>`) está en
 - Un descartado se ve en la bandeja una semana; después solo en la tabla.
 - La carrera entre la cola de flota y la de rutas (P2) no se tocó (`rutas.js`
   es de otro frente).
+
+## Flota: el odómetro no se envenena (T3, 2026-09-27)
+
+Hallazgos P1-1, P1-2 (servidor), P1-12 y los P2 de T3. **La clase:** *«una
+lectura que no dice cuánto marca el camión decide igual»*. Misma migración
+**`m051flotakm`**: `flota_lectura_odometro.anula_lectura_id` y `.serie`
+(`cuenta` · `salto` · `tardia`; NULL = anterior, cuenta), tres CHECK (109 de
+flota) y un índice único parcial; los triggers de SQLite y PostgreSQL
+reescritos con la misma pregunta.
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **Salto** | 125.000 tecleado por 12.500 subía el tope: el camión quedaba trabado (todo 409) y el preventivo corría 112.500 km | Un ×10 o km en cero tiempo nace `salto`, en duda: **no sube el tope ni mueve el odómetro** hasta que alguien lo verifique en la cola |
+| **Corrección** | Dejaba atrás TODA la historia anterior (CPK +61 %) | **Anula UNA lectura** (`anula_lectura_id`, obligatorio: 400 sin él; autor y motivo). La anulada sigue en la tabla, sale de todo cálculo y de la cola de verificación, y no se verifica. Las correcciones viejas (sin `anula_lectura_id`) conservan su ventana. Escritorio: «Corrección» anula la última (`ultima_lectura` de `custodia/activa`); la cola: «Corregir» anula ESA fila (solo el id en el `onclick`) |
+| **Tanqueo tardío** | Después de la entrega del turno daba 409 y se perdía la plata | Un gasto de campo nunca se rechaza por el km: nace `tardia` (en duda, motivo escrito), no mueve el odómetro ni entra al rendimiento (`tanqueos_fuera_por_km`), y la respuesta lo dice (`km_tardio`). El daño con km menor **sigue** rechazado |
+| **Consumidores** | Cada uno con su filtro (o ninguno) | Una pregunta: `dominio.odometro.cuenta_en_la_serie` / `lecturas_que_cuentan`; una traducción: `LecturaOdometro.a_dominio` (con id, anulación y serie). La usan el odómetro vigente, el ritmo (que declara `fuera_de_la_serie`), el CPK, el rendimiento, el preventivo (una ejecución colgada de un salto no es línea base), la bandeja, la jornada (tramo con una lectura anulada: no evaluable) y el reuso de lectura del gasto |
+| **Teléfono** | 125.000 salía sin preguntar | `km_plausible` (`custodia/activa` y `mi-turno`: el último km que cuenta + `techo_km_por_dia`: 3× el ritmo, mínimo 400; sin ritmo 800, **provisional**). Menor que el último: no se manda (un tanqueo pregunta); mucho mayor: `_modalConfirmar` con la cuenta. El servidor no lo usa: pregunta, no permiso |
+| **Bandeja callada** | Sin lecturas, con < 2 que cuenten o sin tanqueos: el vehículo no aparecía | `no_evaluable` con su motivo. Y **P1-12**: señal `tanqueos_no_llenos` (≥ 5 tanqueos en la ventana, ≥ 50 % «no lo llené»: el detector de galones queda ciego) |
+
+**Trinquetes:** `tests/flota/test_odometro_no_se_envenena.py` (dominio, base,
+adaptadores, bandeja, frontera, teléfono en Node con `util.js` real, y AST:
+**ninguna fila se vuelve `Lectura` fuera de `a_dominio`** —inventario vacío,
+meta-tests, piso—); `test_constraints_postgres.py::TestLaSerieEnPostgres` (los
+mismos casos contra plpgsql).
+
+**Lo que NO cubre:**
+- Los saltos anteriores a `m051flotakm` (serie NULL) siguen contando: sin
+  backfill. Se anulan a mano.
+- El techo del teléfono es provisional (3× / 400 / 800); nadie lo midió.
+- Una ejecución de taller con km tardío no tiene línea base salvo que alguien
+  verifique esa lectura.
+- El km de cierre «prestado» del tanqueo de oficina sigue sin marca.
 

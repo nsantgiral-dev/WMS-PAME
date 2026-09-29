@@ -17,8 +17,8 @@ dudosa ──── confirmar ────→ verificada     (queda quién y cu�
 **Corregir no vive acá y es a propósito.** Ya existe una sola puerta para eso —
 `POST /flota/odometro` con `origen=correccion`, que exige motivo escrito— y una
 segunda que hiciera lo mismo desde la cola sería la política escrita dos veces.
-Lo que sí vive acá es la consecuencia: una lectura que una corrección posterior
-dejó atrás **sale de la cola**, porque pedirle a alguien que confirme un número
+Lo que sí vive acá es la consecuencia: una lectura que una corrección ANULÓ
+(o, con las correcciones viejas, dejó atrás) **sale de la cola**, porque pedirle a alguien que confirme un número
 que el sistema ya reemplazó es hacerle perder el tiempo con lo que no decide
 nada. La ventana la contesta el dominio
 (`vigentes_tras_la_ultima_correccion`), no un `WHERE` escrito acá.
@@ -82,17 +82,21 @@ def pendientes() -> List[Tuple[LecturaOdometro, str]]:
     # emparejarlas por valor, y dos lecturas del mismo segundo con el mismo
     # kilometraje (las hay: `lecturas_ts_duplicado` cuenta diez) no se
     # distinguen así. El instante sí es exacto.
-    desde_por_vehiculo = {}
+    #
+    # Desde el 2026-09-27 la respuesta trae los ids (`a_dominio` los pasa), y
+    # la lista ya excluye las lecturas que una corrección ANULÓ: se cruza por
+    # id. Un salto o una tardía sin verificar SÍ quedan en la cola: verificar
+    # un salto es justamente lo que lo hace contar.
+    vigentes_por_vehiculo = {}
     for vehiculo_id in {l.vehiculo_id for l, _ in filas}:
         serie = LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id).all()
-        _vigentes, desde = vigentes_tras_la_ultima_correccion(
+        vigentes, _desde = vigentes_tras_la_ultima_correccion(
             [l.a_dominio() for l in serie])
-        desde_por_vehiculo[vehiculo_id] = desde
+        vigentes_por_vehiculo[vehiculo_id] = {l.id for l in vigentes}
 
     return sorted(
         [(l, placa) for l, placa in filas
-         if desde_por_vehiculo[l.vehiculo_id] is None
-         or l.ts >= desde_por_vehiculo[l.vehiculo_id]],
+         if l.id in vigentes_por_vehiculo[l.vehiculo_id]],
         key=lambda par: (par[0].ts, par[0].id))
 
 
@@ -136,6 +140,14 @@ def verificar(*, lectura_id: int, usuario_id: int,
             f'la lectura {lectura_id} está {fila.confianza}, no dudosa: nadie '
             f'la puso en duda, así que no hay nada que confirmar. La cola solo '
             f'trae las que tienen un motivo escrito para desconfiar.'
+        )
+    anuladora = (LecturaOdometro.query
+                 .filter_by(anula_lectura_id=fila.id).first())
+    if anuladora is not None:
+        raise VerificacionInvalida(
+            f'la lectura {lectura_id} la anuló una corrección (lectura '
+            f'{anuladora.id}): ya no decide nada, y verificarla no la vuelve a '
+            f'contar.'
         )
 
     try:

@@ -268,12 +268,8 @@ def traspasar(
             forzado = True
 
     # Regla 3: el kilometraje entra por la misma puerta o no entra ninguno.
-    previas = [
-        Lectura(valor_km=l.valor_km, ts=l.ts, origen=OrigenLectura(l.origen),
-                autor_usuario_id=l.autor_usuario_id,
-                motivo_correccion=l.motivo_correccion)
-        for l in LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id).all()
-    ]
+    previas = [l.a_dominio() for l in
+               LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id).all()]
     dom_odo.validar_lectura(previas, Lectura(
         valor_km=km, ts=ahora, origen=OrigenLectura.ENTREGA,
         autor_usuario_id=registrado_por_usuario_id,

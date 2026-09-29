@@ -195,6 +195,13 @@ class TestElConductorVeElEstadoDeSuCamion:
             plan_id=tarea.id, km=1000, usuario_id=mundo['usr'])
 
         # Y el camión ya anda MUY por encima del intervalo → vencida de verdad.
+        # Con una lectura intermedia: saltar de 1.000 a 66.000 de una vez es
+        # un ×66, que nace como salto y no mueve el odómetro (2026-09-27).
+        mundo['db'].session.add(LecturaOdometro(
+            vehiculo_id=mundo['veh'], valor_km=9000,
+            ts=datetime.utcnow(), origen='cierre_dia',
+            autor_usuario_id=mundo['usr']))
+        mundo['db'].session.commit()
         mundo['db'].session.add(LecturaOdometro(
             vehiculo_id=mundo['veh'], valor_km=1000 + 60000 + 5000,
             # `origen` tiene vocabulario cerrado por CHECK (`ck_flota_origen`);
@@ -435,7 +442,9 @@ def _sembrar_tanqueos(mundo, *, llenos, dias_entre=15, km_paso=800):
     from flota.adaptadores import gastos as adaptador
 
     base = _date(2026, 1, 5)
-    km = 10000
+    # 5.000 y no 10.000: el mundo nace con el camión en 1.000, y un ×10 nace
+    # como salto — no sube el tope ni cuenta en el rendimiento (2026-09-27).
+    km = 5000
     for i in range(llenos):
         adaptador.registrar_tanqueo(
             vehiculo_id=mundo['veh'],
@@ -506,7 +515,7 @@ class TestLasCuatroCondicionesMUERDEN:
         # Un parcial ANTES del primer lleno: no entra a ninguna ventana.
         adaptador.registrar_tanqueo(
             vehiculo_id=mundo['veh'], fecha=_date(2026, 1, 1), valor='50000',
-            galones='4', tanque='parcial', estacion='T', km=9000,
+            galones='4', tanque='parcial', estacion='T', km=4000,
             proveedor='T', origen_costo='tarjeta_convenio',
             registrado_por_usuario_id=mundo['usr'],
             ts=datetime(2026, 1, 1, 8, 0))

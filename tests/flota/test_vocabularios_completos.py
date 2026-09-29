@@ -702,6 +702,13 @@ class TestElOdometroAceptaSuVocabularioEntero:
         cuerpo = {'placa': placa, 'valor_km': 1000, 'origen': origen}
         if origen == 'correccion':
             cuerpo['motivo_correccion'] = 'se digitó mal'
+            # Una corrección anula UNA lectura (2026-09-27): se siembra la que
+            # anula, con más km, para que la corrección de verdad decrezca.
+            previa = client.post('/flota/odometro', json={
+                'placa': placa, 'valor_km': 1500, 'origen': 'cierre_dia'},
+                headers=conductor)
+            assert previa.status_code == 201, previa.get_json()
+            cuerpo['anula_lectura_id'] = previa.get_json()['lectura_id']
         # Corregir es de MAESTROS_FLOTA desde el 2026-09-24: la corrección la
         # manda quien puede corregir; la del conductor se prueba en
         # `test_derecho_del_conductor.py`.

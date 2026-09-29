@@ -27,7 +27,7 @@ WMS, corolario «una política, una función»):
 | turnos sin fotos, cierres forzados | `MedidorSQL.custodias_por_vehiculo` |
 | km en duda | `verificacion.pendientes` |
 | km actual | `odometro.odometro_actual` |
-| lecturas que siguen contando | `odometro.vigentes_tras_la_ultima_correccion` |
+| lecturas que siguen contando | `odometro.lecturas_que_cuentan` (sin anuladas, saltos ni tardías) |
 | confianza de un tramo | `odometro.confianza_del_tramo` |
 | daño vencido, días abierto | `hallazgo.vencido`, `hallazgo.dias_transcurridos` |
 | preventivo | `preventivo.diagnostico_de_la_flota` |
@@ -284,14 +284,14 @@ class _Mundo:
         return 'una sede que ya no existe'
 
     def vigentes(self, vehiculo_id) -> list:
-        """Las lecturas que siguen contando: una corrección deja atrás las
-        anteriores. La política es del dominio; acá solo se aplica el corte."""
-        from flota.dominio.odometro import vigentes_tras_la_ultima_correccion
+        """Las lecturas que CUENTAN (2026-09-27): sin anuladas, sin saltos ni
+        tardías sin verificar, y sin lo que una corrección vieja dejó atrás. La
+        política es del dominio (`lecturas_que_cuentan`); acá se cruza por id."""
+        from flota.dominio.odometro import lecturas_que_cuentan
 
         filas = self.lecturas[vehiculo_id]
-        _v, desde = vigentes_tras_la_ultima_correccion(
-            [l.a_dominio() for l in filas])
-        return [l for l in filas if desde is None or l.ts >= desde]
+        ids = {l.id for l in lecturas_que_cuentan([l.a_dominio() for l in filas])}
+        return [l for l in filas if l.id in ids]
 
     def turnos_entre(self, vehiculo_id, desde_ts, hasta_ts) -> List[str]:
         """A nombre de quién estuvo el vehículo entre dos instantes. Contexto,
@@ -360,13 +360,17 @@ def _km(m: _Mundo, v, ids_dudosas) -> dict:
         return {'valor': str(SIN_DATO), 'confianza': str(SIN_DATO), 'ts': None,
                 'en_duda': False,
                 'texto': 'sin ninguna lectura: no se sabe cuántos km tiene'}
-    ts_max = max(l.ts for l in filas)
-    ultima = next(l for l in filas if l.ts == ts_max and l.valor_km == valor)
+    # La lectura del odómetro vigente es la última que CUENTA (la misma
+    # elección que `odometro_actual`); una posterior que no cuenta (un salto
+    # sin verificar) hace que el km esté en duda (2026-09-27).
+    ultima = max(m.vigentes(v.id), key=lambda l: (l.ts, l.valor_km))
+    de_todas = max(filas, key=lambda l: (l.ts, l.id))
     # En duda es la ÚLTIMA lectura, no «alguna lectura de la placa»: una
     # lectura vieja sin verificar no vuelve dudoso un kilometraje que ya se
     # leyó después con foto (QA e2e 2026-09-24). Las viejas siguen en
     # Pendientes, una por una.
-    en_duda = ultima.id in ids_dudosas
+    en_duda = ultima.id in ids_dudosas or (
+        de_todas.id != ultima.id and de_todas.id in ids_dudosas)
     return {
         'valor': valor,
         'confianza': ultima.confianza,
@@ -717,13 +721,25 @@ def _senales_km_sin_ruta(m: _Mundo, r: _Recolector):
 
     desde_dia = m.hoy - timedelta(days=dom.VENTANA_SENALES_DIAS)
     for v in m.vehiculos:
+        # Sin lecturas, o con menos de dos que cuenten, no hay tramo que
+        # juzgar — y se DICE (regla 14): antes se saltaba el vehículo y el
+        # primer día la bandeja decía «ninguna señal» sobre camiones que
+        # salían sin un kilometraje registrado (2026-09-27).
+        if not m.lecturas[v.id]:
+            r.no_evaluable('km_sin_ruta', v.placa,
+                           'sin ninguna lectura de odómetro: no hay '
+                           'kilómetros que cruzar')
+            continue
         if not m.dias_con_ruta[v.id]:
-            if m.lecturas[v.id]:
-                r.no_evaluable('km_sin_ruta', v.placa,
-                               'ninguna ruta registra esta placa: no hay días '
-                               'de ruta contra los cuales cruzar el kilometraje')
+            r.no_evaluable('km_sin_ruta', v.placa,
+                           'ninguna ruta registra esta placa: no hay días '
+                           'de ruta contra los cuales cruzar el kilometraje')
             continue
         filas = m.vigentes(v.id)
+        if len(filas) < 2:
+            r.no_evaluable('km_sin_ruta', v.placa,
+                           'menos de dos lecturas que cuenten: no hay tramo')
+            continue
         for a, b in zip(filas, filas[1:]):
             dia_b = dia_operativo_de(b.ts)
             if dia_b < desde_dia:
@@ -846,6 +862,12 @@ def _senales_combustible(m: _Mundo, r: _Recolector):
         tanqueos = tanqueos_de(v.id)
         recientes = [t for t in tanqueos if t['fecha'] >= desde_dia]
         if not recientes:
+            # Callar acá era decir «nada raro» sobre un camión del que no se
+            # sabe cuánto combustible gastó (regla 14, 2026-09-27).
+            r.no_evaluable('galones', v.placa,
+                           f'ningún tanqueo registrado en los últimos '
+                           f'{dom.VENTANA_SENALES_DIAS} días: no hay galones '
+                           f'que comparar')
             continue
         rp = rendimiento_publicable_de(v.id)
         ventanas = [w for w in costos.ventanas_lleno_a_lleno(tanqueos)
@@ -899,6 +921,38 @@ def _senales_combustible(m: _Mundo, r: _Recolector):
                            'gasto_id': cierre['gasto_id']},
                 caso={'tipo': 'expediente', 'pestana': 'gastos',
                       'gasto_id': cierre['gasto_id']})
+
+    # ── Casi ningún tanqueo se marca lleno (P1-12, 2026-09-27) ───────────
+    # Marcar todo «no lo llené» apaga el detector de galones sin que nada lo
+    # diga: sin dos llenos no hay ventana. Se cuentan TODOS los tanqueos de la
+    # ventana (también los que el km dejó fuera: el llenado no depende del km).
+    for v in m.vehiculos:
+        filas_tq = (db.session.query(Tanqueo.tanque)
+                    .join(Gasto, Tanqueo.gasto_id == Gasto.id)
+                    .filter(Gasto.vehiculo_id == v.id,
+                            Gasto.fecha >= desde_dia).all())
+        total = len(filas_tq)
+        no_llenos = sum(1 for (tq,) in filas_tq if tq != 'lleno')
+        ver = dom.tanqueos_no_llenos(total=total, no_llenos=no_llenos)
+        if ver.estado == dom.NO_EVALUABLE:
+            if total:
+                r.no_evaluable('tanqueos_no_llenos', v.placa, ver.motivo)
+            continue
+        if ver.estado != dom.SENAL:
+            continue
+        r.senal(
+            clase='tanqueos_no_llenos', placa=v.placa,
+            titulo=(f'{no_llenos} de {total} tanqueos marcados «no lo llené»'),
+            texto=(f'En los últimos {dom.VENTANA_SENALES_DIAS} días, {no_llenos} '
+                   f'de {total} tanqueos se registraron sin llenar el tanque. '
+                   f'Sin dos llenos seguidos no hay con qué medir el '
+                   f'rendimiento, y la señal de galones queda ciega.'),
+            contexto='el llenado lo declara quien tanquea',
+            propone=('Preguntar si de verdad no se llena (poco efectivo, '
+                     'tanqueos de a poco) o si se marca por costumbre.'),
+            evidencia={'tanqueos': total, 'no_llenos': no_llenos,
+                       'proporcion': ver.datos['proporcion']},
+            caso={'tipo': 'expediente', 'pestana': 'gastos'})
 
     # ── Precio del galón contra el resto de la flota ─────────────────────
     desde_precio = m.hoy - timedelta(days=dom.VENTANA_PRECIO_DIAS)

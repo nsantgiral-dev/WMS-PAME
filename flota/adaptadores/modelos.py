@@ -31,7 +31,7 @@ que nadie ejerció.
 """
 from datetime import datetime
 
-from sqlalchemy import DDL, event, select
+from sqlalchemy import DDL, and_, event, func, or_, select
 
 from app.extensions import db
 from flota.dominio.costos import CATEGORIAS_GASTO as _CATEGORIAS_GASTO
@@ -408,10 +408,35 @@ class LecturaOdometro(db.Model):
     verificada_por_usuario_id = db.Column(
         db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     verificada_ts = db.Column(db.DateTime, nullable=True)
+    #: 2026-09-27 · Una corrección ANULA una lectura puntual: esta columna dice
+    #: cuál. La anulada sigue en la tabla (append-only) y deja de contar. Solo
+    #: una corrección la lleva, y una lectura se anula una sola vez.
+    anula_lectura_id = db.Column(db.Integer, db.ForeignKey('flota_lectura_odometro.id', name='fk_flota_lectura_anula'),
+                                 nullable=True)
+    #: 2026-09-27 · Su lugar en la serie (`dominio.odometro.SERIES`): `cuenta`,
+    #: `salto` (no sube el tope ni mueve el odómetro hasta que alguien lo
+    #: verifique) o `tardia` (llegó después de lecturas con más km). NULL =
+    #: anterior a la marca, y cuenta como antes. La escribe el `before_insert`.
+    serie = db.Column(db.String(10), nullable=True)
 
     __table_args__ = (
         _en('origen', ORIGEN_LECTURA),
         _en('confianza', CONFIANZA),
+        db.CheckConstraint(
+            "serie IS NULL OR serie IN ('cuenta', 'salto', 'tardia')",
+            name='ck_flota_lectura_serie'),
+        # Un salto o una tardía nacen en duda: afirmar `declarada` sobre algo
+        # que la serie deja afuera diría las dos cosas a la vez.
+        db.CheckConstraint(
+            "serie IS NULL OR serie = 'cuenta' OR confianza <> 'declarada'",
+            name='ck_flota_lectura_fuera_de_serie_en_duda'),
+        # Solo una corrección anula, y no a sí misma.
+        db.CheckConstraint(
+            "anula_lectura_id IS NULL OR (origen = 'correccion' AND anula_lectura_id <> id)",
+            name='ck_flota_lectura_anula_solo_correccion'),
+        db.Index('uq_flota_lectura_anula', 'anula_lectura_id', unique=True,
+                 postgresql_where=db.text('anula_lectura_id IS NOT NULL'),
+                 sqlite_where=db.text('anula_lectura_id IS NOT NULL')),
         db.CheckConstraint('valor_km >= 0', name='ck_flota_valor_km'),
         # Una corrección sin motivo es indistinguible de un error de digitación.
         db.CheckConstraint(
@@ -470,6 +495,9 @@ class LecturaOdometro(db.Model):
             autor_usuario_id=self.autor_usuario_id,
             motivo_correccion=self.motivo_correccion,
             confianza=Confianza(self.confianza),
+            id=self.id,
+            anula_lectura_id=self.anula_lectura_id,
+            serie=self.serie,
         )
 
 
@@ -525,12 +553,31 @@ def _marcar_confianza(mapper, connection, target):
         )
 
     t = LecturaOdometro.__table__
+    # La previa es la última que CUENTA (2026-09-27): sin anuladas, sin saltos
+    # que nadie verificó, sin tardías. Comparar contra un salto de 125.000
+    # haría parecer normal el siguiente salto y sospechosa la lectura buena.
+    a = LecturaOdometro.__table__.alias('a')
+    anuladas_q = select(a.c.anula_lectura_id).where(
+        a.c.vehiculo_id == target.vehiculo_id, a.c.anula_lectura_id.isnot(None))
+    cuenta = or_(t.c.serie.is_(None), t.c.serie == 'cuenta',
+                 and_(t.c.serie == 'salto', t.c.confianza == 'verificada'))
     previa = connection.execute(
         select(t.c.valor_km, t.c.ts)
-        .where(t.c.vehiculo_id == target.vehiculo_id)
+        .where(t.c.vehiculo_id == target.vehiculo_id, cuenta,
+               t.c.id.notin_(anuladas_q))
         .order_by(t.c.ts.desc(), t.c.id.desc())
         .limit(1)
     ).first()
+    # Tardía solo si quien escribe la pidió (`anclar_odometro`, para un gasto)
+    # Y de verdad queda por debajo de lo que cuenta: una tardía que no es
+    # menor es una lectura normal.
+    tardia = False
+    if target.serie == 'tardia':
+        tope = connection.execute(
+            select(func.max(t.c.valor_km))
+            .where(t.c.vehiculo_id == target.vehiculo_id, cuenta,
+                   t.c.id.notin_(anuladas_q))).scalar()
+        tardia = tope is not None and target.valor_km < tope
 
     # «Tiene foto» es tener una foto GUARDADA (`estado = 'ok'`), no un
     # `foto_id` (2026-09-25): el tablero de un recibo cuyo archivo no se guardó
@@ -541,15 +588,22 @@ def _marcar_confianza(mapper, connection, target):
         ft = Foto.__table__
         tiene_foto = connection.execute(
             select(ft.c.estado).where(ft.c.id == target.foto_id)).scalar() == 'ok'
+    from flota.dominio.odometro import serie_al_nacer
+
     confianza, motivo = confianza_al_nacer(
         valor_km=target.valor_km,
         ts=target.ts,
         tiene_foto=tiene_foto,
         previa_valor_km=previa.valor_km if previa is not None else None,
         previa_ts=previa.ts if previa is not None else None,
+        tardia=tardia,
     )
     target.confianza = confianza.value
     target.motivo_dudosa = motivo
+    target.serie = serie_al_nacer(
+        valor_km=target.valor_km, ts=target.ts,
+        previa_valor_km=previa.valor_km if previa is not None else None,
+        previa_ts=previa.ts if previa is not None else None, tardia=tardia)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -867,6 +921,7 @@ _MSG_ANCLA_BAJA = (
 _COLUMNAS_INMUTABLES = (
     'id', 'vehiculo_id', 'valor_km', 'ts', 'origen', 'foto_id',
     'autor_usuario_id', 'motivo_correccion', 'motivo_dudosa',
+    'anula_lectura_id', 'serie',
 )
 
 
@@ -901,16 +956,29 @@ def _identicas(comparador: str) -> str:
 # que el DDL de PostgreSQL sí lo contenga. Y el `except` del conftest queda
 # anotado en ESTADO.md: una tabla que falla no debería poder deshacer la
 # limpieza de las otras.
+# La monotonía cuenta SOLO las lecturas que cuentan (2026-09-27) —la misma
+# pregunta que `dominio.odometro.cuenta_en_la_serie`—: sin las anuladas, sin
+# los saltos que nadie verificó, sin las tardías. La ventana se abre solo con
+# las correcciones VIEJAS (sin `anula_lectura_id`). Y una tardía no se valida:
+# la pide el adaptador y el `before_insert` comprueba que de verdad es menor.
+_CUENTA_SQL = ("(COALESCE(l.serie, 'cuenta') = 'cuenta' OR "
+               "(l.serie = 'salto' AND l.confianza = 'verificada'))")
+
 _SQLITE_DDL = f"""
 CREATE TRIGGER flota_odometro_monotonia
 BEFORE INSERT ON flota_lectura_odometro
-FOR EACH ROW WHEN NEW.origen <> 'correccion' AND EXISTS (
-    SELECT 1 FROM flota_lectura_odometro
-    WHERE vehiculo_id = NEW.vehiculo_id AND valor_km > NEW.valor_km
-      AND ts >= COALESCE(
-          (SELECT MAX(ts) FROM flota_lectura_odometro
-            WHERE vehiculo_id = NEW.vehiculo_id AND origen = 'correccion'),
-          ts))
+FOR EACH ROW WHEN NEW.origen <> 'correccion'
+    AND COALESCE(NEW.serie, 'cuenta') <> 'tardia' AND EXISTS (
+    SELECT 1 FROM flota_lectura_odometro l
+    WHERE l.vehiculo_id = NEW.vehiculo_id AND l.valor_km > NEW.valor_km
+      AND {_CUENTA_SQL}
+      AND NOT EXISTS (SELECT 1 FROM flota_lectura_odometro a
+                       WHERE a.anula_lectura_id = l.id)
+      AND l.ts >= COALESCE(
+          (SELECT MAX(c.ts) FROM flota_lectura_odometro c
+            WHERE c.vehiculo_id = NEW.vehiculo_id AND c.origen = 'correccion'
+              AND c.anula_lectura_id IS NULL),
+          l.ts))
 BEGIN SELECT RAISE(ABORT, '{_MSG_MONOTONIA}'); END;
 
 CREATE TRIGGER flota_odometro_no_update
@@ -991,13 +1059,17 @@ BEGIN SELECT RAISE(ABORT, '{_MSG_SOLAPE}'); END;
 _PG_DDL = f"""
 CREATE OR REPLACE FUNCTION flota_odometro_monotonia() RETURNS trigger AS $$
 BEGIN
-  IF NEW.origen <> 'correccion' AND EXISTS (
+  IF NEW.origen <> 'correccion' AND COALESCE(NEW.serie, 'cuenta') <> 'tardia'
+     AND EXISTS (
       SELECT 1 FROM flota_lectura_odometro l
       WHERE l.vehiculo_id = NEW.vehiculo_id AND l.valor_km > NEW.valor_km
+        AND {_CUENTA_SQL}
+        AND NOT EXISTS (SELECT 1 FROM flota_lectura_odometro a
+                         WHERE a.anula_lectura_id = l.id)
         AND l.ts >= COALESCE(
             (SELECT MAX(c.ts) FROM flota_lectura_odometro c
               WHERE c.vehiculo_id = NEW.vehiculo_id
-                AND c.origen = 'correccion'),
+                AND c.origen = 'correccion' AND c.anula_lectura_id IS NULL),
             l.ts)) THEN
     RAISE EXCEPTION '{_MSG_MONOTONIA}';
   END IF;

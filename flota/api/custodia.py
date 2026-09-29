@@ -85,6 +85,33 @@ def _lecturas_dominio(vehiculo_id):
     ]
 
 
+def km_plausible_json(vehiculo_id):
+    """Con qué compara el teléfono el km que el conductor escribe (2026-09-27).
+
+    El último kilometraje que CUENTA, cuándo, y el techo de km por día a partir
+    del cual la pantalla pregunta «¿seguro?» (`dominio.odometro.
+    techo_km_por_dia`, provisional y declarado). `None` sin lecturas: no hay
+    con qué comparar, y la pantalla no pregunta.
+    """
+    lecturas = _lecturas_dominio(vehiculo_id)
+    cuentan = dom_odo.lecturas_que_cuentan(lecturas)
+    if not cuentan:
+        return None
+    ultima = max(cuentan, key=lambda l: (l.ts, l.valor_km))
+    techo = dom_odo.techo_km_por_dia(dom_odo.km_por_dia(lecturas))
+    return {'km': ultima.valor_km, 'ts': iso_utc(ultima.ts),
+            'km_dia': techo['km_dia'], 'base': techo['base']}
+
+
+def _ultima_lectura_json(vehiculo_id):
+    fila = (LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id)
+            .order_by(LecturaOdometro.ts.desc(), LecturaOdometro.id.desc()).first())
+    if fila is None:
+        return None
+    return {'id': fila.id, 'valor_km': fila.valor_km, 'ts': iso_utc(fila.ts),
+            'confianza': fila.confianza}
+
+
 @custodia_bp.route('/custodia/activa/<placa>', methods=['GET'])
 @jwt_required()
 @exige(Roles.LECTURA_FLOTA, 'ver la custodia activa')
@@ -120,6 +147,12 @@ def custodia_activa(placa):
         # `sin_dato` viaja como la palabra, no como 0. Un vehículo sin lecturas
         # no tiene 0 km: no sabemos cuántos tiene.
         'odometro_actual': km if km is not SIN_DATO else str(SIN_DATO),
+        # La lectura más reciente, sea cual sea (2026-09-27): es la que el
+        # formulario de escritorio anula al «corregir la última». Una
+        # corrección anula UNA lectura y tiene que decir cuál.
+        'ultima_lectura': _ultima_lectura_json(vehiculo.id),
+        # Con qué compara el teléfono el km del recibo (2026-09-27).
+        'km_plausible': km_plausible_json(vehiculo.id),
         'custodia': None if vigente is None else {
             'id': vigente.id,
             'custodio_tipo': vigente.custodio_tipo,
@@ -535,11 +568,25 @@ def registrar_odometro():
     if denegado is not None:
         return denegado
 
+    # Una corrección anula UNA lectura (2026-09-27): cuál, en el cuerpo.
+    anula = None
+    if origen == OrigenLectura.CORRECCION:
+        if 'anula_lectura_id' not in datos or datos['anula_lectura_id'] is None:
+            return jsonify({
+                'error': 'Una corrección anula UNA lectura: diga cuál '
+                         '(anula_lectura_id). Sin eso borraría la historia '
+                         'entera, no el error.'}), 400
+        try:
+            anula = int(datos['anula_lectura_id'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'anula_lectura_id inválido'}), 400
+
     from datetime import datetime
     nueva = Lectura(
         valor_km=valor, ts=datetime.utcnow(), origen=origen,
         autor_usuario_id=_usuario_id(),
         motivo_correccion=datos['motivo_correccion'] if 'motivo_correccion' in datos else None,
+        anula_lectura_id=anula,
     )
     try:
         dom_odo.validar_lectura(_lecturas_dominio(vehiculo.id), nueva)
@@ -550,6 +597,7 @@ def registrar_odometro():
         vehiculo_id=vehiculo.id, valor_km=nueva.valor_km, ts=nueva.ts,
         origen=origen.value, autor_usuario_id=nueva.autor_usuario_id,
         motivo_correccion=nueva.motivo_correccion,
+        anula_lectura_id=nueva.anula_lectura_id,
     )
     db.session.add(fila)
     db.session.commit()

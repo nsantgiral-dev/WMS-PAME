@@ -383,6 +383,11 @@ function flotaAnRendimiento(h) {
         ${f.motivo || `${esc(f.ventanas)} ventana(s) · ${esc(f.dias_historia)} día(s) de historia`}${
           f.tanqueos_fuera_por_parcial
             ? ` · ${esc(f.tanqueos_fuera_por_parcial)} tanqueo(s) fuera por no estar marcados «lleno»`
+            : ''}${
+          f.tanqueos_fuera_por_km
+            ? ` · ${esc(f.tanqueos_fuera_por_km)} ${f.tanqueos_fuera_por_km === 1
+                ? 'tanqueo fuera porque su kilometraje se anuló o está en revisión'
+                : 'tanqueos fuera porque su kilometraje se anuló o está en revisión'}`
             : ''}</div>
       <div style="font-size:var(--fs-xs);color:var(--tx3,var(--tx2))">${esc(f.base)} · ${esc(f.etiqueta)}</div>
     </div>`).join('');
@@ -658,6 +663,7 @@ function flotaAnRitmo(h) {
             : `${esc(f.km_dia)} km/día · ${esc(f.n)} lectura(s) en ${esc(f.dias)} día(s) · ${esc(f.marca)}`}</span>
       </div>
       ${f.motivo ? `<div style="font-size:var(--fs-xs);color:var(--tx2)">${esc(f.motivo)}</div>` : ''}
+      ${flotaAnFueraDeLaSerie(f.fuera_de_la_serie)}
     </div>`).join('');
   return `<div class="tabla-card">
     <div class="tabla-titulo">Ritmo de uso · km por día</div>
@@ -667,6 +673,28 @@ function flotaAnRitmo(h) {
       fijarlo con dato dentro de un mes.</p>
     ${cuerpo}
   </div>`;
+}
+
+/** Las lecturas que NO entran al ritmo, y por qué (2026-09-27). Vacío si no
+ * hay ninguna: una placa sin nada fuera no necesita el renglón. */
+function flotaAnFueraDeLaSerie(fuera) {
+  if (!fuera) return '';
+  const partes = [];
+  const n = k => Number(fuera[k]) || 0;
+  if (n('anuladas')) {
+    partes.push(n('anuladas') === 1 ? '1 lectura anulada por una corrección'
+      : `${esc(n('anuladas'))} lecturas anuladas por una corrección`);
+  }
+  if (n('saltos_sin_verificar')) {
+    partes.push(n('saltos_sin_verificar') === 1 ? '1 salto sin verificar'
+      : `${esc(n('saltos_sin_verificar'))} saltos sin verificar`);
+  }
+  if (n('tardias')) {
+    partes.push(n('tardias') === 1 ? '1 lectura que llegó tarde'
+      : `${esc(n('tardias'))} lecturas que llegaron tarde`);
+  }
+  if (!partes.length) return '';
+  return `<div style="font-size:var(--fs-xs);color:var(--tx2)">Fuera del ritmo: ${partes.join(' · ')}</div>`;
 }
 
 /** Taller y garantía. Tres contadores que no se suman.
