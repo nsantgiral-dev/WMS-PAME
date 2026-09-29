@@ -435,7 +435,11 @@ class TestLosCronsDeMadrugadaVuelven:
 # La hora de una corrida diaria (`hour=2`) es un horario, no una ventana.
 
 #: (archivo, id del job) con un rango de horas propio, y por qué. Solo encoge.
-RANGOS_DE_HORA_DECLARADOS = {}
+RANGOS_DE_HORA_DECLARADOS = {
+    # Dos corridas fijas (06:00 y 12:00), no una ventana: la segunda reintenta
+    # el correo de avisos que falló a las 6. No habla con Siesa (2026-09-29).
+    'flota/adaptadores/avisos.py': 'dos horarios fijos 06:00 y 12:00; no es ventana ni habla con Siesa',
+}
 
 
 def _rangos_de_hora(base=None):
