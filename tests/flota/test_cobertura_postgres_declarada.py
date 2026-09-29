@@ -76,7 +76,12 @@ _CORREDOR = _RAIZ / 'scripts' / 'verificar_flota_postgres.sh'
 #: booleanos sumados del 2026-08-01— y es el que impone la regla 1 en la base:
 #: `apto` con un ítem sin responder queda rechazado por el motor, no solo por
 #: Python. Contar que el constraint existe no prueba que decida bien.
-_TESTS_ESPERADOS = 45
+#:
+#: Y de 45 a 54 el 2026-09-27, con m051flotakm (T3): `TestLaSerieEnPostgres`
+#: ejerce contra plpgsql el salto que no sube el tope, la anulación puntual,
+#: la tardía y los tres CHECK nuevos. Corrida verde: PostgreSQL 17 local,
+#: 54 passed.
+_TESTS_ESPERADOS = 54
 
 
 def _tests_del_archivo(ruta: pathlib.Path) -> list:
