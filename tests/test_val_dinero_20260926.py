@@ -154,7 +154,7 @@ class TestUnaRutaLiquidadaEnTransitoNoSeEdita:
         v = _valor(db, f)
         assert _conductor_confirma(client, app, f, uc, v).status_code == 200
         # Arreglo (2026-09-26): liquidar exige la ruta cerrada…
-        with pytest.raises(ValueError, match='ENTREGADA'):
+        with pytest.raises(ValueError, match='se liquida cuando el conductor la cierra'):
             RutaService.liquidar_ruta(f.ruta_id, usuario_id=ad.id)
         # …y la guarda de «liquidada» vale en toda edición (una ruta vieja
         # liquidada en tránsito antes del arreglo).

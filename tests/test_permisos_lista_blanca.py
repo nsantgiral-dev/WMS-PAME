@@ -150,6 +150,10 @@ ABIERTAS_POR_ROL = {
         'POST /api/cartera/retenciones/<int:rid>/convertir-contado': _SERVICIO,
         'POST /api/cartera/retenciones/<int:rid>/reevaluar': _SERVICIO,
         'POST /api/mobile/sync': _SYNC,
+        # m051liqcaja: recibir la caja del conductor es de quien liquida (400
+        # porque el cuerpo de la sonda no trae lo contado).
+        'POST /api/rutas/caja/conductor/<int:conductor_id>/acta':
+            'recibe la caja del conductor: es suyo (400 sin lo contado)',
         'POST /flota/avisos/entrega': 'flota: webhook del canal de mensajería (503 sin configurar)',
     },
     'lider_cartera': {
