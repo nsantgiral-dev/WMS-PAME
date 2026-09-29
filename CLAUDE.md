@@ -7913,9 +7913,9 @@ solo desde `nueva_raiz`, toda puerta que abre pregunta antes —inventario:
 `ajustar_desde_auditoria_picking`—, ningún filtro por `SesionConteo.ubicacion_id`
 fuera de 3 declarados; meta-tests y piso; la migración contra un SQLite propio).
 
-**Lo que NO cubre:** el job `AJUSTE_CONTEO` aplica el delta en el WMS al hueco
-de la sesión (`SIESA-GENERAL` o el mayor) con piso 0; el resto lo rehace la
-carga de las 7:00 (P3 de la auditoría, sin tocar). El intercalado de
+**Lo que NO cubre:** ~~el job `AJUSTE_CONTEO` aplica el delta al hueco de la
+sesión con piso 0 y «el resto lo rehace la carga de las 7:00»~~ — falso,
+corregido el 2026-09-29 (ver «La unidad SKU × almacén, completa»). El intercalado de
 `mobile_service` sigue ofreciendo conteos por hueco (C5, con v3). Las sesiones
 viejas con ubicación física siguen válidas: el HUD nombra todos los lugares.
 
@@ -7979,3 +7979,36 @@ el tipo al aviso POS).
 **Lo que NO cubre:** el formulario de conteo manual (pantalla del líder) sigue
 mostrando el aviso POS en todo almacén; NS2 (parqueo de licitaciones) se lee
 como tienda; «empacado» no dice cuántas unidades (a propósito: conteo ciego).
+
+## Conteo: la unidad SKU × almacén, completa, y `/editar` no define la cifra (2026-09-29)
+
+La validación crítica de C1-C3 (`val-conteo-c123` @ 9797847f) encontró tres P1
+que el trinquete de C1 no veía porque **medía la forma** (`SesionConteo.ubicacion_id`
+en una comparación) **y no la clase**:
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **VAL-1** | Sin foto de Siesa, `registrar_conteo` comparaba el TOTAL contado contra `UbicacionProducto` de UN hueco (`filter_by(ubicacion_id=sesion_pre.ubicacion_id)`): multi-hueco nunca daba MATCH | Contra `existencia_wms_del_sku` |
+| **VAL-2** | El job `AJUSTE_CONTEO` (dos copias: normal y recuperación de AJUSTANDO) aplicaba el delta del total a un hueco con `max(0, …)`: GENERAL 10 + CROSS-DOCK 90, contados 60 → el WMS quedaba en 90, y la carga de las 7:00 **no** lo corrige (GENERAL = max(0, Siesa − huecos reales)) | `ConteoService.aplicar_ajuste_al_wms`: el SKU queda en lo contado; AJ-SAL descuenta primero lo que no es un lugar, después el hueco de la sesión, después el resto, lo reservado al final; un `MovimientoInventario` AJUSTE_CONTEO por hueco; lo que no cabe se dice (`sin_descontar`), nunca un piso 0 callado |
+| **VAL-3** | `/editar` reescribía la cifra de una raíz ya verificada por el doble ciego (o la llevaba a MATCH, sin firma) y quien editó la aprobaba | La cifra confirmada por un 2º conteo **no se corrige** (se recuenta o se cancela); en un 1er conteo sin verificar, quien corrige queda en `cantidad_corregida_por_id` (m051conteo) y **no aprueba** ese ajuste; corregir hasta la cifra de Siesa (cerrar sin firma) se niega |
+
+Compatible con las dos reglas de David ya en qa: «Siesa no tiene fila» =
+existencia 0 (af2e2f2d; el respaldo al WMS queda solo para Siesa caído) y el
+conteo manual sin ubicación nace en `SIESA-GENERAL` (ebf140c6, que acá es el
+`ubicacion_id` que recibe `nueva_raiz`).
+
+**Trinquetes:** `tests/test_conteo_unidad_sku_almacen.py` gana la otra forma de
+la clase —**un filtro de consulta por la ubicación de un objeto**
+(`filter_by(ubicacion_id=x.ubicacion_id)`, `payload.get('ubicacion_id')`,
+`Modelo.ubicacion_id == x.ubicacion_id`) en todo el dominio de conteo, con
+inventario de 1— y exige que la rama `AJUSTE_CONTEO` del job no escriba
+`.cantidad` a mano. `test_inventario_no_se_resta_sin_destino`: la resta pasó del
+job a `conteo_service` (1). Los tres xfail del validador, en verde en
+`tests/test_val_conteo_c123.py`.
+
+**Lo que NO cubre:** VAL-4..VAL-9 (P2/P3) siguen abiertos: los SKUs sin fila en
+Siesa ahora los resuelve la regla de af2e2f2d, pero `ultimo_conteo_por_sku` no
+mira `fuente_existencia`; «no cuente lo empacado» mezcla lo remisionado con lo
+que Siesa todavía cuenta; con un solo admin, un CC3 > $100.000 que él contó no
+lo aprueba nadie (salida: cancelar); re-encadenar `m051conteo` detrás de
+`m051asignacion` al integrar.

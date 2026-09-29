@@ -535,6 +535,8 @@ class ConteoService:
         for n in ConteoService.nodos_de_la_cadena(raiz):
             if n.operario_id and n.cantidad_fisica is not None:
                 autores.setdefault(n.operario_id, 'CONTO')
+        if raiz.cantidad_corregida_por_id:
+            autores[raiz.cantidad_corregida_por_id] = 'CORRIGIO'
         if raiz.verificacion_omitida_por_id:
             autores[raiz.verificacion_omitida_por_id] = 'OMITIO'
         return autores
@@ -554,8 +556,9 @@ class ConteoService:
         cifra Y la firmaba, de cualquier monto: un faltante que se quería tapar
         se tapaba con un CC3. Tres reglas, una función:
 
-        1. Quien **omitió** la verificación no aprueba ese ajuste, de ningún
-           monto: decidió que el CC1 vale sin verificar; firma otra persona.
+        1. Quien **omitió** la verificación, o **corrigió a mano** la cifra
+           (`/editar`, VAL-3), no aprueba ese ajuste, de ningún monto: definió
+           el número sin verificarlo; firma otra persona.
         2. Quien **contó** la cadena (o la auditó) firma hasta
            `CONTEO_TOPE_AUTOAPROBACION` (defecto $100.000); por encima, otra
            persona. Sin costo no se sabe cuánto vale: no la firma (Regla 0).
@@ -574,6 +577,9 @@ class ConteoService:
         if autor == 'OMITIO':
             return ('Usted saltó la verificación de este conteo: el ajuste lo aprueba '
                     'otra persona.')
+        if autor == 'CORRIGIO':
+            return ('Usted corrigió a mano la cantidad de este conteo: el ajuste lo '
+                    'aprueba otra persona.')
         if autor == 'CONTO' and not dentro:
             return (f'Usted contó este producto y el ajuste {cuanto}: por encima de '
                     f'{politica.pesos(tope)} lo aprueba otra persona (el admin).')
@@ -938,6 +944,89 @@ class ConteoService:
                              bulto_por_salir),
                         traslado_por_salir))
             .exists()).scalar()
+
+    @staticmethod
+    def aplicar_ajuste_al_wms(sesion: SesionConteo, motivo_codigo: str, cantidad: int,
+                              *, documento: str = None) -> dict:
+        """Refleja en el WMS el ajuste que Siesa aceptó: **el SKU en el almacén
+        queda en lo contado** (VAL-2, 2026-09-29). La única que mueve el stock
+        del WMS por un ajuste de conteo (la llama el job `AJUSTE_CONTEO`).
+
+        Antes el job aplicaba el delta del TOTAL a UN hueco (el de la sesión)
+        con `max(0, …)`: con SIESA-GENERAL 10 + CROSS-DOCK 90, contados 60, el
+        AJ-SAL 40 dejaba GENERAL 0 y CROSS-DOCK 90 — 30 unidades fantasma que
+        la carga de las 7:00 no corrige (GENERAL = max(0, Siesa − huecos
+        reales)) y que el picker iba a buscar.
+
+        AJ-ENT: al hueco de la sesión. AJ-SAL: primero lo que no es un lugar
+        (SIESA-GENERAL), después el hueco de la sesión, después los demás,
+        el de más unidades primero; en cada pasada lo no reservado antes que lo
+        reservado. Cada hueco tocado deja su `MovimientoInventario`
+        (`AJUSTE_CONTEO`): la contrapartida es el documento 142951 que Siesa ya
+        aceptó. Si el WMS tenía menos de lo que el ajuste quita, no se inventa
+        nada: se dice (`sin_descontar` + log).
+        """
+        from app.models.inventario import MovimientoInventario, UbicacionProducto
+        from app.models.ubicacion import Ubicacion
+        filas = (UbicacionProducto.query
+                 .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+                 .filter(Ubicacion.almacen_id == sesion.almacen_id,
+                         UbicacionProducto.producto_id == sesion.producto_id)
+                 .with_for_update()
+                 .all())
+        movimientos = []
+
+        def _mov(fila, delta, antes):
+            movimientos.append({'ubicacion_id': fila.ubicacion_id, 'cantidad': delta})
+            db.session.add(MovimientoInventario(
+                producto_id=sesion.producto_id, ubicacion_id=fila.ubicacion_id,
+                almacen_id=sesion.almacen_id, tipo='AJUSTE_CONTEO', cantidad=delta,
+                saldo_antes=antes, saldo_despues=fila.cantidad,
+                motivo=f'Ajuste de conteo {sesion.codigo} ({motivo_codigo}) aceptado por Siesa'[:200],
+                numero_documento=(documento or sesion.codigo)[:50],
+                # Reflejo de un documento que Siesa ya aceptó: nada que enviar.
+                siesa_sync='OMITIDO'))
+
+        if motivo_codigo != 'AJ-SAL':
+            fila = next((f for f in filas if f.ubicacion_id == sesion.ubicacion_id), None)
+            if fila is None:
+                fila = UbicacionProducto(ubicacion_id=sesion.ubicacion_id,
+                                         producto_id=sesion.producto_id,
+                                         cantidad=0, reservado=0, bloqueado=0)
+                db.session.add(fila)
+            antes = fila.cantidad or 0
+            fila.cantidad = antes + cantidad
+            _mov(fila, cantidad, antes)
+            return {'movimientos': movimientos, 'sin_descontar': 0}
+
+        def _orden(f):
+            fisica = bool(f.ubicacion and f.ubicacion.es_fisica)
+            return (fisica, f.ubicacion_id != sesion.ubicacion_id, -(f.cantidad or 0),
+                    f.ubicacion_id)
+        ordenadas = sorted(filas, key=_orden)
+        quitar = {f.ubicacion_id: 0 for f in ordenadas}
+        pendiente = cantidad
+        for solo_libre in (True, False):
+            for f in ordenadas:
+                if pendiente <= 0:
+                    break
+                tope = (f.cantidad or 0) - quitar[f.ubicacion_id]
+                if solo_libre:
+                    tope -= (f.reservado or 0)
+                toma = min(pendiente, max(0, tope))
+                quitar[f.ubicacion_id] += toma
+                pendiente -= toma
+        for f in ordenadas:
+            if quitar[f.ubicacion_id]:
+                antes = f.cantidad or 0
+                f.cantidad = antes - quitar[f.ubicacion_id]
+                _mov(f, -quitar[f.ubicacion_id], antes)
+        if pendiente > 0:
+            logger.warning(
+                '[CONTEO] %s: el ajuste AJ-SAL %s no cupo en el WMS (%s sin descontar): '
+                'el WMS tenía menos del SKU que Siesa. Nada se inventa; lo corrige '
+                'la carga de existencias.', sesion.codigo, cantidad, pendiente)
+        return {'movimientos': movimientos, 'sin_descontar': pendiente}
 
     @staticmethod
     def nueva_raiz(*, producto, almacen_id: int, tipo: str, codigo: str,
@@ -1533,11 +1622,11 @@ class ConteoService:
             # Fallback a WMS si Siesa no responde (o la foto vino incompleta).
             # Sirve para decidir MATCH / segundo conteo; NO para ajustar:
             # `motivo_bloqueo_ajuste` niega cualquier ajuste sin foto.
-            reg_inv = UbicacionProducto.query.filter_by(
-                ubicacion_id=sesion_pre.ubicacion_id,
-                producto_id=sesion_pre.producto_id,
-            ).first()
-            existencia_wms = float(reg_inv.cantidad) if reg_inv else 0.0
+            # **El total del SKU en el almacén, no el del hueco de la sesión**
+            # (VAL-1, 2026-09-29): quien cuenta suma todos los lugares, y
+            # comparar ese total contra UN hueco nunca daba MATCH.
+            existencia_wms = float(ConteoService.existencia_wms_del_sku(
+                sesion_pre.producto_id, sesion_pre.almacen_id))
             _fuente_existencia = 'WMS'
             logger.warning(
                 f'[CONTEO] Siesa no dio foto completa para {sesion_pre.codigo} '
@@ -3040,10 +3129,20 @@ class ConteoService:
             return (f'Un conteo en {sesion.estado} no tiene una cantidad que corregir: '
                     f'solo se corrige lo ya contado (MATCH o DESCUADRE). Para cerrarlo '
                     f'sin contar, cancélelo.')
+        # **La cifra que verificó el doble ciego no se corrige a mano** (VAL-3,
+        # 2026-09-29): con un 2º conteo (o el definitivo) ya contado, el número
+        # lo definieron dos personas; reescribirlo dejaba a una sola definir la
+        # cifra — y firmarla, o cerrarla en MATCH sin firma.
+        hijo = sesion.hijo_conteo
+        if hijo is not None and hijo.cantidad_fisica is not None:
+            return ('La cantidad de este conteo la confirmó un segundo conteo de otra '
+                    'persona: no se corrige a mano. Si está mal, recuéntelo (conteo '
+                    'manual) o cancele la cadena.')
         return None
 
     @staticmethod
-    def corregir_cantidad(sesion: SesionConteo, nueva_cantidad: int) -> list:
+    def corregir_cantidad(sesion: SesionConteo, nueva_cantidad: int,
+                          usuario_id: int = None) -> list:
         """Un admin corrige lo contado (`PUT /api/conteo/<id>/editar`). Devuelve
         la lista de cambios aplicados; no hace commit.
 
@@ -3057,8 +3156,19 @@ class ConteoService:
         no_se_corrige = ConteoService.motivo_no_se_corrige_cantidad(sesion)
         if no_se_corrige:
             raise ValueError(no_se_corrige)
+        base = ConteoService.base_de_comparacion(sesion)
+        if (sesion.estado == EstadoConteo.DESCUADRE and base is not None
+                and nueva_cantidad == base):
+            # Corregir hasta la cifra de Siesa cerraba el conteo en MATCH, sin
+            # ajuste y sin firma de nadie: un faltante contado desaparecía con
+            # una edición (VAL-3). Si se contó mal, se recuenta.
+            raise ValueError('Corregir a la cifra de Siesa cierra este conteo sin que '
+                             'nadie firme: si se contó mal, recuéntelo (conteo manual) '
+                             'o cancélelo.')
         cambios = []
         sesion.cantidad_fisica = nueva_cantidad
+        # Quien corrige define la cifra: no aprueba ese ajuste.
+        sesion.cantidad_corregida_por_id = usuario_id
         cambios.append(f'cantidad_fisica → {nueva_cantidad}')
         # Re-conciliar si ya tenemos referencia Siesa
         if sesion.existencia_siesa is not None:
@@ -3917,22 +4027,18 @@ class ConteoService:
                 Ubicacion.almacen_id == almacen_id
             ).all()
         )
-        # Sin ubicación en el almacén se cuenta en `SIESA-GENERAL`, no se
-        # rechaza. El WMS arma el stock de la bodega con el sync de Siesa: si
-        # Siesa no tiene fila del ítem, el WMS tampoco le da ubicación — y la
-        # mercancía que está en el estante sin que ninguno de los dos la
-        # conozca era justo lo único que el conteo no podía corregir (QA,
-        # 2026-09-29: de 4.841 SKUs con ubicación en NB1, cero sin fila en
-        # Siesa). Es el mismo bucket donde el sync pondrá lo que ajuste el
-        # conteo, y el operario ve «búscalo en toda la bodega» (`es_fisica`).
-        if registros:
-            ubicacion_ids = list(dict.fromkeys(r.ubicacion_id for r in registros))
-        else:
+        # Sin ubicación en el almacén se cuenta en `SIESA-GENERAL` (la crea si
+        # falta), no se rechaza: si Siesa no tiene fila del ítem, el WMS
+        # tampoco le da ubicación, y esa mercancía en el estante es justo la
+        # que el conteo tiene que poder corregir (regla de ebf140c6, QA
+        # 2026-09-29). Con «Siesa no tiene fila» = existencia 0 (af2e2f2d), el
+        # conteo produce la entrada por lo contado.
+        ubicacion_sin_stock = None
+        if not registros:
             from app.services.inventario_siesa_service import _get_o_crear_ubicacion_general
-            ubicacion_ids = [_get_o_crear_ubicacion_general(almacen_id).id]
-            logger.info(
-                '[CONTEO MANUAL] %s sin ubicación en almacén %s — se cuenta en %s',
-                codigo, almacen_id, Ubicacion.CODIGO_GENERAL)
+            ubicacion_sin_stock = _get_o_crear_ubicacion_general(almacen_id).id
+            logger.info('[CONTEO MANUAL] %s sin ubicación en almacén %s — se cuenta en %s',
+                        codigo, almacen_id, Ubicacion.CODIGO_GENERAL)
 
         existente = (SesionConteo.query
                      .filter(SesionConteo.cadenas_vivas_del_almacen(
@@ -3965,6 +4071,7 @@ class ConteoService:
                 almacen_id=almacen_id,
                 tipo='MANUAL',
                 codigo=sesion_codigo,
+                ubicacion_id=ubicacion_sin_stock,
                 clasificacion_abc=producto.clasificacion_abc or 'C',
                 operario_id=operario_forzado.id if operario_forzado else None,
             )

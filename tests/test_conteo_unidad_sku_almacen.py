@@ -602,3 +602,177 @@ class TestElDetectorMuerde:
         guardas, raices, abren, por_hueco = self._uno(src)
         assert (guardas, por_hueco) == (set(), set())
         assert raices == {('app/x.py', 'g')}, 'la anidada se juzga sola, no como su madre'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7 · La misma clase en su otra forma: cantidades del WMS leídas o movidas por
+#     el hueco de UNA sesión (validación del 2026-09-27, VAL-1 y VAL-2)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# El escáner de arriba solo veía `SesionConteo.ubicacion_id` en una
+# comparación. Se le escaparon dos sitios que tenían la clase entera: el
+# respaldo sin foto (`UbicacionProducto.query.filter_by(ubicacion_id=
+# sesion_pre.ubicacion_id, …)`: el TOTAL contado contra UN hueco) y el job del
+# ajuste (el delta del total a un hueco con piso 0). Medía la forma, no la
+# clase. Esta forma: **un filtro por la ubicación de un objeto** (`x.ubicacion_id`
+# o `payload.get('ubicacion_id')`), en cualquier modelo, en el dominio de conteo.
+
+DOMINIO_CONTEO = ('app/services/conteo_service.py', 'app/services/abc_service.py',
+                  'app/models/conteo.py', 'app/services/conteo_politica.py',
+                  'app/services/conteo_listado.py', 'app/services/tablero_lider_conteo.py',
+                  'app/services/metricas/conteo.py', 'app/routes/conteo.py')
+
+#: Filtros por la ubicación de un objeto en el dominio de conteo. Solo encoge.
+POR_HUECO_DE_UN_OBJETO = {
+    ('app/services/conteo_service.py', 'ConteoService._crear_conteo_verificacion'):
+        'El mismo del inventario de arriba: excluye del CC2 a quien ya tiene una tarea '
+        'del mismo producto y hueco. Es reparto de personas; la asignación por '
+        'presencia (v3) lo reemplaza entero.',
+}
+
+
+def _es_ubicacion_de_un_objeto(v):
+    if (isinstance(v, ast.Attribute) and v.attr == 'ubicacion_id'
+            and isinstance(v.value, ast.Name) and v.value.id[:1].islower()):
+        return True
+    return (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute)
+            and v.func.attr == 'get' and v.args
+            and isinstance(v.args[0], ast.Constant) and v.args[0].value == 'ubicacion_id')
+
+
+def _por_hueco_de_un_objeto(fuentes):
+    hallados = set()
+    for archivo, src in fuentes:
+        for nombre, fn in _funciones(ast.parse(src)):
+            for n in _propias(fn):
+                if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and n.func.attr in ('filter_by', 'filter')):
+                    if any(k.arg == 'ubicacion_id' and _es_ubicacion_de_un_objeto(k.value)
+                           for k in n.keywords):
+                        hallados.add((archivo, nombre))
+                if isinstance(n, ast.Compare):
+                    # Un filtro de consulta: la COLUMNA (`Modelo.ubicacion_id`)
+                    # contra la ubicación de un objeto. Comparar dos objetos en
+                    # Python no es una consulta.
+                    lados = [n.left] + list(n.comparators)
+                    columna = any(isinstance(x, ast.Attribute) and x.attr == 'ubicacion_id'
+                                  and isinstance(x.value, ast.Name)
+                                  and x.value.id[:1].isupper() for x in lados)
+                    if columna and any(_es_ubicacion_de_un_objeto(x) for x in lados):
+                        hallados.add((archivo, nombre))
+    return hallados
+
+
+def _fuentes_dominio():
+    return [(f, (RAIZ / f).read_text(encoding='utf-8')) for f in DOMINIO_CONTEO]
+
+
+def _rama_del_job(tipo):
+    arbol = ast.parse((APP / 'services' / 'siesa_job_service.py').read_text(encoding='utf-8'))
+    for n in ast.walk(arbol):
+        if (isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+                and isinstance(n.test.comparators[0], ast.Constant)
+                and n.test.comparators[0].value == tipo
+                and getattr(n.test.left, 'attr', None) == 'tipo'):
+            return n
+    raise AssertionError(f'no encontré la rama {tipo} de _ejecutar_job')
+
+
+class TestLaCantidadDelWmsEsDelSku:
+
+    def test_nadie_lee_ni_mueve_el_wms_por_el_hueco_de_una_sesion(self):
+        hallados = _por_hueco_de_un_objeto(_fuentes_dominio())
+        assert hallados <= set(POR_HUECO_DE_UN_OBJETO), sorted(hallados - set(POR_HUECO_DE_UN_OBJETO))
+        assert set(POR_HUECO_DE_UN_OBJETO) <= hallados, 'ya no está: sáquelo del inventario'
+        assert all(len(m) >= 40 for m in POR_HUECO_DE_UN_OBJETO.values())
+
+    def test_el_job_del_ajuste_mueve_el_wms_por_la_politica(self):
+        """La rama AJUSTE_CONTEO de `_ejecutar_job` no toca `.cantidad` a mano:
+        llama `aplicar_ajuste_al_wms` (el SKU en el almacén queda en lo contado)."""
+        rama = _rama_del_job('AJUSTE_CONTEO')
+        assert any(isinstance(c, ast.Call) and getattr(c.func, 'attr', None) == 'aplicar_ajuste_al_wms'
+                   for c in ast.walk(rama))
+        escrituras = [n.lineno for n in ast.walk(rama)
+                      if isinstance(n, (ast.Assign, ast.AugAssign))
+                      and any(isinstance(t, ast.Attribute) and t.attr == 'cantidad'
+                              for t in (n.targets if isinstance(n, ast.Assign) else [n.target]))]
+        assert escrituras == [], f'la rama del job escribe .cantidad a mano: líneas {escrituras}'
+
+    def test_piso_el_escaner_ve_el_dominio(self):
+        assert len(_fuentes_dominio()) == len(DOMINIO_CONTEO)
+        assert ('app/services/conteo_service.py', 'ConteoService._crear_conteo_verificacion') \
+            in _por_hueco_de_un_objeto(_fuentes_dominio())
+
+
+class TestElDetectorDeHuecoDeUnObjetoMuerde:
+
+    def _uno(self, src):
+        return _por_hueco_de_un_objeto([('app/x.py', src)])
+
+    def test_ve_el_filter_by_del_respaldo(self):
+        src = ('def f(sesion_pre):\n    return UbicacionProducto.query.filter_by(\n'
+               '        ubicacion_id=sesion_pre.ubicacion_id, producto_id=1).first()\n')
+        assert self._uno(src) == {('app/x.py', 'f')}
+
+    def test_ve_el_payload_del_job(self):
+        src = "def f(payload):\n    return X.query.filter_by(ubicacion_id=payload.get('ubicacion_id'))\n"
+        assert self._uno(src) == {('app/x.py', 'f')}
+
+    def test_ve_la_comparacion(self):
+        src = 'def f(tarea):\n    return X.query.filter(X.ubicacion_id == tarea.ubicacion_id)\n'
+        assert self._uno(src) == {('app/x.py', 'f')}
+
+    def test_no_marca_comparar_dos_objetos_en_python(self):
+        src = 'def f(fila, sesion):\n    return fila.ubicacion_id == sesion.ubicacion_id\n'
+        assert self._uno(src) == set()
+
+    def test_no_marca_un_join_ni_un_constructor(self):
+        src = ('def f(s):\n    q = X.query.join(U, U.id == X.ubicacion_id)\n'
+               '    return SesionConteo(ubicacion_id=s.ubicacion_id)\n')
+        assert self._uno(src) == set()
+
+
+class TestElAjusteDelWms:
+    """`aplicar_ajuste_al_wms`, caso por caso (VAL-2)."""
+
+    def _mundo(self, db, dos_huecos, reservado=0):
+        general = _ubicacion(db, dos_huecos['almacen'].id, 'SIESA-GENERAL')
+        _stock(db, general, dos_huecos['producto'].id, 10)
+        dos_huecos['registro'].cantidad = 0
+        from app.models.inventario import UbicacionProducto
+        cd = UbicacionProducto.query.filter_by(ubicacion_id=dos_huecos['cd'].id).one()
+        cd.reservado = reservado
+        db.session.commit()
+        r = _svc().crear_conteo_manual(dos_huecos['almacen'].id, SKU)
+        from app.models.conteo import SesionConteo
+        fila_general = UbicacionProducto.query.filter_by(ubicacion_id=general.id).one()
+        return SesionConteo.query.filter_by(codigo=r['codigos'][0]).one(), fila_general, cd
+
+    def _total(self, dos_huecos):
+        return _svc().existencia_wms_del_sku(dos_huecos['producto'].id, dos_huecos['almacen'].id)
+
+    def test_la_salida_empieza_por_lo_que_no_es_un_lugar(self, db, dos_huecos):
+        s, general, cd = self._mundo(db, dos_huecos)
+        r = _svc().aplicar_ajuste_al_wms(s, 'AJ-SAL', 40)
+        db.session.commit()
+        assert (general.cantidad, cd.cantidad, self._total(dos_huecos)) == (0, 60, 60)
+        assert sorted(m['cantidad'] for m in r['movimientos']) == [-30, -10]
+        from app.models.inventario import MovimientoInventario
+        assert MovimientoInventario.query.filter_by(tipo='AJUSTE_CONTEO').count() == 2
+
+    def test_lo_reservado_se_toca_al_final(self, db, dos_huecos):
+        s, general, cd = self._mundo(db, dos_huecos, reservado=85)
+        _svc().aplicar_ajuste_al_wms(s, 'AJ-SAL', 15)       # 10 del GENERAL + 5 libres
+        assert (general.cantidad, cd.cantidad) == (0, 85)
+        _svc().aplicar_ajuste_al_wms(s, 'AJ-SAL', 5)        # ya no queda libre
+        assert cd.cantidad == 80
+
+    def test_lo_que_no_cabe_se_dice(self, db, dos_huecos):
+        s, general, cd = self._mundo(db, dos_huecos)
+        r = _svc().aplicar_ajuste_al_wms(s, 'AJ-SAL', 130)
+        assert r['sin_descontar'] == 30 and self._total(dos_huecos) == 0
+
+    def test_la_entrada_va_al_hueco_de_la_sesion(self, db, dos_huecos):
+        s, general, cd = self._mundo(db, dos_huecos)
+        _svc().aplicar_ajuste_al_wms(s, 'AJ-ENT', 5)
+        assert (general.cantidad, cd.cantidad) == (15, 90)

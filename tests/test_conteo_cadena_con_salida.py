@@ -196,7 +196,11 @@ class TestEditarNoDejaHijosContandoParaNada:
         assert (_s(db, cc1).estado, _s(db, cc1).cantidad_fisica) == ('SEGUNDO_CONTEO', 7)
         assert _s(db, cc2).estado == 'PENDIENTE'
 
-    def test_sin_hijos_vivos_se_corrige_como_siempre(self, app, client, db, siesa, tienda):
+    def test_con_el_cc2_contado_la_cifra_no_se_corrige(self, app, client, db, siesa, tienda):
+        """Sin hijos vivos, pero con un 2º conteo ya contado: la cifra la
+        confirmó otra persona y no se reescribe a mano (VAL-3, 2026-09-29).
+        Hasta entonces este test exigía lo contrario —corregir a 10 y cerrar en
+        MATCH sin firma—, que era la puerta que la validación encontró."""
         cc1, _r2 = _contar_cc1_cc2(tienda, siesa, 7, existencia=10)
         raiz = _s(db, cc1)
         raiz.estado = 'DESCUADRE'           # como la deja «omitir» o un bloqueo
@@ -204,8 +208,8 @@ class TestEditarNoDejaHijosContandoParaNada:
         r = client.put(f'/api/conteo/{cc1}/editar',
                        json={'cantidad_fisica': 10, 'motivo_edicion': 'recontado'},
                        headers=_auth(app, tienda['supervisor']))
-        assert r.status_code == 200, r.get_json()
-        assert _s(db, cc1).estado == 'MATCH'
+        assert r.status_code == 409 and 'segundo conteo' in r.get_json()['error'], r.get_json()
+        assert _s(db, cc1).estado == 'DESCUADRE'
 
 
 class TestSoloSeCorrigeLaRaizYaContada:
@@ -248,12 +252,19 @@ class TestSoloSeCorrigeLaRaizYaContada:
         assert _s(db, cc2).cantidad_fisica == 8
 
     def test_la_raiz_contada_si_y_la_pantalla_lo_sabe(self, app, client, db, siesa, tienda):
-        cc1, _r2 = _contar_cc1_cc2(tienda, siesa, 7, existencia=10)
-        raiz = _s(db, cc1)
-        raiz.estado = 'DESCUADRE'
-        db.session.commit()
+        """Lo que queda corregible es un 1er conteo sin verificar (acá, MATCH).
+        Con un 2º conteo ya contado, no: la pantalla lo sabe (VAL-3)."""
+        siesa.poner(existencia=10, pos=0)
+        cc1 = _cc1(tienda)
+        assert _abrir_y_contar(cc1, tienda['a'], 10)['resultado'] == 'MATCH'
         assert _s(db, cc1).to_dict()['no_se_corrige_cantidad'] is None
-        assert self._editar(app, client, tienda, cc1, 10).status_code == 200
+        assert self._editar(app, client, tienda, cc1, 9).status_code == 200
+        assert _s(db, cc1).cantidad_corregida_por_id == tienda['supervisor'].id
+        verificada, _r2 = _contar_cc1_cc2(tienda, siesa, 7, existencia=10)
+        raiz = _s(db, verificada)
+        raiz.estado = 'DESCUADRE'           # esperando firma, con su 2º conteo contado
+        db.session.commit()
+        assert 'segundo conteo' in _s(db, verificada).to_dict()['no_se_corrige_cantidad']
 
 
 class TestDescartarNoDejaAjustandoSinJob:

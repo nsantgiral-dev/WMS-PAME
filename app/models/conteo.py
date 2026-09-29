@@ -292,6 +292,13 @@ class SesionConteo(db.Model):
                                             nullable=True)
     verificacion_omitida_motivo = db.Column(db.Text, nullable=True)
     verificacion_omitida_en = db.Column(db.DateTime, nullable=True)
+    #: **Quién corrigió a mano la cantidad de esta raíz** (m051conteo, VAL-3,
+    #: 2026-09-29). Solo la escribe `ConteoService.corregir_cantidad`. Quien la
+    #: corrigió definió la cifra: no aprueba ese ajuste
+    #: (`_motivo_ajuste_propio`). `editado_por` no sirve para esto: lo pisan
+    #: cancelar, omitir y reasignar.
+    cantidad_corregida_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'),
+                                          nullable=True)
 
     # Relaciones
     ubicacion = db.relationship('Ubicacion', backref='sesiones_conteo', lazy=True)

@@ -530,7 +530,8 @@ def editar_conteo(id):
                 or nueva_cantidad < 0:
             return jsonify({'error': 'cantidad_fisica debe ser un entero >= 0'}), 400
         try:
-            cambios.extend(ConteoService.corregir_cantidad(sesion, nueva_cantidad))
+            cambios.extend(ConteoService.corregir_cantidad(sesion, nueva_cantidad,
+                                                           usuario_id=editor_id))
         except ValueError as e:
             db.session.rollback()
             return jsonify({'error': str(e)}), 409

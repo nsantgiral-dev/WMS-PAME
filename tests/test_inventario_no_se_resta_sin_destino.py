@@ -82,11 +82,14 @@ RESTAS_DECLARADAS = {
         'Traslado interno RESERVA → PICKING. La contrapartida es el '
         '`UbicacionProducto` de la ubicación de picking, en la misma función.'
     ),
-    'app/services/siesa_job_service.py': (
-        2,
-        'Dos ajustes AJ-SAL que vienen de Siesa (conteo cíclico y ajuste '
-        'físico). La contrapartida vive en Siesa, no en el WMS: el WMS está '
-        'reflejando un movimiento que ya ocurrió allá.'
+    'app/services/conteo_service.py': (
+        1,
+        '2026-09-29 · VAL-2 · `aplicar_ajuste_al_wms`: el AJ-SAL de un conteo que '
+        'Siesa ya aceptó (142951) se refleja en el WMS repartido entre los huecos '
+        'del SKU. La contrapartida es ese documento en Siesa, y cada hueco tocado '
+        'deja su `MovimientoInventario` AJUSTE_CONTEO. Antes vivía en el job '
+        '(siesa_job_service, dos copias: el camino normal y la recuperación de '
+        'AJUSTANDO), con piso 0 sobre un solo hueco; el job ya no resta nada.'
     ),
     'app/services/traslado_service.py': (
         2,

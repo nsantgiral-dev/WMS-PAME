@@ -1386,22 +1386,23 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     sesion_cteo.fecha_cierre = sesion_cteo.fecha_cierre or _now_rec
                     if not sesion_cteo.siesa_response:
                         sesion_cteo.siesa_response = json.dumps({'recuperado_dlq': True, 'job_id': job.id})
-                    # Reaplicar cambio de inventario WMS
+                    # Reaplicar cambio de inventario WMS — la misma política que
+                    # el camino normal (`aplicar_ajuste_al_wms`, VAL-2): el SKU
+                    # en el almacén queda en lo contado, no un hueco con piso 0.
                     _mc = payload.get('motivo_codigo')
                     _cant = payload.get('cantidad', 0)
-                    _inv = (_UbicProd.query
-                            .filter_by(
-                                ubicacion_id=payload.get('ubicacion_id'),
-                                producto_id=payload.get('producto_id')
-                            ).with_for_update().first())
-                    if _inv:
-                        _tpid = payload.get('tarea_picking_id')
-                        if _tpid:
+                    if payload.get('tarea_picking_id'):
+                        _inv = (_UbicProd.query
+                                .filter_by(
+                                    ubicacion_id=payload.get('ubicacion_id'),
+                                    producto_id=payload.get('producto_id')
+                                ).with_for_update().first())
+                        if _inv:
                             _inv.bloqueado = max(0, _inv.bloqueado - _cant)
-                        if _mc == 'AJ-SAL':
-                            _inv.cantidad = max(0, _inv.cantidad - _cant)
-                        else:
-                            _inv.cantidad += _cant
+                    if _mc and _cant:
+                        from app.services.conteo_service import ConteoService as _CSR
+                        _CSR.aplicar_ajuste_al_wms(sesion_cteo, _mc, _cant,
+                                                   documento=payload.get('referencia'))
                     db.session.commit()
                     logger.info(
                         f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} recuperada → AJUSTADO'
@@ -1502,24 +1503,26 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             sesion_cteo.estado = EstadoConteo.AJUSTADO
             sesion_cteo.fecha_cierre = _now
 
-            # Actualizar stock WMS local — mantiene sincronía sin esperar sync nocturna
+            # Actualizar stock WMS local — mantiene sincronía sin esperar sync
+            # nocturna. El SKU en el ALMACÉN queda en lo contado, repartido
+            # entre sus huecos (`ConteoService.aplicar_ajuste_al_wms`, VAL-2):
+            # antes el delta del total iba a un solo hueco con piso 0.
             motivo_codigo = payload['motivo_codigo']
             cantidad_ajuste = payload['cantidad']
-            inv = (_UbicProd.query
-                   .filter_by(
-                       ubicacion_id=payload.get('ubicacion_id'),
-                       producto_id=payload.get('producto_id')
-                   ).with_for_update().first())
-            if inv:
-                # Desbloquear solo si vino de excepción de picking
-                tarea_picking_id = payload.get('tarea_picking_id')
-                if tarea_picking_id:
+            tarea_picking_id = payload.get('tarea_picking_id')
+            if tarea_picking_id:
+                # Desbloquear solo si vino de excepción de picking: el bloqueo
+                # vive en el hueco de la tarea (el de la sesión de auditoría).
+                inv = (_UbicProd.query
+                       .filter_by(
+                           ubicacion_id=payload.get('ubicacion_id'),
+                           producto_id=payload.get('producto_id')
+                       ).with_for_update().first())
+                if inv:
                     inv.bloqueado = max(0, inv.bloqueado - cantidad_ajuste)
-                # Ajustar stock WMS (conteos cíclicos + excepciones)
-                if motivo_codigo == 'AJ-SAL':
-                    inv.cantidad = max(0, inv.cantidad - cantidad_ajuste)
-                else:
-                    inv.cantidad += cantidad_ajuste
+            from app.services.conteo_service import ConteoService as _CSW
+            _CSW.aplicar_ajuste_al_wms(sesion_cteo, motivo_codigo, cantidad_ajuste,
+                                       documento=payload.get('referencia'))
 
             db.session.commit()
         except Exception as _e:

@@ -1058,21 +1058,17 @@ class TestEditar:
         st, r = b.put(b.admin, f'/api/conteo/{raiz_d}/editar', {'cantidad_fisica': 50})
         assert st == 400, r
 
-        # Raíz en DESCUADRE: se corrige, y cuadrando pasa a MATCH.
+        # Raíz en DESCUADRE resuelta por el definitivo: la cifra la definió el
+        # doble ciego y NO se corrige a mano (VAL-3, 2026-09-29). Hasta entonces
+        # este paso corregía a 49 y después a 50 → MATCH: un faltante contado por
+        # tres personas se cerraba con una edición y sin firma.
         st, r = self._editar(b, raiz_d, 49)
-        assert st == 200, r
+        assert st == 409 and 'segundo conteo' in r['error'], r
         s = b.sesion(raiz_d)
-        assert (s.estado, s.cantidad_fisica, s.diferencia) == (EstadoConteo.DESCUADRE, 49, -1)
-        assert s.editado_por == b.admin.id and s.motivo_edicion == 'error de digitación'
-        st, r = self._editar(b, raiz_d, 50)
-        assert st == 200 and 'estado → MATCH' in r['cambios'], r
-        assert b.sesion(raiz_d).estado == EstadoConteo.MATCH
-        # Y un MATCH que se corrige a otra cifra vuelve a DESCUADRE.
-        st, r = self._editar(b, raiz_d, 52)
-        assert st == 200 and b.sesion(raiz_d).estado == EstadoConteo.DESCUADRE
+        assert (s.estado, s.cantidad_fisica) == (EstadoConteo.DESCUADRE, 48)
 
         # En vuelo a Siesa: no.
-        st, r = b.put(b.supervisor, f'/api/conteo/{raiz_d}/ajustar')
+        st, r = b.put(b.admin, f'/api/conteo/{raiz_d}/ajustar')
         assert st == 202, r
         st, r = self._editar(b, raiz_d, 50)
         assert st == 409, r
