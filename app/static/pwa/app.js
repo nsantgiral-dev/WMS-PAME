@@ -1237,14 +1237,31 @@ function movimientos(lista) {
   if (!lista || !lista.length) { el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div><div style="color:var(--tx3);font-size:var(--fs-sm);padding:8px 0;">Sin movimientos</div>'; return; }
   const TIPOS_ENTRADA = new Set(['ENTRADA', 'CARGA_INICIAL_SIESA', 'RECEPCION', 'AJUSTE_ENTRADA', 'DEVOLUCION']);
   el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div>' + lista.slice(0,8).map(m => {
-    const esEntrada = TIPOS_ENTRADA.has(m.tipo);
-    const c = esEntrada ? '#4ade80' : (m.cantidad > 0 ? '#f87171' : '#666');
-    const s = esEntrada ? '+' : (m.cantidad > 0 ? '-' : '');
+    const mm = movimientoMostrado(m, TIPOS_ENTRADA);
+    const c = mm.color, s = mm.signo;
     const fechaStr = m.fecha && !m.fecha.endsWith('Z') ? m.fecha + 'Z' : m.fecha;
     const h = new Date(fechaStr).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' });
     const doc = m.numero_documento ? `<div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(m.numero_documento)}</div>` : '';
-    return `<div class="tabla-fila"><div><div class="tabla-nombre">${esc(m.tipo)}</div><div style="font-size:var(--fs-xs);color:var(--tx3);">${h}</div>${doc}</div><div style="color:${c};font-weight:700;">${s}${esc(m.cantidad)}</div></div>`;
+    return `<div class="tabla-fila"><div><div class="tabla-nombre">${esc(m.tipo)}</div><div style="font-size:var(--fs-xs);color:var(--tx3);">${h}</div>${doc}</div><div style="color:${c};font-weight:700;">${s}${esc(mm.cantidad)}${mm.detalle ? `<div style="font-size:var(--fs-xs);font-weight:400;color:var(--tx3);">${esc(mm.detalle)}</div>` : ''}</div></div>`;
   }).join('');
+}
+
+/** Cómo se muestra un movimiento: con `saldo_antes` y `saldo_despues` manda
+ *  el cambio real (un cero de la carga de Siesa es una SALIDA de lo que había,
+ *  no «+0» verde; 2026-09-29). Sin saldos, la regla de siempre por tipo.
+ *  @returns {{signo: string, cantidad: number, color: string, detalle: string}} */
+function movimientoMostrado(m, tiposEntrada) {
+  const antes = m.saldo_antes, despues = m.saldo_despues;
+  if (antes != null && despues != null && !isNaN(Number(antes)) && !isNaN(Number(despues))) {
+    const d = Number(despues) - Number(antes);
+    const detalle = `${Number(antes)} → ${Number(despues)}`;
+    if (d > 0) return { signo: '+', cantidad: d, color: 'var(--ok-tx)', detalle };
+    if (d < 0) return { signo: '-', cantidad: -d, color: 'var(--err-tx)', detalle };
+    return { signo: '', cantidad: 0, color: 'var(--tx3)', detalle };
+  }
+  const esEntrada = tiposEntrada.has(m.tipo);
+  return { signo: esEntrada ? '+' : (m.cantidad > 0 ? '-' : ''), cantidad: m.cantidad,
+           color: esEntrada ? 'var(--ok-tx)' : (m.cantidad > 0 ? 'var(--err-tx)' : 'var(--tx3)'), detalle: '' };
 }
 
 /** @param {number} id - Picking task ID to reopen back into the pool. */
@@ -2063,6 +2080,11 @@ async function cargarConnekta() {
 /** Bodegas del panel «Cargar inventario»: el `onclick` lleva la posición. */
 let SIESA_CARGA_BODEGAS = [];
 
+/** Un número de conteo con separador de miles (es-CO); `null` → «—». */
+function _siesaNum(x) {
+  return x == null || isNaN(Number(x)) ? '—' : Math.round(Number(x)).toLocaleString('es-CO');
+}
+
 /**
  * «Cargar inventario» por bodega (P2-7, 2026-09-26): el reintento que dicen
  * 🩺 Salud y el correo. Muestra la última carga escrita y por qué hoy no se
@@ -2074,13 +2096,22 @@ async function siesaCargaFisicaPintar() {
   try {
     const d = await get('/api/siesa/carga-fisica');
     SIESA_CARGA_BODEGAS = d.bodegas || [];
-    el.innerHTML = SIESA_CARGA_BODEGAS.map((b, i) => {
+    const auto = d.automatica
+      ? '<div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:6px;">La carga automática de las 7:00 está encendida.</div>'
+      : '<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-bottom:6px;">La carga automática de las 7:00 está apagada (CARGA_FISICA_AUTOMATICA).</div>';
+    el.innerHTML = auto + SIESA_CARGA_BODEGAS.map((b, i) => {
       const cuando = b.horas_desde_escrita == null ? 'nunca escrita'
         : `escrita hace ${Math.round(b.horas_desde_escrita)} h`;
       const aviso = b.no_escribio && b.error ? `<br><span style="color:var(--err-tx);">${esc(String(b.error).slice(0, 160))}</span>` : '';
       const bloq = b.bloqueada ? `<br><span style="color:var(--warn-tx);">Hoy no se puede: ${esc(b.bloqueada)}</span>` : '';
+      const en = b.ensayo || {};
+      const ensayo = en.a_cero == null
+        ? (en.motivo ? `<br><span style="color:var(--tx3);">Ensayo: ${esc(en.motivo)}</span>` : '')
+        : `<br><span style="color:var(--tx2);">Ensayo sin escribir: pondría en 0 ${esc(_siesaNum(en.a_cero))} ubicación(es) de SIESA-GENERAL (${esc(_siesaNum(en.unidades_a_cero))} u)`
+          + (en.a_reconciliar ? `; ${esc(_siesaNum(en.a_reconciliar))} hueco(s) con stock que Siesa da en 0 van a la reconciliación (${esc(_siesaNum(en.unidades_a_reconciliar))} u)` : '')
+          + (en.motivo ? ` · hoy no escribiría: ${esc(en.motivo)}` : '') + '</span>';
       return `<div class="tabla-fila" style="align-items:flex-start;flex-wrap:wrap;">
-        <span class="tabla-nombre" style="font-size:var(--fs-xs);"><b>${esc(b.bodega)}</b> · ${esc(cuando)}${aviso}${bloq}</span>
+        <span class="tabla-nombre" style="font-size:var(--fs-xs);"><b>${esc(b.bodega)}</b> · ${esc(cuando)}${aviso}${bloq}${ensayo}</span>
         <button class="btn-flota" style="flex:0 0 auto;" ${b.bloqueada ? 'disabled' : ''} onclick="siesaCargarInventario(${i})">Cargar inventario</button>
       </div>`;
     }).join('') || 'Sin bodegas habilitadas.';

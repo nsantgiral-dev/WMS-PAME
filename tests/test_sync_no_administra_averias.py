@@ -163,14 +163,19 @@ def test_el_bulk_zero_no_borra_el_bin_de_averias(app, db, almacen, producto):
         'el sync borró la mercancía averiada sin dejar rastro en el kardex')
 
 
-def test_el_bulk_zero_si_toca_los_bins_vendibles(app, db, almacen, producto):
-    """Dirección contraria: excluir de más dejaría el stock vendible congelado
-    en un número que Siesa ya no respalda."""
-    _gen, _ave, pik = _sembrar_sync(db, almacen, producto)
+def test_el_bulk_zero_no_pisa_un_hueco_real_y_si_el_espejo(app, db, almacen, producto):
+    """Desde el 2026-09-29 el cero automático es solo de SIESA-GENERAL (el
+    espejo de Siesa). Un hueco real (PICKING) con stock que Siesa da en cero no
+    se pisa: va a la reconciliación. Antes esto exigía el hueco en 0."""
+    gen, _ave, pik = _sembrar_sync(db, almacen, producto)
+    db.session.add(UbicacionProducto(ubicacion_id=gen.id, producto_id=producto.id,
+                                     cantidad=30))
+    db.session.commit()
     datos = _respuesta_siesa_sin(almacen.bodega_siesa_id, producto, db)
     _correr_carga(app, db, almacen, datos)
 
-    reg = UbicacionProducto.query.filter_by(
-        ubicacion_id=pik.id, producto_id=producto.id).first()
-    assert reg is not None and reg.cantidad == 0, (
-        'el bin vendible quedó congelado: el sync dejó de administrarlo')
+    assert UbicacionProducto.query.filter_by(
+        ubicacion_id=pik.id, producto_id=producto.id).one().cantidad == 80
+    assert UbicacionProducto.query.filter_by(
+        ubicacion_id=gen.id, producto_id=producto.id).one().cantidad == 0, (
+        'el espejo de Siesa quedó congelado: el sync dejó de administrarlo')

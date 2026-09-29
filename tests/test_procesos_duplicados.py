@@ -93,8 +93,8 @@ class TestElRefrescoDeExistencias:
             with patch.object(iss, '_descargar_una_pasada_custom') as lectura:
                 arranque()
             lectura.assert_not_called()
-        # Dos lecturas + la carga física de las 7:00.
-        assert Tm.call_count == 3
+        # Dos lecturas + el reintento de las 06:00 + la carga física de las 7:00.
+        assert Tm.call_count == 4
         assert [h.strftime('%H:%M') for h in iss.horas_de_lectura()] == ['04:30', '23:30']
 
     def test_la_tolerancia_sale_de_las_horas(self, monkeypatch):

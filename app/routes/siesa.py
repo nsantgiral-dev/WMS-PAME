@@ -126,12 +126,17 @@ def carga_fisica_estado():
     (P2-7, 2026-09-26). Solo admin."""
     if not _solo_admin():
         return jsonify({'error': 'Solo admin'}), 403
-    from app.services.inventario_siesa_service import (estado_carga_fisica,
+    from app.services.inventario_siesa_service import (carga_fisica_automatica,
+                                                       ensayo_carga_fisica,
+                                                       estado_carga_fisica,
                                                        motivo_carga_bloqueada)
     filas = []
     for f in estado_carga_fisica():
-        filas.append({**f, 'bloqueada': motivo_carga_bloqueada(f['bodega'])})
-    return jsonify({'bodegas': filas}), 200
+        # El ensayo (sin escribir) dice qué pondría en cero la carga con la
+        # última lectura completa de Siesa (2026-09-29).
+        filas.append({**f, 'bloqueada': motivo_carga_bloqueada(f['bodega']),
+                      'ensayo': ensayo_carga_fisica(f['bodega'])})
+    return jsonify({'bodegas': filas, 'automatica': carga_fisica_automatica()}), 200
 
 
 @siesa_bp.route('/carga-inventario-estado', methods=['GET'])

@@ -2331,6 +2331,17 @@ class TrasladoService:
             TrasladoService._stock_siesa_cache.clear()
 
     @staticmethod
+    def _marca_lectura_siesa():
+        """La fecha (ISO) de la última lectura completa de Siesa que usa este
+        proceso, renovada desde la base; `None` si no hay o no se pudo mirar."""
+        from app.services.inventario_siesa_service import lectura_en_uso
+        try:
+            return lectura_en_uso().get('ts')
+        except Exception as exc:                              # noqa: BLE001
+            logger.warning('[TRASLADO] No se pudo mirar la última lectura de Siesa: %s', exc)
+            return None
+
+    @staticmethod
     def get_stock_disponible(bodega_id: str = None, forzar: bool = False):
         """
         Stock disponible de una bodega usando el cache multi-bodega de Siesa.
@@ -2344,9 +2355,14 @@ class TrasladoService:
 
         bod = bodega_id or BODEGA_ORIGEN_DEFAULT
 
+        # La marca de la última lectura completa de Siesa en la base: si el
+        # worker guardó una más nueva, la caché de 5 min no la tapa (la web no
+        # lee Siesa y se quedaba con la de ayer; re-validación 2026-09-29).
+        lectura = TrasladoService._marca_lectura_siesa()
         if not forzar:
             entrada = TrasladoService._stock_siesa_cache.get(bod)
-            if entrada and (time.time() - entrada['ts']) < TrasladoService._STOCK_SIESA_TTL:
+            if (entrada and (time.time() - entrada['ts']) < TrasladoService._STOCK_SIESA_TTL
+                    and entrada.get('lectura') == lectura):
                 return entrada['data']
 
         try:
@@ -2468,7 +2484,8 @@ class TrasladoService:
                 'siesa_con_stock': len(siesa_stock),
             }
 
-            TrasladoService._stock_siesa_cache[bod] = {'data': resultado, 'ts': time.time()}
+            TrasladoService._stock_siesa_cache[bod] = {'data': resultado, 'ts': time.time(),
+                                                       'lectura': lectura}
             logger.info('[TRASLADO] stock Siesa cargado: %d ítems en %s (de %d en Siesa)', len(items), bod, len(siesa_stock))
             return resultado
 

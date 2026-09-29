@@ -93,7 +93,10 @@ def _mundo(db, almacen, producto):
     from app.models.inventario import UbicacionProducto
     from app.models.producto import Producto
     from app.models.ubicacion import Ubicacion
-    pik = Ubicacion(codigo='PIK-Z1', almacen_id=almacen.id, tipo_zona='PICKING', activo=True)
+    # El espejo de Siesa (SIESA-GENERAL): desde el 2026-09-29 el cero automático
+    # es solo de ahí; un hueco real no se pisa (test_existencias_verdaderas).
+    pik = Ubicacion(codigo=Ubicacion.CODIGO_GENERAL, almacen_id=almacen.id, zona='GENERAL',
+                    activo=True)
     db.session.add(pik)
     db.session.flush()
     db.session.add(UbicacionProducto(ubicacion_id=pik.id, producto_id=producto.id, cantidad=12))
@@ -122,7 +125,8 @@ class TestNadaSePoneEnCeroSinRastro:
         pik, datos = _mundo(db, almacen, producto)
         _cargar(app, almacen, datos)
         db.session.expire_all()
-        assert UbicacionProducto.query.filter_by(ubicacion_id=pik.id).one().cantidad == 0
+        assert UbicacionProducto.query.filter_by(ubicacion_id=pik.id,
+                                          producto_id=producto.id).one().cantidad == 0
         m = MovimientoInventario.query.filter_by(ubicacion_id=pik.id, producto_id=producto.id).one()
         assert m.saldo_antes == 12 and m.saldo_despues == 0
         assert 'lectura completa verificada' in m.motivo
@@ -140,7 +144,8 @@ class TestNadaSePoneEnCeroSinRastro:
             iss._descargar_inventario_siesa_raw(forzar=True)
             iss._run_carga_inicial(app, almacen.bodega_siesa_id)
         db.session.expire_all()
-        assert UbicacionProducto.query.filter_by(ubicacion_id=pik.id).one().cantidad == 12
+        assert UbicacionProducto.query.filter_by(ubicacion_id=pik.id,
+                                          producto_id=producto.id).one().cantidad == 12
         u = reg.ultimo(iss._tipo_registro_stock(almacen.bodega_siesa_id))
         assert u['ok'] is False and 'quedó incompleta' in u['error']
 

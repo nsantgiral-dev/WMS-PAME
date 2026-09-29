@@ -342,6 +342,7 @@ function _renderTrasladoCard(s) {
 // el mismo cache de Siesa que ya existía; acá solo se pide la página.
 let _AP_STOCK = [];
 let _AP_STOCK_ESTADO = 'idle';
+let _AP_STOCK_META = { fuente: null, actualizado_en: null }; // de qué lectura de Siesa es
 let _AP_CARRITO = [];
 let _AP_ORIGEN = null;
 let _AP_FILTRO = '';
@@ -388,6 +389,51 @@ function adminPedirCambiarOrigen(sel) {
   adminPedirCargarStock();
 }
 
+/**
+ * De qué lectura de Siesa es el stock de «Pedir» (traslados y tienda): una
+ * función, las dos pantallas. Siesa se lee completa dos veces al día (04:30 y
+ * 23:30, 2026-09-29): hasta ~21 h es normal; más viejo, o no completa, se avisa.
+ * El servidor manda la hora UTC sin zona; sin la «Z» el navegador la lee como
+ * local (5 h corrida).
+ * @param {{fuente: ?string, actualizado_en: ?string}} meta
+ * @param {number} [ahora] - ms, para las pruebas.
+ * @returns {{rotulo: string, tiempo: string, antiguo: boolean}}
+ */
+function frescuraStock(meta, ahora) {
+  const fuente = meta && meta.fuente, actualizado = meta && meta.actualizado_en;
+  const iso = actualizado && !/Z$|[+-]\d\d:?\d\d$/.test(actualizado) ? actualizado + 'Z' : actualizado;
+  let minutos = null;
+  if (iso) {
+    const ms = (ahora == null ? Date.now() : ahora) - new Date(iso).getTime();
+    if (!isNaN(ms)) minutos = Math.max(0, Math.round(ms / 60000));
+  }
+  const ROTULOS = {
+    siesa: 'Stock Siesa (lectura completa)',
+    siesa_bd_snapshot: 'Respaldo local — sin lectura completa de Siesa',
+    wms_fallback: 'Físico WMS — Siesa no disponible',
+    sin_dato: 'Sin datos de stock',
+  };
+  let tiempo = '';
+  if (minutos !== null) {
+    const cuando = new Date(iso).toLocaleString('es-CO', { day: '2-digit', month: '2-digit',
+      hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' });
+    tiempo = ` · del ${cuando}`;
+  }
+  return { rotulo: ROTULOS[fuente] || fuente || 'Sin datos de stock', tiempo,
+           antiguo: fuente !== 'siesa' || minutos === null || minutos > 21 * 60 };
+}
+
+/** @param {{fuente: ?string, actualizado_en: ?string}} meta @returns {string} la línea de frescura. */
+function frescuraStockHtml(meta) {
+  if (!meta || !meta.fuente) return '';
+  const f = frescuraStock(meta);
+  const color = f.antiguo ? 'var(--warn-tx)' : 'var(--ok-tx)';
+  return `<div style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);color:${color};margin-bottom:8px;">
+      <span style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;"></span>
+      <span>${esc(f.rotulo)}${esc(f.tiempo)}</span>
+    </div>`;
+}
+
 /** Fetch the current page of available stock from the selected origin bodega (filtro/paginación server-side). */
 async function adminPedirCargarStock() {
   _AP_STOCK_ESTADO = 'cargando';
@@ -404,6 +450,7 @@ async function adminPedirCargarStock() {
     _AP_TOTAL_FILTRADO = d.total_filtrado ?? _AP_STOCK.length;
     _AP_TOTAL_PAGINAS = d.total_paginas || 1;
     _AP_PAGINA = d.pagina || _AP_PAGINA;
+    _AP_STOCK_META = { fuente: d.fuente || null, actualizado_en: d.actualizado_en || null };
     _AP_STOCK_ESTADO = 'listo';
   } catch (e) {
     _AP_STOCK_ESTADO = 'error';
@@ -479,7 +526,7 @@ function adminPedirRenderStock() {
     <button onclick="adminPedirIrPagina(${_AP_PAGINA+1})" ${_AP_PAGINA===totalPags?'disabled':''} style="padding:7px 14px;background:var(--bg-s2);color:${_AP_PAGINA===totalPags?'var(--tx3)':'var(--tx)'};border:none;border-radius:8px;font-size:var(--fs-sm);cursor:pointer;">Sig →</button>
   </div><div style="text-align:center;font-size:var(--fs-xs);color:var(--tx3);margin-bottom:10px;">${_AP_TOTAL_FILTRADO} productos · pág ${_AP_PAGINA}/${totalPags}</div>` : '';
 
-  el.innerHTML = nav + _AP_STOCK.map(item => {
+  el.innerHTML = frescuraStockHtml(_AP_STOCK_META) + nav + _AP_STOCK.map(item => {
     const enCarrito = _AP_CARRITO.find(c => c.codigo_siesa === item.codigo_siesa);
     const qid = 'ap-qty-' + (item.codigo_siesa || '').replace(/[^a-zA-Z0-9]/g, '-');
     const nombreEsc = (item.nombre || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");

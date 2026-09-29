@@ -346,29 +346,7 @@ function tiendaRenderFrescura() {
     return;
   }
 
-  const { fuente, actualizado_en } = _TIENDA_STOCK_META;
-  let minutos = null;
-  if (actualizado_en) {
-    const ms = Date.now() - new Date(actualizado_en).getTime();
-    if (!isNaN(ms)) minutos = Math.max(0, Math.round(ms / 60000));
-  }
-
-  const ROTULOS = {
-    siesa: 'Stock Siesa',
-    siesa_bd_snapshot: 'Respaldo local — Siesa no respondió al último refresco',
-    wms_fallback: 'Físico WMS — Siesa no disponible',
-    sin_dato: 'Sin datos de stock',
-  };
-  const esAntiguo = fuente !== 'siesa' || (minutos !== null && minutos > 15);
-  const color = esAntiguo ? '#f59e0b' : '#4ade80';
-  const rotulo = ROTULOS[fuente] || fuente;
-  const tiempo = minutos === null ? '' : (minutos < 1 ? ' · hace instantes' : ` · hace ${minutos} min`);
-
-  el.innerHTML = `
-    <div style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);color:${color};">
-      <span style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;"></span>
-      <span>${rotulo}${tiempo}</span>
-    </div>`;
+  el.innerHTML = frescuraStockHtml(_TIENDA_STOCK_META);
 }
 
 /** Refresh stock from the server for the tienda request form. */

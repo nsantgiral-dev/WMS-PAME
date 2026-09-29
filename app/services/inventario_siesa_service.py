@@ -171,6 +171,49 @@ def horas_de_lectura_default() -> list:
             for t in LECTURAS_DEFAULT.split(',')]
 
 
+#: Reintento de la lectura si la de la madrugada no quedó completa, para que
+#: la carga física de las 7:00 tenga dato (`INV_SIESA_REINTENTO`, `HH:MM`;
+#: vacío = sin reintento).
+REINTENTO_DEFAULT = '06:00'
+
+
+def hora_de_reintento():
+    """La hora de `INV_SIESA_REINTENTO` o `None` (vacía o ilegible, declarado)."""
+    from datetime import time as _time
+    crudo = os.getenv('INV_SIESA_REINTENTO', REINTENTO_DEFAULT).strip()
+    if not crudo:
+        return None
+    try:
+        h, m = crudo.split(':')
+        return _time(int(h), int(m))
+    except (ValueError, TypeError):
+        logger.warning('[INV-SIESA] INV_SIESA_REINTENTO=%r ilegible: sin reintento', crudo)
+        return None
+
+
+def hay_completa_de_hoy() -> bool:
+    """¿Hay una lectura completa de Siesa con fecha de hoy (Bogotá)?"""
+    from app.utils.fecha import dia_operativo, dia_operativo_de
+    if not _asegurar_ultima_completa():
+        return False
+    ts = _cache_inventario_multibodega.get('ts')
+    return ts is not None and dia_operativo_de(ts) == dia_operativo()
+
+
+def _ejecutar_reintento(app):
+    """A la hora de `INV_SIESA_REINTENTO`: lee otra vez SOLO si hoy no hay una
+    lectura completa (la de las 04:30 salió incompleta o Siesa no respondió)."""
+    try:
+        with app.app_context():
+            if hay_completa_de_hoy():
+                logger.info('[INV-SIESA] Reintento omitido: ya hay una lectura completa de hoy')
+                return
+    except Exception as exc:                                  # noqa: BLE001
+        logger.error('[INV-SIESA] Reintento: no se pudo mirar la lectura de hoy: %s', exc)
+        return
+    _ejecutar_lectura_programada(app)
+
+
 def tolerancia_existencias() -> timedelta:
     """Hasta cuánto puede tener la última lectura completa sin estar atrasada:
     el hueco más largo entre dos lecturas programadas, más dos horas (una
@@ -249,6 +292,10 @@ def iniciar_refresh_periodico(app):
             logger.error('[INV-SIESA] No se pudo cargar la última lectura completa: %s', exc)
         for hora in horas_de_lectura():
             _programar(hora, lambda: _ejecutar_lectura_programada(app), 'Lectura de existencias')
+        reintento = hora_de_reintento()
+        if reintento is not None:
+            _programar(reintento, lambda: _ejecutar_reintento(app),
+                       'Reintento de la lectura (si la de la madrugada no quedó completa)')
         from datetime import time as _time
         _programar(_time(_HORA_CARGA_DIARIA, 0), lambda: _ejecutar_carga_fisica_diaria(app),
                    'Carga física diaria')
@@ -575,15 +622,21 @@ def _asegurar_ultima_completa() -> bool:
     que corre la carga de las 7:00— usa la de la madrugada sin volver a leer
     Siesa. `True` si queda una completa en memoria."""
     c = _cache_inventario_multibodega
-    if c.get('completa') and c.get('data') is not None:
-        return True
     from app.services import registro_sync_service as _reg
     ok = _reg.ultimo_ok('existencias_siesa')
-    if not ok or ok.get('_error_lectura') or not ok.get('fin'):
-        return False
+    fin = (datetime.fromisoformat(ok['fin'])
+           if ok and not ok.get('_error_lectura') and ok.get('fin') else None)
+    if c.get('completa') and c.get('data') is not None:
+        # Otro proceso (en producción el worker lee y la web atiende los
+        # botones) pudo guardar una completa más nueva: la memoria no se queda
+        # con la de ayer (P1-R1 de la re-validación, 2026-09-29).
+        if fin is None or (c.get('ts') is not None and fin <= c['ts']):
+            return True
+    if fin is None:
+        return bool(c.get('completa') and c.get('data') is not None)
     datos = _datos_de_la_bd(con_vacias=True)
     c['data'] = datos
-    c['ts'] = datetime.fromisoformat(ok['fin'])
+    c['ts'] = fin
     c['completa'] = True
     c['degradado'] = False
     c['bodegas_frescas'] = frozenset(b for b, v in datos.items() if v)
@@ -693,6 +746,11 @@ def _descargar_inventario_siesa_raw(forzar=False):
                                        f'{resumen["error"]}', resultado=detalle)
         else:
             _reg.cerrar_ok(_reg_id, detalle)
+            # La fecha de la lectura es la del registro: así otro proceso (y
+            # éste, en `_asegurar_ultima_completa`) comparan la misma marca.
+            ok = _reg.ultimo_ok('existencias_siesa')
+            if ok and ok.get('fin') and not ok.get('_error_lectura'):
+                c['ts'] = datetime.fromisoformat(ok['fin'])
 
     return c['data']
 
@@ -874,9 +932,16 @@ def obtener_stock_bodega(bodega_id: str, forzar=False):
     mostrar qué tan viejo es el número antes de que alguien arme una
     solicitud sobre un dato que ya no es el de Siesa en vivo.
     """
-    data = _cache_inventario_multibodega['data']
-    if data is not None and bodega_id in data:
-        ts = _cache_inventario_multibodega['ts']
+    try:
+        # La web renueva su memoria cuando el worker guarda una completa más
+        # nueva (2026-09-29): la pantalla de traslados no se queda con la de ayer.
+        _asegurar_ultima_completa()
+    except Exception as exc:                                  # noqa: BLE001
+        logger.warning('[INV-SIESA] No se pudo mirar la última lectura completa: %s', exc)
+    c = _cache_inventario_multibodega
+    data = c['data']
+    if data is not None and bodega_id in data and c.get('completa'):
+        ts = c['ts']
         meta = {
             'fuente': 'siesa',
             'actualizado_en': ts.isoformat() if ts else None,
@@ -956,6 +1021,104 @@ def fuente_para_escribir(bodega: str) -> str:
                 + (f' ({c.get("motivo")})' if c.get('motivo') else '')
                 + ': no se puede afirmar que un SKU ausente no existe')
     return ''
+
+
+def _productos_con_operacion_activa(almacen_id: int) -> set:
+    """Productos con picking o packing vivo en el almacén: la carga no los
+    pone en cero (protege el stock reservado)."""
+    from app.models.packing import ItemPacking, TareaPacking
+    from app.models.picking import TareaPicking
+    ids = {r.producto_id for r in TareaPicking.query.filter(
+        TareaPicking.almacen_id == almacen_id,
+        TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])).with_entities(
+            TareaPicking.producto_id).all() if r.producto_id}
+    ids |= {r.producto_id for r in (
+        ItemPacking.query.join(TareaPacking, ItemPacking.tarea_id == TareaPacking.id)
+        .filter(TareaPacking.almacen_id == almacen_id,
+                TareaPacking.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO']))
+        .with_entities(ItemPacking.producto_id).all()) if r.producto_id}
+    return ids
+
+
+def _ubicaciones_con_movimiento_reciente(horas: int = 12) -> set:
+    """Ubicaciones con un movimiento que no es de la carga en las últimas
+    `horas`: un ajuste reciente no se pisa."""
+    corte = datetime.utcnow() - timedelta(hours=horas)
+    return {r.ubicacion_id for r in (
+        db.session.query(MovimientoInventario.ubicacion_id)
+        .filter(MovimientoInventario.tipo != 'CARGA_INICIAL_SIESA',
+                MovimientoInventario.fecha >= corte,
+                MovimientoInventario.ubicacion_id.isnot(None)).distinct().all())}
+
+
+def plan_de_ceros(almacen_id: int, ub_general_id, inventario: dict,
+                  excluir_productos=(), excluir_ubicaciones=()) -> dict:
+    """Qué pone en cero la carga física de un almacén con una lectura de
+    Siesa, **sin escribir nada**. Una política: la usan la carga y su ensayo.
+
+    Solo se ponen en cero filas de **SIESA-GENERAL** (el espejo de Siesa) de
+    SKU que Siesa no reporta en la bodega (2026-09-29, re-validación): un hueco
+    real (PICKING, RESERVA, CROSS-DOCK) con stock que Siesa da en cero **no se
+    pisa** —puede ser una entrada atascada o un conteo sin ajustar en Siesa—;
+    va a `a_reconciliar` y la reconciliación lo muestra como `SOLO_WMS`.
+
+    Returns: `{'a_cero': [UbicacionProducto], 'a_reconciliar': [UbicacionProducto]}`.
+    """
+    from app.services.picking_service import filtro_ubicacion_vendible
+    codigos = {c for c, d in (inventario or {}).items() if (d or {}).get('existencia', 0) > 0}
+    reportados = {p.id for p in Producto.query.filter(
+        db.or_(Producto.codigo_siesa.in_(codigos), Producto.codigo.in_(codigos))).all()} \
+        if codigos else set()
+    fuera = reportados | set(excluir_productos)
+    a_cero, a_reconciliar = [], []
+    filas = (UbicacionProducto.query
+             .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+             .filter(Ubicacion.almacen_id == almacen_id, filtro_ubicacion_vendible(),
+                     UbicacionProducto.lote.is_(None), UbicacionProducto.cantidad != 0)
+             .all())
+    for r in filas:
+        if r.producto_id in fuera:
+            continue
+        if r.ubicacion_id == ub_general_id:
+            if r.ubicacion_id not in excluir_ubicaciones:
+                a_cero.append(r)
+        elif r.cantidad > 0:
+            a_reconciliar.append(r)
+    return {'a_cero': a_cero, 'a_reconciliar': a_reconciliar}
+
+
+def carga_fisica_automatica() -> bool:
+    """`CARGA_FISICA_AUTOMATICA` (default `true`). En producción, `false`
+    hasta confirmar la primera lectura completa (ver CLAUDE.md)."""
+    return os.getenv('CARGA_FISICA_AUTOMATICA', 'true').strip().lower() == 'true'
+
+
+def ensayo_carga_fisica(bod: str) -> dict:
+    """La carga física de `bod` **sin escribir**: con la última lectura
+    completa de Siesa, cuántas ubicaciones pondría en cero (y cuántas unidades)
+    y cuántos huecos con stock que Siesa da en cero irían a la reconciliación."""
+    almacen = _get_almacen(bod)
+    if not almacen:
+        return {'bodega': bod, 'motivo': f'no hay almacén activo en el WMS para {bod}'}
+    lectura = lectura_en_uso()
+    c = _cache_inventario_multibodega
+    if not c.get('completa') or c.get('data') is None:
+        return {'bodega': bod, 'lectura_de_siesa': lectura,
+                'motivo': 'no hay ninguna lectura completa de las existencias de Siesa'}
+    ub = Ubicacion.query.filter_by(codigo=_CODIGO_UBICACION_GENERAL,
+                                   almacen_id=almacen.id).first()
+    plan = plan_de_ceros(almacen.id, ub.id if ub else None, c['data'].get(bod, {}),
+                         _productos_con_operacion_activa(almacen.id),
+                         _ubicaciones_con_movimiento_reciente())
+    motivo = fuente_para_escribir(bod)
+    return {
+        'bodega': bod, 'lectura_de_siesa': lectura,
+        'escribiria': not motivo, 'motivo': motivo or None,
+        'a_cero': len(plan['a_cero']),
+        'unidades_a_cero': float(sum(r.cantidad for r in plan['a_cero'])),
+        'a_reconciliar': len(plan['a_reconciliar']),
+        'unidades_a_reconciliar': float(sum(r.cantidad for r in plan['a_reconciliar'])),
+    }
 
 
 #: El texto que marca una carga física que NO escribió (la leen 🩺 Salud y el
@@ -1184,8 +1347,6 @@ def _run_carga_inicial(app, bodega: str = None):
             # manuales. Si hay picking/packing activo EN ESTE ALMACÉN, el stock reservado
             # puede quedar incorrecto. Acotado por almacén — un picking en curso en NB1 no
             # tiene nada que ver con una carga a NS1, y viceversa.
-            from app.models.picking import TareaPicking as _TareaPicking
-            from app.models.packing import TareaPacking as _TareaPacking2
             picks_activos, packs_activos = _operaciones_activas_en_almacen(almacen.id)
             # Productos con operaciones activas — sus ubicaciones se excluirán del bulk zero
             _prod_ids_activos: set = set()
@@ -1195,21 +1356,7 @@ def _run_carga_inicial(app, bodega: str = None):
                     f'{picks_activos} picking(s) y {packs_activos} packing(s) en curso. '
                     f'Sus productos serán excluidos del bulk zero para proteger el stock reservado.'
                 )
-                # Recopilar product_ids activos para excluirlos del bulk zero
-                _picks_prods = _TareaPicking.query.filter(
-                    _TareaPicking.almacen_id == almacen.id,
-                    _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
-                ).with_entities(_TareaPicking.producto_id).all()
-                _prod_ids_activos |= {r.producto_id for r in _picks_prods if r.producto_id}
-                from app.models.packing import ItemPacking as _ItemPacking
-                _pack_prods = (
-                    _ItemPacking.query
-                    .join(_TareaPacking2, _ItemPacking.tarea_id == _TareaPacking2.id)
-                    .filter(_TareaPacking2.almacen_id == almacen.id,
-                            _TareaPacking2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO']))
-                    .with_entities(_ItemPacking.producto_id).all()
-                )
-                _prod_ids_activos |= {r.producto_id for r in _pack_prods if r.producto_id}
+                _prod_ids_activos = _productos_con_operacion_activa(almacen.id)
                 logger.info(f'[INV-SIESA] {len(_prod_ids_activos)} productos excluidos del bulk zero por operaciones activas')
 
             # ── Pre-cargar los 3 mapas en memoria — elimina N+1 del loop ──────────
@@ -1290,21 +1437,9 @@ def _run_carga_inicial(app, bodega: str = None):
                 ).with_entities(MovimientoInventario.idempotency_key).all()
             }
 
-            # Mapa 4: ubicaciones con ajuste manual en últimas 12h por producto_id
-            # Pre-cargado UNA VEZ aquí — evita N+1 dentro del loop de 5000 productos (P10).
-            _corte_12h = datetime.utcnow() - timedelta(hours=12)
-            _ajustes_recientes: dict[int, set] = {}  # producto_id → {ubicacion_id, ...}
-            for row in (
-                db.session.query(MovimientoInventario.producto_id, MovimientoInventario.ubicacion_id)
-                .filter(
-                    MovimientoInventario.tipo != 'CARGA_INICIAL_SIESA',
-                    MovimientoInventario.fecha >= _corte_12h,
-                    MovimientoInventario.ubicacion_id.isnot(None),
-                )
-                .distinct()
-                .all()
-            ):
-                _ajustes_recientes.setdefault(row.producto_id, set()).add(row.ubicacion_id)
+            # Ubicaciones con un movimiento que no es de la carga en las últimas
+            # 12 h: no se pisan (la misma función que usa el ensayo).
+            _excluir_ub_ids = _ubicaciones_con_movimiento_reciente()
 
             logger.info(
                 f'[INV-SIESA] Mapas cargados: {len(_todos_prods)} productos · '
@@ -1317,10 +1452,6 @@ def _run_carga_inicial(app, bodega: str = None):
             # Solo los bins que el sync administra. La zona de averías queda
             # fuera: el zero no escribe kardex, así que borrarla sería hacer
             # desaparecer mercancía rota sin dejar rastro.
-            _ubs_almacen_ids = {
-                u.id for u in bins_administrados_por_el_sync(almacen.id)}
-            _excluir_ub_ids = {uid for ubs in _ajustes_recientes.values() for uid in ubs}
-            _ubs_a_zero = _ubs_almacen_ids - _excluir_ub_ids
             _prod_ids_ya_hoy: set = set()
             for _ikey in ikeys_hoy:
                 try:
@@ -1442,34 +1573,31 @@ def _run_carga_inicial(app, bodega: str = None):
             # rastro. Solo llega acá con la lectura completa y verificada
             # (`fuente_para_escribir`): lo que se pone en cero Siesa no lo tiene.
             cereados = 0
-            if _ubs_a_zero:
-                _excl_prods = _prod_ids_ya_hoy | _prod_ids_activos | _prod_ids_actualizados
-                _q_zero = UbicacionProducto.query.filter(
-                    UbicacionProducto.ubicacion_id.in_(_ubs_a_zero),
-                    UbicacionProducto.lote.is_(None),
-                    UbicacionProducto.cantidad != 0,
-                )
-                if _excl_prods:
-                    _q_zero = _q_zero.filter(
-                        ~UbicacionProducto.producto_id.in_(_excl_prods)
-                    )
-                for _r in _q_zero.all():
-                    _saldo = _r.cantidad
-                    _r.cantidad = 0
-                    db.session.add(MovimientoInventario(
-                        producto_id=_r.producto_id, ubicacion_id=_r.ubicacion_id,
-                        almacen_id=almacen.id, tipo='CARGA_INICIAL_SIESA',
-                        cantidad=0, saldo_antes=_saldo, saldo_despues=0,
-                        motivo=(f'Carga desde Siesa {fecha_hoy} · bodega {bod}: Siesa no '
-                                f'reportó el SKU en la lectura completa verificada '
-                                f'(LineaRegistro 1…N) — queda en 0'),
-                        numero_documento='CARGA-SIESA',
-                        idempotency_key=f'SIESA-CERO-{bod}-{_r.id}-{fecha_hoy}'))
-                    cereados += 1
-                logger.info(
-                    f'[INV-SIESA] Bulk zero diferido OK: {len(_prod_ids_actualizados)} productos '
-                    f'actualizados, {len(_excl_prods)} excluidos del zero, {cereados} puestos en 0'
-                )
+            _excl_prods = _prod_ids_ya_hoy | _prod_ids_activos | _prod_ids_actualizados
+            _plan = plan_de_ceros(almacen.id, ub_general.id, inventario_siesa,
+                                  _excl_prods, _excluir_ub_ids)
+            a_reconciliar = len(_plan['a_reconciliar'])
+            if _plan['a_reconciliar']:
+                logger.warning(
+                    '[INV-SIESA] %s: %d hueco(s) real(es) con stock que Siesa da en 0 — '
+                    'no se pisan: van a la reconciliación', bod, a_reconciliar)
+            for _r in _plan['a_cero']:
+                _saldo = _r.cantidad
+                _r.cantidad = 0
+                db.session.add(MovimientoInventario(
+                    producto_id=_r.producto_id, ubicacion_id=_r.ubicacion_id,
+                    almacen_id=almacen.id, tipo='CARGA_INICIAL_SIESA',
+                    cantidad=0, saldo_antes=_saldo, saldo_despues=0,
+                    motivo=(f'Carga desde Siesa {fecha_hoy} · bodega {bod}: Siesa no '
+                            f'reportó el SKU en la lectura completa verificada '
+                            f'(LineaRegistro 1…N) — queda en 0'),
+                    numero_documento='CARGA-SIESA',
+                    idempotency_key=f'SIESA-CERO-{bod}-{_r.id}-{fecha_hoy}'))
+                cereados += 1
+            logger.info(
+                f'[INV-SIESA] Bulk zero diferido OK: {len(_prod_ids_actualizados)} productos '
+                f'actualizados, {len(_excl_prods)} excluidos del zero, {cereados} puestos en 0'
+            )
 
             db.session.commit()
             # [M19] Marcar sync como completado — si Railway mata el proceso antes de
@@ -1529,6 +1657,7 @@ def _run_carga_inicial(app, bodega: str = None):
             'errores': errores,
             'total_siesa': len(inventario_siesa),
             'puestos_en_cero': cereados,
+            'huecos_a_reconciliar': a_reconciliar,
             'lectura_completa': bool(_cache_inventario_multibodega.get('completa')),
             'lectura_de_siesa': (_cache_inventario_multibodega['ts'].isoformat()
                                  if _cache_inventario_multibodega.get('ts') else None),
@@ -1782,7 +1911,7 @@ def _ejecutar_carga_fisica_diaria(app):
     para NB1/NS1/NC1, no el default conservador «nace apagado» que usan
     features nuevas sin esa confirmación, ver FLOTA_AVISOS).
     """
-    if os.getenv('CARGA_FISICA_AUTOMATICA', 'true').lower() != 'true':
+    if not carga_fisica_automatica():
         logger.info('[INV-SIESA] Carga física diaria desactivada (CARGA_FISICA_AUTOMATICA=false)')
         return
 

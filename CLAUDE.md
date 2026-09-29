@@ -7347,8 +7347,11 @@ consultas de página al día**, contra ~3.100 antes del arreglo (tres pasadas de
 `tamPag=1000` cada 45 min) y ~10.200 con el refresco de 45 min de a 100.
 Carga física, reconciliación, botones y pre-calentamiento: cero. Las decisiones
 que necesitan el dato de ahora preguntan por SKU y bodega a `InvFecha` (el
-conteo: `conteo_service`); los traslados y la bandeja muestran la fecha de la
-lectura que usan.
+conteo: `conteo_service`). **Los traslados NO confirman con `InvFecha`**
+(corregido el 2026-09-29: este párrafo lo daba a entender): aprobar y pedir
+usan la última lectura completa y muestran su fecha; si en Siesa ya no hay, el
+STS 173076 lo rechaza con «Item sin cantidad disponible» (medido en QA el
+2026-09-09, «Traslados, verificado real»).
 
 **Aviso para el dueño antes de desplegar:** la primera lectura completa pone en
 cero ~17.971 filas de existencias, y la carga física siguiente, **~9.500
@@ -7378,6 +7381,24 @@ Siesa, reconciliación de otro día, Salud, la zona de la hora, y en ventas el
 hueco callado, el período en curso leído, el `hasta` re-registrado), todas
 rojas — tres sobrevivían al primer intento y obligaron a mejorar sus tests. Los tests de «las tres pasadas» se reescribieron con su porqué.
 
+### Re-validación (2026-09-29): cada proceso ve la última completa, y el cero es solo del espejo
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **P1-R1** | En producción solo el worker lee Siesa; la web se quedaba con la completa que cargó al arrancar: al día siguiente «Cargar inventario» y la reconciliación decían «la última lectura completa no es de hoy» | `_asegurar_ultima_completa` compara la memoria con el último OK de `existencias_siesa` y **recarga de la base si es más nuevo**; la marca de la lectura es el `fin` del registro (la misma para todo proceso) |
+| **Reintento** | Si la de las 04:30 salía incompleta, la carga de las 7:00 no escribía y nadie reintentaba | `INV_SIESA_REINTENTO` (`HH:MM` Bogotá, default `06:00`, vacío = sin reintento): a esa hora se lee **solo si hoy no hay una completa** (`hay_completa_de_hoy`) |
+| **Interruptor** | La carga de las 7:00 era automática sin decisión | `CARGA_FISICA_AUTOMATICA` (default `true`: QA). **Producción: `false` hasta confirmar la primera lectura completa** y el ensayo de abajo; después, `true` |
+| **Ensayo** | No había forma de saber qué iba a poner en cero la carga | `ensayo_carga_fisica(bod)`, sin escribir: con la última completa, cuántas ubicaciones pondría en 0 (y cuántas unidades) y cuántos huecos irían a la reconciliación. Siesa → «Cargar inventario (por bodega)» lo muestra por bodega (`GET /api/siesa/carga-fisica` → `ensayo`, `automatica`) |
+| **El cero** | El bulk zero pisaba cualquier bin vendible (PICKING, RESERVA) de un SKU que Siesa no reportaba | `plan_de_ceros` (una política, la usan la carga y el ensayo): solo se pone en 0 **SIESA-GENERAL** (el espejo). Un hueco real con stock que Siesa da en cero **no se pisa**: queda como `SOLO_WMS` en la reconciliación y la carga lo cuenta (`huecos_a_reconciliar`) |
+| **Traslados** | La caché de 5 min de `get_stock_disponible` y la memoria de la web se quedaban con la lectura de ayer; el panel de admin no decía de cuándo era el stock | `obtener_stock_bodega` renueva la memoria antes de responder y solo dice `siesa` con una completa; la caché de traslados se invalida cuando cambia la marca de la última completa (`_marca_lectura_siesa`). Una función, `frescuraStock` (`traslados.js`), pinta «Stock Siesa (lectura completa) · del dd/mm hh:mm» en Pedir de tienda y del admin; más de 21 h, o sin completa, en color de aviso |
+| **Movimientos** | El cero de la carga salía «+0» verde en «Últimos movimientos» | `movimientoMostrado`: con `saldo_antes`/`saldo_despues` manda el cambio real — el cero es una salida roja «−12» con «12 → 0» |
+
+Tests: `tests/test_existencias_revalidacion.py` (el reintento, el interruptor y
+el ensayo, el cero solo del espejo con la reconciliación, la caché de
+traslados, y en Node con `util.js` real el tablero de movimientos y la fecha de
+Pedir) y `tests/test_val_compras_ac_20260929.py` (el xfail del validador, en
+verde).
+
 **Lo que NO cubre, dicho:**
 - **Un inventario que cambia de forma balanceada entre dos páginas** (una fila
   sale y otra entra en la misma pausa, antes y después del cursor) no se ve: el
@@ -7385,8 +7406,8 @@ rojas — tres sobrevivían al primer intento y obligaron a mejorar sus tests. L
   quedaría en cero hasta la próxima lectura. Por eso las lecturas son de
   madrugada y al cierre; de día (10,8 % de las filas con existencia ≤ 1) casi
   ninguna quedaría completa.
-- **Entre dos lecturas `stock_siesa` tiene hasta ~19 h**: lo que no puede
-  esperar pregunta a `InvFecha`. Pedirle al consultor que la vista traiga
+- **Entre dos lecturas `stock_siesa` tiene hasta ~19 h**: el conteo pregunta a
+  `InvFecha`; los traslados no (arriba). Pedirle al consultor que la vista traiga
   también las filas en cero haría pasar la lectura de día.
 - **El histórico de `stock_siesa` antes del deploy** no distingue cuándo se agotó
   cada fila: `ausente_desde` empieza el día de la primera lectura completa.

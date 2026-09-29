@@ -572,8 +572,13 @@ class TestLaPoliticaDeLecturas:
         estado.update(ultimo_inicio=None, ultimo_sync_completo=None)
 
     def test_la_reconciliacion_no_usa_una_completa_de_otro_dia(self, db, cache_limpio):
+        from app.models.registro_sync import RegistroSync
         refrescar(SiesaExistencias(universo()))
-        cache_limpio['ts'] = datetime.utcnow() - timedelta(days=2)
+        hace = datetime.utcnow() - timedelta(days=2)
+        RegistroSync.query.filter_by(tipo='existencias_siesa').update(
+            {'inicio': hace, 'fin': hace})
+        db.session.commit()
+        cache_limpio['ts'] = hace
         with pytest.raises(ValueError, match='no es de hoy'):
             iss._descargar_inventario_multibodega_para_reconciliar()
 
