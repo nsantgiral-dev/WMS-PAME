@@ -144,6 +144,55 @@ def rutas_sin_acta(conductor_id: int, incluir_en_camino: bool = False) -> list:
             .order_by(RutaDespacho.id).all())
 
 
+def efectivo_contado_de_ruta(ruta):
+    """El efectivo de ESTA ruta que ya contaron las actas vigentes: la que la
+    recibió más sus complementarias. `None` si ninguna la cuenta."""
+    from app.models.entrega_caja import EntregaCaja, EstadoEntregaCaja
+    total, alguna = 0.0, False
+    for a in EntregaCaja.query.filter(EntregaCaja.conductor_id == ruta.conductor_id,
+                                      EntregaCaja.estado.in_(EstadoEntregaCaja.VIGENTES)).all():
+        for x in (a.detalle or {}).get('rutas') or []:
+            if x.get('ruta_id') == ruta.id:
+                total += _d(x.get('efectivo'))
+                alguna = True
+    return round(total, 2) if alguna else None
+
+
+def acta_anulable(acta) -> bool:
+    """Un acta se anula mientras ninguna de sus rutas se haya liquidado."""
+    from app.models.ruta_despacho import EstadoFinancieroRuta, RutaDespacho
+    return not RutaDespacho.query.filter(
+        RutaDespacho.entrega_caja_id == acta.id,
+        RutaDespacho.estado_financiero == EstadoFinancieroRuta.LIQUIDADA).count()
+
+
+def rutas_con_diferencia_de_acta(conductor_id: int) -> list:
+    """**Las rutas que necesitan un acta complementaria** (validación
+    2026-09-29, P2): cubiertas por un acta que ya no se puede anular (otra de
+    sus rutas se liquidó), sin liquidar, y cuyo efectivo cambió después de
+    contarla (parada tardía, corrección, versión adoptada). Antes la única
+    salida era liquidar sin acta, y esa plata no la contaba nadie.
+    `[(ruta, delta, acta_id)]`; `delta` puede ser negativo (el efectivo bajó)."""
+    from app.models.ruta_despacho import (EstadoFinancieroRuta, EstadoRutaDespacho,
+                                          RutaDespacho)
+    out = []
+    for r in (RutaDespacho.query
+              .filter(RutaDespacho.conductor_id == conductor_id,
+                      RutaDespacho.estado == EstadoRutaDespacho.ENTREGADA,
+                      RutaDespacho.entrega_caja_id.isnot(None),
+                      (RutaDespacho.estado_financiero.is_(None))
+                      | (RutaDespacho.estado_financiero != EstadoFinancieroRuta.LIQUIDADA))
+              .order_by(RutaDespacho.id).all()):
+        acta = acta_de_ruta(r)
+        if acta is None or acta_anulable(acta):
+            continue
+        contado = efectivo_contado_de_ruta(r) or 0.0
+        delta = round(efectivo_de_ruta(r) - contado, 2)
+        if abs(delta) > TOLERANCIA:
+            out.append((r, delta, acta.id))
+    return out
+
+
 def gastos_por_legalizar(conductor) -> list:
     """Los gastos que el conductor pagó con el efectivo del recaudo
     (`flota_gasto.origen_costo = 'efectivo_conductor'`, registrados por su
@@ -241,6 +290,13 @@ def esperado_de_entrega(conductor_id: int) -> dict:
                               'diferencia': corta['diferencia'],
                               'credito_no_autorizado': _cp.credito_no_autorizado(rec, t)})
     gastos = [_gasto_dict(g) for g in gastos_por_legalizar(c)]
+    # Lo que cambió en una ruta ya contada cuya acta no se puede anular: entra
+    # como complementaria, solo por la diferencia.
+    for r, delta, acta_id in rutas_con_diferencia_de_acta(conductor_id):
+        por_ruta[r.id] = {'ruta_id': r.id, 'efectivo': delta, 'paradas_efectivo': 0,
+                          'fecha': r.fecha_programada.isoformat() if r.fecha_programada else None,
+                          'nombre': (r.ruta_maestra.nombre if r.ruta_maestra else r.tipo_ruta),
+                          'complementaria_de': acta_id}
     efectivo = round(sum(v['efectivo'] for v in por_ruta.values()), 2)
     for v in por_ruta.values():
         v['efectivo'] = round(v['efectivo'], 2)
@@ -272,9 +328,17 @@ def conductores_por_recibir() -> list:
         (RutaDespacho.estado_financiero.is_(None))
         | (RutaDespacho.estado_financiero != EstadoFinancieroRuta.LIQUIDADA)).distinct().all()}
     out = []
+    # Y los que tienen una ruta que pide acta complementaria.
+    ids |= {cid for (cid,) in RutaDespacho.query.with_entities(RutaDespacho.conductor_id).filter(
+        RutaDespacho.estado == EstadoRutaDespacho.ENTREGADA,
+        RutaDespacho.entrega_caja_id.isnot(None),
+        (RutaDespacho.estado_financiero.is_(None))
+        | (RutaDespacho.estado_financiero != EstadoFinancieroRuta.LIQUIDADA)).distinct().all()
+        if rutas_con_diferencia_de_acta(cid)}
     for c in Conductor.query.filter(Conductor.id.in_(list(ids) or [-1])).all():
         e = esperado_de_entrega(c.id)
-        if e['efectivo'] > TOLERANCIA or e['gastos']:
+        if (e['efectivo'] > TOLERANCIA or e['gastos']
+                or any(x.get('complementaria_de') for x in e['rutas'])):
             out.append(e)
     return sorted(out, key=lambda e: (e['conductor'] or ''))
 
@@ -382,8 +446,11 @@ def registrar_acta(conductor_id: int, contado_efectivo, usuario_id: int,
         detalle=detalle, registrada_por_id=usuario_id, registrada_en=datetime.utcnow())
     db.session.add(acta)
     db.session.flush()
+    # Una ruta complementaria sigue ligada al acta que la recibió: la
+    # complementaria solo cuenta la diferencia (`efectivo_contado_de_ruta`).
     for r in RutaDespacho.query.filter(
-            RutaDespacho.id.in_([x['ruta_id'] for x in esperado['rutas']] or [-1])).all():
+            RutaDespacho.id.in_([x['ruta_id'] for x in esperado['rutas']
+                                 if not x.get('complementaria_de')] or [-1])).all():
         r.entrega_caja_id = acta.id
     for gid, valor, acepta, motivo_g in filas_gasto:
         db.session.add(EntregaCajaGasto(entrega_id=acta.id, gasto_id=gid,
@@ -467,6 +534,9 @@ def anular_acta(acta_id: int, usuario_id: int, motivo: str):
         r.entrega_caja_id = None
     for g in EntregaCajaGasto.query.filter_by(entrega_id=a.id).all():
         db.session.delete(g)
+    # Lo que el acta era al anularla (confirmada por el conductor, objetada…):
+    # el número de gerencia lo muestra junto al faltante anulado.
+    a.detalle = {**(a.detalle or {}), 'anulada_desde_estado': a.estado}
     a.estado = EstadoEntregaCaja.ANULADA
     a.anulada_por_id = usuario_id
     a.anulada_en = datetime.utcnow()
@@ -525,14 +595,20 @@ def exigir_acta_para_liquidar(ruta):
             f'{", gastos $" + format(e["gastos_total"], ",.0f") if e["gastos"] else ""}). '
             f'Cuente la plata y registre el acta en Liquidación → Caja por recibir; la ruta se '
             f'liquida después.')
-    en_acta = next((x['efectivo'] for x in (acta.detalle or {}).get('rutas', [])
-                    if x.get('ruta_id') == ruta.id), None)
+    en_acta = efectivo_contado_de_ruta(ruta)
     ahora = efectivo_de_ruta(ruta)
     if en_acta is not None and abs(ahora - float(en_acta)) > TOLERANCIA:
+        if acta_anulable(acta):
+            salida = 'Anule el acta y reciba la caja otra vez.'
+        else:
+            # Otra ruta del acta ya se liquidó: el acta no se anula. La
+            # diferencia se recibe aparte (validación 2026-09-29, P2).
+            salida = (f'El acta cubre una ruta ya liquidada y no se anula: reciba la diferencia '
+                      f'(${ahora - float(en_acta):,.0f}) en un acta complementaria, en '
+                      f'Liquidación → Caja por recibir.')
         raise CajaSinActa(
             f'caja_sin_acta: el efectivo de la ruta cambió después del acta #{acta.id} '
-            f'(el acta contó ${float(en_acta):,.0f}, hoy son ${ahora:,.0f}). Anule el acta y '
-            f'reciba la caja otra vez.')
+            f'(las actas contaron ${float(en_acta):,.0f}, hoy son ${ahora:,.0f}). {salida}')
     return acta
 
 
@@ -591,9 +667,18 @@ def diferencias_por_conductor(desde=None, hasta=None) -> list:
     """**El número de gerencia:** por conductor, cuánto faltó y cuánto sobró en
     sus actas vigentes del rango (por día del acta), cuántas actas, cuántas
     objetó y cuántas no confirmó. El faltante es plata a su cargo; el WMS lo
-    registra, no decide la sanción."""
+    registra, no decide la sanción.
+
+    **Anular no borra un faltante** (validación 2026-09-29, P2): las actas
+    anuladas con diferencia van aparte (`faltante_anulado`, `anuladas`: quién
+    la anuló, cuándo, por qué y qué era —confirmada por el conductor,
+    objetada…—). No suman a `faltante` (el acta que la reemplaza trae el
+    suyo), pero se ven: anular y volver a registrar sin diferencia ya no hace
+    desaparecer lo que faltó."""
+    from app.extensions import db
     from app.models.entrega_caja import EntregaCaja, EstadoEntregaCaja
-    q = EntregaCaja.query.filter(EntregaCaja.estado.in_(EstadoEntregaCaja.VIGENTES))
+    from app.models.usuario import Usuario
+    q = EntregaCaja.query.filter(EntregaCaja.estado.in_(EstadoEntregaCaja.TODOS))
     if desde is not None:
         q = q.filter(EntregaCaja.dia >= desde)
     if hasta is not None:
@@ -604,7 +689,21 @@ def diferencias_por_conductor(desde=None, hasta=None) -> list:
             'conductor_id': a.conductor_id,
             'conductor': a.conductor.nombre if a.conductor else None,
             'actas': 0, 'faltante': 0.0, 'sobrante': 0.0, 'actas_con_diferencia': 0,
-            'objetadas': 0, 'sin_confirmar': 0, 'pendientes_conductor': 0})
+            'objetadas': 0, 'sin_confirmar': 0, 'pendientes_conductor': 0,
+            'faltante_anulado': 0.0, 'anuladas': []})
+        if a.estado == EstadoEntregaCaja.ANULADA:
+            dif = _d(a.diferencia)
+            if abs(dif) > TOLERANCIA:
+                if dif < 0:
+                    g['faltante_anulado'] += -dif
+                quien = db.session.get(Usuario, a.anulada_por_id) if a.anulada_por_id else None
+                g['anuladas'].append({
+                    'acta_id': a.id, 'diferencia': round(dif, 2),
+                    'estado_antes': (a.detalle or {}).get('anulada_desde_estado'),
+                    'anulada_por': getattr(quien, 'nombre', None),
+                    'anulada_en': a.anulada_en.isoformat() if a.anulada_en else None,
+                    'motivo': a.anulada_motivo})
+            continue
         g['actas'] += 1
         dif = _d(a.diferencia)
         if dif < -TOLERANCIA:
@@ -622,7 +721,9 @@ def diferencias_por_conductor(desde=None, hasta=None) -> list:
     for g in por.values():
         g['faltante'] = round(g['faltante'], 2)
         g['sobrante'] = round(g['sobrante'], 2)
-    return sorted(por.values(), key=lambda g: (-g['faltante'], g['conductor'] or ''))
+        g['faltante_anulado'] = round(g['faltante_anulado'], 2)
+    return sorted((g for g in por.values() if g['actas'] or g['anuladas']),
+                  key=lambda g: (-g['faltante'], -g['faltante_anulado'], g['conductor'] or ''))
 
 
 def actas_por_responder() -> list:

@@ -254,8 +254,11 @@ class TestElEjecutorResuelveDeLaFila:
     def test_pasado_el_tope_se_declara_con_quien_lo_pone(self, app, db, parada):
         from app.services.siesa_job_service import DatoQueFalta, ErrorDeterminista, _ejecutar_job
         r = parada()
-        job = _job(db, 'RECIBO_CAJA', r)
-        job.fecha_creacion = datetime.utcnow() - timedelta(hours=25)
+        # El tope cuenta desde la primera espera A SIESA de este envío (marca
+        # en el payload), no desde que se encoló (validación 2026-09-29, P1).
+        job = _job(db, 'RECIBO_CAJA', r, esperando_siesa_desde=(
+            datetime.utcnow() - timedelta(hours=25)).isoformat(timespec='seconds'))
+        job.fecha_creacion = datetime.utcnow() - timedelta(hours=40)
         db.session.commit()
         with patch('app.services.connekta_gateway.connekta', _mc()) as mc:
             cartera_en(mc, [])
@@ -263,7 +266,39 @@ class TestElEjecutorResuelveDeLaFila:
                 _ejecutar_job(job)
         assert isinstance(e.value, ErrorDeterminista)
         assert str(e.value).startswith('DATO_QUE_FALTA: ')
+        assert 'lleva 25 h esperando a Siesa' in str(e.value)
+        assert 'se encoló 15 h antes de empezar a esperar a Siesa' in str(e.value)
         mc.trigger_recibo_caja.assert_not_called()
+
+    def test_el_tope_cuenta_desde_la_primera_espera_a_siesa(self, app, db, parada):
+        """Encolado hace 40 h (esperó al banco o a la NC): la primera falla de
+        Siesa espera y deja la marca; una lectura buena la borra."""
+        from app.models.siesa_job import SiesaJob
+        from app.services.envio_liquidacion import MARCA_ESPERA_SIESA
+        from app.services.siesa_job_service import DependenciaPendiente, _ejecutar_job
+        r = parada()
+        job = _job(db, 'RECIBO_CAJA', r)
+        job.fecha_creacion = datetime.utcnow() - timedelta(hours=40)
+        db.session.commit()
+        with patch('app.services.connekta_gateway.connekta', _mc()) as mc:
+            cartera_en(mc, Exception('timeout de lectura'))
+            with pytest.raises(DependenciaPendiente):
+                _ejecutar_job(job)
+        db.session.expire_all()
+        marca = db.session.get(SiesaJob, job.id).get_payload()[MARCA_ESPERA_SIESA]
+        assert abs((datetime.utcnow() - datetime.fromisoformat(marca)).total_seconds()) < 60
+        # Segunda falla: la marca no se mueve.
+        with patch('app.services.connekta_gateway.connekta', _mc()) as mc:
+            cartera_en(mc, Exception('timeout de lectura'))
+            with pytest.raises(DependenciaPendiente):
+                _ejecutar_job(db.session.get(SiesaJob, job.id))
+        assert db.session.get(SiesaJob, job.id).get_payload()[MARCA_ESPERA_SIESA] == marca
+        # Siesa contesta: sale, y la marca se borra.
+        with patch('app.services.connekta_gateway.connekta', _mc()) as mc:
+            cartera_en(mc, [FILA_003])
+            _ejecutar_job(db.session.get(SiesaJob, job.id))
+        mc.trigger_recibo_caja.assert_called_once()
+        assert MARCA_ESPERA_SIESA not in db.session.get(SiesaJob, job.id).get_payload()
 
     @pytest.mark.parametrize('faltante', ['f200_id', 'f253_id', 'f353_id_un_cruce'])
     def test_una_fila_sin_sus_datos_no_sale(self, app, db, parada, faltante):

@@ -329,3 +329,109 @@ class TestLaCajaNoMideConOtraVara:
 
     def test_piso(self):
         assert len(self._llamadas_modulo(CAJA.read_text(encoding='utf-8'))) >= 30
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 4 · Validación de la liquidación integrada (2026-09-29): las actas
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestAnularNoBorraElFaltante:
+    """P2: anular un acta (incluso confirmada por el conductor) y volver a
+    registrarla sin diferencia hacía desaparecer el faltante del número de
+    gerencia. Ahora va aparte, con quién la anuló, cuándo, por qué y qué era."""
+
+    def test_el_faltante_anulado_se_ve(self, db, almacen):
+        from app.services import caja_conductor as cc
+        c, u = _conductor(db)
+        _ruta(db, almacen, c, [('ENTREGADO', 'EFECTIVO', 30000, 30000)])
+        liq = _usuario(db, 'liquidador')
+        a = cc.registrar_acta(c.id, 25000, liq.id, motivo_diferencia='Dijo que le faltó')
+        cc.responder_conductor(a.id, u.id, True)
+        with pytest.raises(ValueError):
+            cc.anular_acta(a.id, liq.id, '  ')
+        cc.anular_acta(a.id, liq.id, 'Recontamos y sí estaba')
+        cc.registrar_acta(c.id, 30000, liq.id)
+        [d] = cc.diferencias_por_conductor()
+        assert d['faltante'] == 0 and d['actas'] == 1
+        assert d['faltante_anulado'] == 5000
+        [x] = d['anuladas']
+        assert (x['acta_id'], x['diferencia'], x['estado_antes'], x['anulada_por'], x['motivo']) == (
+            a.id, -5000, 'CONFIRMADA', liq.nombre, 'Recontamos y sí estaba')
+        assert x['anulada_en']
+
+    def test_la_pantalla_lo_pinta(self, tmp_path):
+        lista = [{'conductor': 'Ana <b>', 'actas': 1, 'faltante': 0, 'sobrante': 0,
+                  'faltante_anulado': 5000,
+                  'anuladas': [{'acta_id': 7, 'diferencia': -5000, 'estado_antes': 'CONFIRMADA',
+                                'anulada_por': 'Liq <i>', 'motivo': 'Recontamos'}]}]
+        out = _node(tmp_path, ['util.js', 'liquidacion.js'], {}, """
+            _liqRenderDiferenciasCaja(L);
+            return { html: document.getElementById('liq-diferencias-caja').innerHTML };
+        """, globales={'L': lista})
+        txt = visible(out['html'])
+        assert 'Acta #7 anulada con faltante de $5.000' in txt
+        assert 'Confirmada por el conductor' in txt and 'la anuló Liq <i>' in txt
+        assert '<i>' not in out['html'].replace('&lt;i&gt;', '')
+
+
+class TestActaComplementaria:
+    """P2: un acta que cubre dos rutas, una ya liquidada, y a la otra le entra
+    efectivo después: antes pedía «anule el acta» (imposible) y la única salida
+    era liquidar sin acta. Ahora la diferencia se recibe en un acta
+    complementaria."""
+
+    def _mundo(self, db, almacen):
+        from app.services import caja_conductor as cc
+        c, _ = _conductor(db)
+        r1, _ = _ruta(db, almacen, c, [('ENTREGADO', 'EFECTIVO', 30000, 30000)])
+        r2, [p2] = _ruta(db, almacen, c, [('ENTREGADO', 'EFECTIVO', 30000, 40000)])
+        liq = _usuario(db, 'liquidador')
+        a = cc.registrar_acta(c.id, 60000, liq.id)
+        return c, r1, r2, p2, a, liq
+
+    def test_la_diferencia_entra_en_un_acta_complementaria(self, db, almacen):
+        from app.services import caja_conductor as cc
+        from app.services.ruta_service import RutaService
+        c, r1, r2, p2, a, liq = self._mundo(db, almacen)
+        r1.estado_financiero = 'LIQUIDADA'
+        p2.monto_cobrado = 40000                      # parada corregida después
+        db.session.commit()
+        with pytest.raises(cc.CajaSinActa, match='acta complementaria') as e:
+            cc.exigir_acta_para_liquidar(r2)
+        assert 'Anule' not in str(e.value)
+        with pytest.raises(ValueError, match='ya liquidadas'):
+            cc.anular_acta(a.id, liq.id, 'x')
+        e = cc.esperado_de_entrega(c.id)
+        assert e['efectivo'] == 10000
+        assert [(x['ruta_id'], x['efectivo'], x['complementaria_de']) for x in e['rutas']] == [
+            (r2.id, 10000, a.id)]
+        assert c.id in [x['conductor_id'] for x in cc.conductores_por_recibir()]
+        comp = cc.registrar_acta(c.id, 7000, liq.id, motivo_diferencia='Trajo 7.000')
+        db.session.refresh(r2)
+        assert r2.entrega_caja_id == a.id, 'la ruta sigue ligada al acta que la recibió'
+        assert float(comp.diferencia) == -3000
+        assert cc.exigir_acta_para_liquidar(r2).id == a.id
+        assert 'caja_sin_acta' not in [f['codigo'] for f in RutaService.lo_que_falta_para_liquidar(r2)]
+        assert cc.esperado_de_entrega(c.id)['rutas'] == []
+        assert cc.diferencias_por_conductor()[0]['faltante'] == 3000
+
+    def test_si_el_acta_se_puede_anular_sigue_pidiendo_anularla(self, db, almacen):
+        from app.services import caja_conductor as cc
+        c, r1, r2, p2, a, liq = self._mundo(db, almacen)
+        p2.monto_cobrado = 40000
+        db.session.commit()
+        with pytest.raises(cc.CajaSinActa, match='Anule el acta'):
+            cc.exigir_acta_para_liquidar(r2)
+        assert cc.esperado_de_entrega(c.id)['rutas'] == []
+
+    def test_anular_la_complementaria_vuelve_a_pedirla(self, db, almacen):
+        from app.services import caja_conductor as cc
+        c, r1, r2, p2, a, liq = self._mundo(db, almacen)
+        r1.estado_financiero = 'LIQUIDADA'
+        p2.monto_cobrado = 40000
+        db.session.commit()
+        comp = cc.registrar_acta(c.id, 10000, liq.id)
+        cc.anular_acta(comp.id, liq.id, 'Contamos mal')
+        db.session.refresh(r2)
+        assert r2.entrega_caja_id == a.id
+        assert [x['efectivo'] for x in cc.esperado_de_entrega(c.id)['rutas']] == [10000]

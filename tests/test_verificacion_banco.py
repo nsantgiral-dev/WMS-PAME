@@ -362,6 +362,72 @@ class TestElEjecutorDelReciboEsperaAlBanco:
         assert not any(isinstance(m, ast.Call) for m in ast.walk(sin))
 
 
+class TestLaRetencionSigueAlReciboDelBanco:
+    """Validación 2026-09-29: la retención detrás de un recibo bancario."""
+
+    def _con_retencion(self, db, almacen):
+        _, r = _bancaria(db, almacen)
+        r.motivo_descuento, r.monto_descuento, r.retencion_confirmada = 'RETEFUENTE_2.5', 1250, True
+        db.session.commit()
+        return r
+
+    def _jobs(self, db, r):
+        from app.models.siesa_job import SiesaJob
+        base = {'recaudo_id': r.id, 'tipo_docto_fe': 'FE', 'consec_fe': '1416'}
+        rc = SiesaJob.encolar('RECIBO_CAJA', {**base, 'forma_pago': r.forma_pago, 'monto': 48750},
+                              referencia_tipo='RecaudoEntrega', referencia_id=r.id)
+        dc = SiesaJob.encolar('DOCUMENTO_CONTABLE_RET',
+                              {**base, 'cuenta_puc': '13551501', 'tipo_retencion': 'RETEFUENTE_2.5',
+                               'monto': 1250, 'base_gravable': 50000},
+                              referencia_tipo='RecaudoEntrega', referencia_id=r.id)
+        db.session.commit()
+        return rc.id, dc.id
+
+    def test_la_retencion_espera_media_hora_y_no_cada_2_min(self, app, db, almacen):
+        from unittest.mock import MagicMock, patch
+        from app.services.siesa_job_service import DependenciaPendiente, _ejecutar_job
+        from app.models.siesa_job import SiesaJob
+        r = self._con_retencion(db, almacen)
+        _rc, dc = self._jobs(db, r)
+        with patch('app.services.connekta_gateway.connekta', MagicMock()):
+            with pytest.raises(DependenciaPendiente, match='transferencia en el banco') as e:
+                _ejecutar_job(db.session.get(SiesaJob, dc))
+        assert e.value.espera_minutos == 30
+
+    def test_la_retencion_fallida_detras_del_recibo_vuelve_con_el(self, app, db, almacen):
+        from unittest.mock import MagicMock, patch
+        from app.models.siesa_job import SiesaJob
+        from app.services import verificacion_banco as vb
+        from app.services.siesa_job_service import _run_dlq_jobs
+        r = self._con_retencion(db, almacen)
+        rc, dc = self._jobs(db, r)
+        vb.verificar(r.id, _usuario(db, 'lider_cartera').id, False, 'No está en el extracto')
+        with patch('app.services.connekta_gateway.connekta', MagicMock()):
+            _run_dlq_jobs()
+            _run_dlq_jobs()
+        assert db.session.get(SiesaJob, rc).estado == 'FALLIDO'
+        j_dc = db.session.get(SiesaJob, dc)
+        assert j_dc.estado == 'FALLIDO' and 'ese recibo no está en la cola' in j_dc.error_ultimo
+        vb.verificar(r.id, _usuario(db, 'liquidador').id, True)
+        assert db.session.get(SiesaJob, rc).estado == 'PENDIENTE'
+        j_dc = db.session.get(SiesaJob, dc)
+        assert j_dc.estado == 'PENDIENTE' and j_dc.intentos == 0
+
+    def test_una_retencion_fallida_por_otra_cosa_no_se_toca(self, app, db, almacen):
+        from app.models.siesa_job import SiesaJob
+        from app.services import verificacion_banco as vb
+        r = self._con_retencion(db, almacen)
+        rc, dc = self._jobs(db, r)
+        for jid, err in ((rc, 'DATO_QUE_FALTA: La transferencia de X no apareció en el banco'),
+                         (dc, 'DOCUMENTO_CONTABLE_RET: la retención no procede. No se envía.')):
+            j = db.session.get(SiesaJob, jid)
+            j.estado, j.error_ultimo = 'FALLIDO', err
+        db.session.commit()
+        vb.verificar(r.id, _usuario(db, 'liquidador').id, True)
+        assert db.session.get(SiesaJob, rc).estado == 'PENDIENTE'
+        assert db.session.get(SiesaJob, dc).estado == 'FALLIDO'
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # El Gestor de Cartera sabe lo que ya está en caja (P2-6)
 # ═════════════════════════════════════════════════════════════════════════

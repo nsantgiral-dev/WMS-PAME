@@ -163,21 +163,39 @@ def _despertar_recibo(recaudo_id: int, usuario_id: int = None) -> None:
     """El RC que esperaba la verificación sale en el próximo ciclo, no dentro de
     una hora. Y el que quedó FALLIDO porque la transferencia «no apareció»
     (`exigir_para_rc`) vuelve a la cola: lo único que lo frenaba era eso, y la
-    bandera de pre-envío sigue abajo (nunca salió un POST)."""
+    bandera de pre-envío sigue abajo (nunca salió un POST).
+
+    **Con él, la retención que cayó detrás** (validación 2026-09-29, P2): con
+    el recibo fuera de la cola, el DC se declara «espera el recibo de caja… y
+    ese recibo no está en la cola»; si el recibo vuelve, el DC también —si no,
+    quedaba esperando que alguien lo reintentara a mano."""
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import EstadoSiesaJob, SiesaJob
     from app.extensions import db
+    from app.services.siesa_job_service import reencolar_job_fallido
     r = db.session.get(RecaudoEntrega, recaudo_id)
     ahora = datetime.utcnow()
+    rc_de_vuelta = False
     for j in SiesaJob.query.filter_by(tipo='RECIBO_CAJA', referencia_tipo='RecaudoEntrega',
                                       referencia_id=recaudo_id).all():
         if j.estado == EstadoSiesaJob.PENDIENTE:
             j.proximo_intento = ahora
         elif (j.estado == EstadoSiesaJob.FALLIDO and r is not None and not r.siesa_rc_triggered
               and 'no apareció en el banco' in (j.error_ultimo or '')):
-            from app.services.siesa_job_service import reencolar_job_fallido
             reencolar_job_fallido(j, usuario_id=usuario_id,
                                   motivo='La transferencia apareció en el banco',
+                                  origen='verificacion_banco')
+            rc_de_vuelta = True
+    for j in SiesaJob.query.filter_by(tipo='DOCUMENTO_CONTABLE_RET',
+                                      referencia_tipo='RecaudoEntrega',
+                                      referencia_id=recaudo_id).all():
+        if j.estado == EstadoSiesaJob.PENDIENTE:
+            j.proximo_intento = ahora            # esperaba 30 min por el banco
+        elif (rc_de_vuelta and j.estado == EstadoSiesaJob.FALLIDO
+                and 'ese recibo no está en la cola' in (j.error_ultimo or '')):
+            reencolar_job_fallido(j, usuario_id=usuario_id,
+                                  motivo='El recibo de caja que esperaba volvió a la cola '
+                                         '(la transferencia apareció en el banco)',
                                   origen='verificacion_banco')
 
 

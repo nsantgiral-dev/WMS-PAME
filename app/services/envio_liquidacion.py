@@ -34,6 +34,7 @@ se para todo»: nada se emite a ciegas.
 Trinquete: `tests/test_envio_liquidacion.py`.
 """
 import logging
+import json
 import os
 from collections import namedtuple
 from datetime import datetime
@@ -216,20 +217,51 @@ def que_es(tarea, tipo_fe=None, consec_fe=None, co=None) -> str:
 # La resolución del envío
 # ═════════════════════════════════════════════════════════════════════════════
 
+#: Desde cuándo ESTE envío espera a Siesa (UTC, ISO). Lo escribe la primera
+#: espera y lo borra la resolución completa (`resolver_envio`).
+MARCA_ESPERA_SIESA = 'esperando_siesa_desde'
+
+
 def _esperar_o_declarar(job, que: str, motivo: str, quien: str):
     """Espera sin gastar intento; pasado el tope, lo declara (FALLIDO sin
-    reintento, con qué falta y quién lo pone)."""
+    reintento, con qué falta y quién lo pone).
+
+    **El tope cuenta desde la primera espera a Siesa de este envío**
+    (`MARCA_ESPERA_SIESA` en el payload), no desde que se encoló (validación
+    de la liquidación integrada, 2026-09-29, P1): un recibo que esperó al banco
+    o a la nota crédito de su devolución tiene más de 24 h de creado cuando le
+    toca leer la cartera, y moría a la primera falla de Siesa con un «lleva
+    30 h así» falso. La marca se escribe y se confirma acá (la espera no puede
+    perderla) y se borra cuando la lectura completa sale bien."""
+    from app.extensions import db
     from app.services.siesa_job_service import DatoQueFalta, DependenciaPendiente
     tope = tope_espera_horas()
-    creado = getattr(job, 'fecha_creacion', None)
-    horas = ((datetime.utcnow() - creado).total_seconds() / 3600) if creado else 0.0
+    ahora = datetime.utcnow()
+    payload = dict(job.get_payload() or {})
+    desde = None
+    try:
+        desde = datetime.fromisoformat(payload[MARCA_ESPERA_SIESA]) \
+            if payload.get(MARCA_ESPERA_SIESA) else None
+    except (TypeError, ValueError):
+        desde = None
+    if desde is None:
+        payload[MARCA_ESPERA_SIESA] = ahora.isoformat(timespec='seconds')
+        job.payload = json.dumps(payload, ensure_ascii=False)
+        db.session.commit()
+        desde = ahora
+    horas = (ahora - desde).total_seconds() / 3600
     if horas >= tope:
+        creado = getattr(job, 'fecha_creacion', None)
+        antes = ''
+        if creado is not None and (desde - creado).total_seconds() >= 3600:
+            antes = (f' (el envío se encoló {(desde - creado).total_seconds() / 3600:.0f} h '
+                     f'antes de empezar a esperar a Siesa)')
         raise DatoQueFalta(
-            f'{que}: {motivo}, y lleva {horas:.0f} h así (el tope es {tope:.0f} h). '
-            f'{quien}')
+            f'{que}: {motivo}, y lleva {horas:.0f} h esperando a Siesa{antes} '
+            f'(el tope es {tope:.0f} h). {quien}')
     raise DependenciaPendiente(
         f'{que}: {motivo}. Se vuelve a intentar solo en {ESPERA_ENTRE_LECTURAS_MIN} min, '
-        f'sin gastar intentos (tope {tope:.0f} h).',
+        f'sin gastar intentos (tope {tope:.0f} h desde que empezó a esperar a Siesa).',
         espera_minutos=ESPERA_ENTRE_LECTURAS_MIN)
 
 
@@ -402,6 +434,13 @@ def resolver_envio(job, recaudo, gateway=None):
                 (t for t, puc in RETENCION_PUC.items() if puc == payload.get('cuenta_puc')), None)
             payload['monto'], payload['base_gravable'] = monto_de_la_retencion(
                 job, recaudo, tipo_ret, payload['tipo_docto_fe'], payload['consec_fe'], gw)
+    # Se leyó bien: la próxima espera a Siesa cuenta su tope desde cero. Se
+    # borra también del job (lo confirma quien lo escriba a continuación: el
+    # pre-flag, o la cola si algo más lo frena).
+    if payload.pop(MARCA_ESPERA_SIESA, None) is not None:
+        guardado = dict(job.get_payload() or {})
+        guardado.pop(MARCA_ESPERA_SIESA, None)
+        job.payload = json.dumps(guardado, ensure_ascii=False)
     return payload, cruce
 
 

@@ -2462,7 +2462,9 @@ function _liqRenderActa() {
   const b = (d.otros_medios || {}).BANCARIO || {};
   const t = (d.otros_medios || {}).TARJETA || {};
   const ch = (d.otros_medios || {}).CHEQUE || {};
-  const rutas = (d.rutas || []).map(r => `Ruta #${esc(r.ruta_id)} · ${esc(r.nombre || '')} · ${esc(_liqFmt(r.efectivo))} (${esc(r.paradas_efectivo)} parada${r.paradas_efectivo !== 1 ? 's' : ''})`).join('<br>');
+  const rutas = (d.rutas || []).map(r => r.complementaria_de
+    ? `Ruta #${esc(r.ruta_id)} · ${esc(r.nombre || '')} · ${esc(_liqFmt(r.efectivo))} — lo que cambió después del acta #${esc(r.complementaria_de)} (acta complementaria)`
+    : `Ruta #${esc(r.ruta_id)} · ${esc(r.nombre || '')} · ${esc(_liqFmt(r.efectivo))} (${esc(r.paradas_efectivo)} parada${r.paradas_efectivo !== 1 ? 's' : ''})`).join('<br>');
   const gastos = (d.gastos || []).map((g, j) => {
     const dec = _liqActa.gastos[j] || {};
     const fotos = (g.fotos || []).map((_, k) => `<button onclick="liqActaVerFoto(${j}, ${k})"
@@ -2659,7 +2661,8 @@ function _liqRenderDiferenciasCaja(lista) {
       ${lista.map(g => `<div class="tabla-fila">
         <span class="tabla-nombre">${esc(g.conductor || 'Conductor')} · ${esc(g.actas)} acta${g.actas !== 1 ? 's' : ''}${g.objetadas ? ` · ${esc(g.objetadas)} objetada(s)` : ''}${g.sin_confirmar ? ` · ${esc(g.sin_confirmar)} sin confirmar` : ''}</span>
         <span style="color:${g.faltante ? 'var(--err-tx)' : 'var(--tx2)'};font-weight:700;">${g.faltante ? `faltó ${esc(_liqFmt(g.faltante))}` : 'sin faltante'}${g.sobrante ? ` · sobró ${esc(_liqFmt(g.sobrante))}` : ''}</span>
-      </div>`).join('')}
+      </div>${(g.anuladas || []).map(x => `<div style="font-size:var(--fs-xs);color:var(--warn-tx);padding:0 0 6px 8px;">
+        Acta #${esc(x.acta_id)} anulada con ${x.diferencia < 0 ? 'faltante' : 'sobrante'} de ${esc(_liqFmt(Math.abs(x.diferencia)))}${x.estado_antes ? ` (${esc(_liqPalabra(LIQ_ESTADO_ACTA, x.estado_antes))})` : ''}${x.anulada_por ? ` · la anuló ${esc(x.anulada_por)}` : ''}${x.motivo ? `: «${esc(x.motivo)}»` : ''}</div>`).join('')}`).join('')}
       <p style="font-size:var(--fs-xs);color:var(--tx3);margin:8px 0 0;">El faltante queda a cargo del conductor en su acta. El sistema lo registra; no decide la sanción.</p>
     </div>`;
 }

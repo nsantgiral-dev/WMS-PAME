@@ -2385,12 +2385,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             # 2026-09-26).
             _rc_espera_nc = bool((_rc_vivo.get_payload() or {}).get('depende_de_nc')
                                  and not recaudo.siesa_nc_triggered)
+            # Ni cada 2 min por días mientras el RC espera al banco (validación
+            # 2026-09-29, P3): al verificarla, `_despertar_recibo` lo acelera.
+            from app.services import verificacion_banco as _vb_dc
+            _rc_espera_banco = (_vb_dc.estado(recaudo) == _vb_dc.POR_VERIFICAR
+                                and _vb_dc.exige_verificacion())
             raise DependenciaPendiente(
                 f'DOCUMENTO_CONTABLE_RET job={job.id}: DC espera el RC del '
                 f'recaudo {recaudo.id}'
                 + (', que espera la nota crédito de la devolución' if _rc_espera_nc else '')
+                + (', que espera que alguien vea la transferencia en el banco'
+                   if _rc_espera_banco else '')
                 + '. Sigue pendiente.',
-                espera_minutos=30 if _rc_espera_nc else 2,
+                espera_minutos=30 if (_rc_espera_nc or _rc_espera_banco) else 2,
             )
 
         # Lo que el POST necesita de la cartera, resuelto AHORA de la fila del

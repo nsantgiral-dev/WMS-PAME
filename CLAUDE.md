@@ -8294,3 +8294,21 @@ PostgreSQL local desechable.
 - El tablero calcula la lista por ruta pendiente (un par de consultas por
   ruta); no se midió con cientos de rutas atrasadas.
 
+### Validación de la liquidación integrada (2026-09-29)
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **P1 · El tope de 24 h contaba desde el encolado** | Un recibo que esperó al banco o a la NC 30 h moría a la primera falla de Siesa: FALLIDO sin reintento, «lleva 30 h así» (falso) | `envio_liquidacion._esperar_o_declarar` cuenta desde `payload['esperando_siesa_desde']`: la primera espera a Siesa de ESE envío la escribe (y la confirma); `resolver_envio` la borra cuando lee bien. El mensaje dice cuánto lleva esperando a Siesa y cuánto antes se encoló |
+| **Retención detrás de un recibo del banco** | Si la transferencia «no apareció», el DC caía FALLIDO detrás; al verla, solo volvía el RC. Y mientras el RC esperaba al banco, el DC preguntaba cada 2 min por días | `_despertar_recibo` reencola también el DC FALLIDO por «ese recibo no está en la cola» y acelera el PENDIENTE; el DC espera 30 min mientras el RC espera al banco |
+| **Anular borraba el faltante** | `diferencias_por_conductor` solo leía vigentes: anular (incluso confirmada) y re-registrar sin diferencia lo hacía desaparecer | Las anuladas con diferencia van aparte (`faltante_anulado`, `anuladas`: autor, hora, motivo, qué era — `detalle.anulada_desde_estado`) y la pantalla de gerencia las muestra |
+| **Acta trabada con una ruta liquidada** | Acta de R1+R2, R1 liquidada, a R2 le entra efectivo: pedía anular (imposible) | **Acta complementaria**: `rutas_con_diferencia_de_acta` mete la diferencia de R2 en «Caja por recibir»; la ruta sigue ligada a su acta y `efectivo_contado_de_ruta` suma la original y las complementarias |
+
+Tests: `tests/test_val_liquidacion_20260929.py` (sin `xfail`),
+`test_envio_liquidacion.py::test_el_tope_cuenta_desde_la_primera_espera_a_siesa`,
+`test_verificacion_banco.py::TestLaRetencionSigueAlReciboDelBanco`,
+`test_integracion_liquidacion.py::TestAnularNoBorraElFaltante` y
+`::TestActaComplementaria`. **No cubre:** la cuarta columna de la
+reconciliación (`verificado_de_ruta`) lee solo el acta original, no las
+complementarias; el efectivo tardío de una ruta ya contada no aparece en
+«efectivo en poder» (sí en «Caja por recibir»).
+
