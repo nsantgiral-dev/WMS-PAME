@@ -71,6 +71,44 @@ class TestEnviarAjusteInventario:
             assert mov['f470_desc_varible'] == '', 'typo intencional del spec 142951'
 
 
+class TestElCostoDeLaEntrada:
+    """`f470_costo_prom_uni` (spec 142951, pos 212): vacío, Siesa valoriza
+    con el promedio de la bodega — y sin fila ese promedio es 0 (ADI-00000040
+    de QA, 2026-09-29). Solo una ENTRADA lo lleva."""
+
+    def _payload(self, app, monkeypatch, **kw):
+        with app.app_context():
+            from app.services.connekta_gateway import connekta, ConnektaGateway
+            monkeypatch.setattr(connekta, 'tipo_docto_ajuste', 'ADI')
+            capturado = {}
+
+            def _fake_post(self, conector, nombre, payload):
+                capturado['payload'] = payload
+                return {'codigo': 0}
+            monkeypatch.setattr(ConnektaGateway, '_post', _fake_post)
+            connekta.enviar_ajuste_inventario(
+                item_codigo='PAPELSP7877', cantidad=10, referencia='CC-X',
+                bodega='NB1', centro_op='003', **kw)
+            return capturado['payload']['Movimientos'][0]
+
+    def test_la_entrada_lleva_el_costo(self, app, monkeypatch):
+        mov = self._payload(app, monkeypatch, motivo_codigo='AJ-ENT', costo_unitario=1044)
+        assert mov['f470_costo_prom_uni'] == 1044.0
+
+    def test_sin_costo_va_vacio_y_siesa_usa_su_promedio(self, app, monkeypatch):
+        mov = self._payload(app, monkeypatch, motivo_codigo='AJ-ENT')
+        assert mov['f470_costo_prom_uni'] is None
+
+    def test_la_salida_nunca_lleva_costo(self, app, monkeypatch):
+        mov = self._payload(app, monkeypatch, motivo_codigo='AJ-SAL', costo_unitario=1044)
+        assert mov['f470_costo_prom_uni'] is None
+
+    @pytest.mark.parametrize('malo', [0, -5])
+    def test_un_costo_no_positivo_no_sale(self, app, monkeypatch, malo):
+        with pytest.raises(ValueError, match='Costo unitario inválido'):
+            self._payload(app, monkeypatch, motivo_codigo='AJ-ENT', costo_unitario=malo)
+
+
 class TestTransferirAAverias:
     def test_payload_usa_bodega_y_bodega_averias_del_core(self, app, monkeypatch):
         with app.app_context():

@@ -1185,6 +1185,11 @@ class ConnektaGateway:
         `ConnektaConsultasGateway.get_inventario_fecha`."""
         return self._consultas.get_inventario_fecha(item_codigo, bodega=bodega)
 
+    def get_existencias_por_referencia(self, item_codigo: str):
+        """El ítem en todas sus bodegas. Delegado — ver
+        `ConnektaConsultasGateway.get_existencias_por_referencia`."""
+        return self._consultas.get_existencias_por_referencia(item_codigo)
+
     # `get_item_por_barras()` se borró el 2026-08-19: no tenía **ningún**
     # llamador. El escaneo resuelve el EAN contra el catálogo local
     # (`productos`), que alimenta el sync — no contra Siesa en vivo. El camino
@@ -1303,7 +1308,8 @@ class ConnektaGateway:
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
                                   cantidad: int, referencia: str,
                                   bodega: str = None, centro_op: str = None,
-                                  item_id_siesa: str = None):
+                                  item_id_siesa: str = None,
+                                  costo_unitario: float = None):
         """
         142951 → API_v1_Inventarios_Comercial_DocumentoInv
         Ajuste físico tras conteo cíclico double-blind. Ver el docstring
@@ -1313,6 +1319,7 @@ class ConnektaGateway:
         return self._ajustes.enviar_ajuste_inventario(
             motivo_codigo, item_codigo, cantidad, referencia,
             bodega=bodega, centro_op=centro_op, item_id_siesa=item_id_siesa,
+            costo_unitario=costo_unitario,
         )
 
     def transferir_a_averias(self, item_codigo: str, cantidad: int, referencia: str = ''):

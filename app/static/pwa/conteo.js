@@ -2750,7 +2750,19 @@ async function liderAprobarAjuste(id) {
     + 'Se envía a Siesa como ajuste de inventario y cambia la existencia allá. No se deshace desde el WMS.';
   if (!await _modalConfirmar(texto, { titulo: 'Aprobar ajuste', textoConfirmar: 'Aprobar y enviar', textoCancelar: 'Volver' })) return;
   try {
-    const d = await put(`/api/conteo/${id}/ajustar`, {});
+    let d;
+    try {
+      d = await put(`/api/conteo/${id}/ajustar`, {});
+    } catch (e) {
+      // Entrada sin costo en ninguna fuente: el servidor no la manda en $0.
+      // Se pide el costo unitario y se vuelve a aprobar con él.
+      if (e.status !== 409 || !(e.body && e.body.requiere_costo)) throw e;
+      const costo = await _modalCantidad('Costo unitario',
+        `${esc(e.message || '')}<br><br>Costo unitario en pesos, sin IVA:`,
+        { min: 1, textoConfirmar: 'Aprobar con este costo', textoCancelar: 'Volver' });
+      if (costo === null) return;
+      d = await put(`/api/conteo/${id}/ajustar`, { costo_unitario: costo });
+    }
     alerta(d.mensaje || 'Ajuste aprobado', 'exito');
   } catch (e) { alerta(e.message || 'No se pudo aprobar', 'error'); }
   await liderCargar();

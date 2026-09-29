@@ -2729,6 +2729,34 @@ el sync pondrá lo que ajuste el conteo; el operario ve «búscalo en toda la
 bodega»). Con ubicación, nada cambia. Tests:
 `tests/test_conteo_service.py::TestCrearConteoManual::test_sin_ubicacion_*`.
 
+**Y la entrada sin costo no entra en $0 (2026-09-29).** Probado en QA:
+PAPELSP7877 sin fila en NB1, 10 contados → **ADI-00000040 entró 10 und a costo
+$0, sin asiento contable**. El ajuste mandaba `f470_costo_prom_uni` vacío
+(spec 142951, pos 212, «costo unitario en unidad de captura», Dep) y Siesa usa
+el promedio de la bodega, que sin fila —o con una fila de costo 0, como
+PAPELSP11926 en PC1— es 0. Ahora una **entrada** cuya foto del conteo trae
+costo desconocido o ≤ 0 (`ConteoService.necesita_costo_explicito`) lleva costo
+explícito, resuelto al aprobar por `costo_service.costo_entrada_ajuste`, en
+este orden (decisión del dueño):
+
+1. **`SIESA_OTRAS_BODEGAS`**: el promedio de Siesa del ítem en las otras
+   bodegas (`get_existencias_por_referencia`, un GET por ítem), ponderado por
+   existencia; si ninguna tiene unidades, el costo conocido más alto.
+2. La jerarquía de `resolver_costos` (acuerdo, cotización, OC, kardex,
+   maestro). En QA hoy casi siempre vacía: OC sync apagado, sin acuerdos.
+3. Nadie sabe → **`CostoRequerido`**: la ruta contesta 409 `requiere_costo` y
+   la pantalla (`liderAprobarAjuste`) pide el costo a quien aprueba
+   (`costo_unitario`, fuente `MANUAL`). El escrito no pisa una fuente conocida.
+
+El costo viaja en el payload del job (`costo_unitario`, `costo_fuente`); el
+DLQ no lo recalcula y el re-encolado lo copia (o lo resuelve si el job viejo
+no lo traía). Salidas y bodegas con promedio > 0: sin costo, como siempre. La
+auditoría de picking sin costo deja el ajuste en DESCUADRE para el líder.
+Tests: `test_conteo_teorico_pos.py::TestLaEntradaSinCostoNoEntraEnCero`,
+`test_connekta_ajustes_gateway.py::TestElCostoDeLaEntrada`; 5 mutaciones, las
+5 rojas. **Sin probar en vivo todavía**: que Siesa tome el costo mandado en
+una entrada por ajuste (motivo 01).
+
 ---
 
 ## Conteo: «no lo encontré» no es un cero (2026-09-23)

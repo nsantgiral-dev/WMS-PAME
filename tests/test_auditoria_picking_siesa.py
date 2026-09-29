@@ -83,7 +83,10 @@ class TestEncontradoCompletoAjustaComoConteo:
             cantidad_wms=20, bloqueado=5,
         )
 
-        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(15.0)):
+        # Un ítem con 15 en Siesa tiene su costo promedio en la bodega: la
+        # entrada sale con él (sin costo, ver el test de abajo).
+        with patch.object(ConteoService, 'consultar_foto_siesa',
+                          return_value=_foto(15.0, costo_prom_uni=1000.0)):
             PickingService.auditar_tarea(
                 tarea.id, admin_id=usuario_admin.id, resultado='ENCONTRADO_COMPLETO',
             )
@@ -105,6 +108,29 @@ class TestEncontradoCompletoAjustaComoConteo:
         assert payload['cantidad'] == 5
         assert payload['motivo_codigo'] == 'AJ-ENT'
         assert payload['tarea_picking_id'] == tarea.id
+
+    def test_entrada_sin_costo_en_ninguna_fuente_queda_para_el_lider(
+        self, app, db, almacen, producto, usuario_admin,
+    ):
+        """Sin costo en la bodega ni en ninguna fuente, la entrada no sale en
+        $0: la auditoría se cierra y el ajuste queda en DESCUADRE, para que el
+        líder lo apruebe en Por decidir escribiendo el costo."""
+        almacen.centro_op_siesa = '003'
+        db.session.commit()
+        tarea, inv = _tarea_bloqueada(
+            db, almacen, producto,
+            cantidad_solicitada=5, cantidad_recogida=0,
+            cantidad_wms=20, bloqueado=5,
+        )
+        with patch.object(ConteoService, 'consultar_foto_siesa', return_value=_foto(15.0)):
+            PickingService.auditar_tarea(
+                tarea.id, admin_id=usuario_admin.id, resultado='ENCONTRADO_COMPLETO',
+            )
+        sesion = SesionConteo.query.filter_by(tarea_picking_id=tarea.id).one()
+        assert sesion.estado == EstadoConteo.DESCUADRE
+        assert SiesaJob.query.filter_by(
+            referencia_tipo='SesionConteo', referencia_id=sesion.id,
+            tipo='AJUSTE_CONTEO').count() == 0
 
     def test_siesa_no_responde_no_persiste_nada(
         self, app, db, almacen, producto, usuario_admin,

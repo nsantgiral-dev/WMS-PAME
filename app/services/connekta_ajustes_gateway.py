@@ -33,13 +33,21 @@ class ConnektaAjustesGateway:
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
                                   cantidad: int, referencia: str,
                                   bodega: str = None, centro_op: str = None,
-                                  item_id_siesa: str = None):
+                                  item_id_siesa: str = None,
+                                  costo_unitario: float = None):
         """
         142951 → API_v1_Inventarios_Comercial_DocumentoInv
         Ajuste físico tras conteo cíclico double-blind.
         AJ-ENT: sobrante. AJ-SAL: faltante. Cantidad siempre positiva.
         bodega: código bodega Siesa (ej 'NB1','NB2'). Si None usa core.bodega.
         centro_op: centro de operación Siesa. Si None usa core.centro_op.
+        costo_unitario: `f470_costo_prom_uni` («costo unitario en unidad de
+            captura», spec 142951 pos 212). Solo en una ENTRADA cuya bodega no
+            tiene costo promedio: vacío, Siesa valoriza con el promedio de la
+            bodega, y sin fila ese promedio es 0 (ADI-00000040 en QA,
+            2026-09-29: 10 und a $0, sin asiento). Lo decide
+            `costo_service.costo_entrada_ajuste`; en una salida se ignora —
+            una salida siempre sale al promedio.
         """
         import os
         core = self._core
@@ -69,6 +77,11 @@ class ConnektaAjustesGateway:
         # sobrante de conteo cíclico solo se registra si alcanza a cubrir todo el déficit; un
         # faltante ahí nunca podrá registrarse hasta que los compromisos se liberen.
         siesa_motivo = core.motivo_ajuste_entrada if es_entrada else core.motivo_ajuste_salida
+        _costo_uni = (round(float(costo_unitario), 4)
+                      if es_entrada and costo_unitario is not None else None)
+        if _costo_uni is not None and not _costo_uni > 0:
+            raise ConnektaPayloadInvalido(
+                f'Costo unitario inválido para el ajuste de {item_codigo}: {costo_unitario!r}')
 
         fecha_hoy = core._fecha_hoy_bogota()
         cia = int(core.id_cia_siesa)
@@ -132,7 +145,7 @@ class ConnektaAjustesGateway:
                     'f470_id_unidad_medida': core.uom_default,
                     'f470_cant_base': round(float(abs(cantidad)), 4),
                     'f470_cant_2': None,
-                    'f470_costo_prom_uni': None,
+                    'f470_costo_prom_uni': _costo_uni,
                     'f470_notas': '',
                     # Typo intencional: 'varible' — nombre exacto del spec 142951 (pos 487, 2000 chars).
                     # Si se escribe 'variable' (correcto), Connekta omite el campo y Siesa rechaza

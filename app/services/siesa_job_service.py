@@ -1485,6 +1485,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             referencia=payload.get('referencia', ''),
             bodega=payload.get('bodega'),
             centro_op=payload.get('centro_op'),
+            # El costo que se fijó al aprobar (solo una entrada sin promedio
+            # en la bodega lo trae): el DLQ no lo recalcula.
+            costo_unitario=payload.get('costo_unitario'),
         ))
         _now = datetime.utcnow()
 
