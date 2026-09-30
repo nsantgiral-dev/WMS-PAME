@@ -139,13 +139,21 @@ const args = process.argv.slice(1).filter(a => a !== '--');
 const base = args[0], modo = args[1] || '';
 const els = {};
 const el = (id) => (els[id] = els[id] || { id, style: {}, value: '', innerHTML: '', options: [] });
-const llamadas = { put: [], confirmar: [], texto: [], definitivo: [] };
+const llamadas = { put: [], cuerpos: [], get: [], confirmar: [], texto: [], cantidad: [], definitivo: [] };
+const conCosto = modo === 'costo-acepta' || modo === 'costo-cambia';
 const ctx = { console, window: {}, document: { getElementById: el },
   OPERARIO: { puede_usar_camara: false }, TAREA_ACTUAL: null,
   alerta: () => {}, liderCargar: async () => {},
-  put: async (url) => { llamadas.put.push(url); return { mensaje: 'ok' }; },
-  _modalConfirmar: async (msg, opts) => { llamadas.confirmar.push([msg, opts || {}]); return modo === 'acepta'; },
-  _modalTexto: async (t, msg, opts) => { llamadas.texto.push([t, opts || {}]); return null; } };
+  put: async (url, body) => { llamadas.put.push(url); llamadas.cuerpos.push(body || {}); return { mensaje: 'ok' }; },
+  // El costo sugerido: solo las entradas sin costo en la bodega lo piden.
+  get: async (url) => { llamadas.get.push(url); return conCosto
+    ? { requiere_costo: true, unidades: 2, aviso_diferencia: 0.5,
+        sugerido: { costo: 900, fuente: 'SIESA_OTRAS_BODEGAS', detalle: 'promedio de Siesa en NS1' } }
+    : { requiere_costo: false, sugerido: null }; },
+  _modalCantidad: async (t, msg, opts) => { llamadas.cantidad.push([t, msg, opts || {}]);
+    return modo === 'costo-cambia' ? 1000 : (opts || {}).valorInicial; },
+  _modalConfirmar: async (msg, opts) => { llamadas.confirmar.push([msg, opts || {}]); return modo === 'acepta' || conCosto; },
+  _modalTexto: async (t, msg, opts) => { llamadas.texto.push([t, opts || {}]); return modo === 'costo-cambia' ? 'factura 1' : null; } };
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(base + '/util.js', 'utf8'), ctx);
 vm.runInContext(fs.readFileSync(base + '/conteo.js', 'utf8'), ctx);
@@ -240,6 +248,26 @@ class TestElTableroEsElLugarDeDecidir:
 
     def test_confirmado_manda_la_fila(self):
         assert _node(_ARNES, 'acepta')['llamadas']['put'] == ['/api/conteo/11/ajustar']
+
+    def test_sin_costo_que_elegir_no_pregunta_el_costo(self):
+        ll = _node(_ARNES, 'acepta')['llamadas']
+        assert ll['get'] == ['/api/conteo/11/costo-sugerido']
+        assert ll['cantidad'] == [] and ll['cuerpos'] == [{}]
+
+    def test_el_costo_sugerido_se_muestra_y_se_acepta(self):
+        """Entrada sin costo en la bodega: la ventana trae el sugerido lleno;
+        dejarlo es aprobar con él, sin motivo."""
+        ll = _node(_ARNES, 'costo-acepta')['llamadas']
+        (titulo, msg, opts), = ll['cantidad']
+        assert opts['valorInicial'] == 900 and 'promedio de Siesa en NS1' in msg
+        assert ll['cuerpos'] == [{'costo_unitario': 900}]
+        assert ll['texto'] == [], 'aceptar el sugerido no pide motivo'
+
+    def test_cambiar_el_costo_pide_el_motivo(self):
+        ll = _node(_ARNES, 'costo-cambia')['llamadas']
+        assert ll['cuerpos'] == [{'costo_unitario': 1000, 'motivo_costo': 'factura 1'}]
+        (t, opts), = ll['texto']
+        assert opts.get('obligatorio') is True
 
     def test_no_ajustar_esta_al_lado_de_aprobar(self, r):
         assert 'liderCancelarConteo(11)' in r['onclicks'] and 'liderCancelarConteo(15)' in r['onclicks']

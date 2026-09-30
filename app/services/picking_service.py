@@ -1109,7 +1109,7 @@ class PickingService:
         no_recibe = PickingService.motivo_caja_no_recibe(tarea.referencia_documento)
         if no_recibe and (tarea.tipo_documento or '').upper() != 'TRASLADO':
             raise ValueError(f'No vuelve a la cola: {no_recibe}. Lo que se recoja no tendría '
-                             'caja. Repórtela como problema y use Reabrir: cierra lo recogido y '
+                             'caja. Repórtela como problema y use Reabrir, que cierra lo recogido y '
                              'declara el faltante.')
         antes = foto(tarea, ['estado', 'operario_id', 'cantidad_recogida', 'empaques_escaneados'])
         recogido = tarea.cantidad_recogida or 0
@@ -1355,6 +1355,7 @@ class PickingService:
         elif resultado == 'ENCONTRADO_PARCIAL':
             if reg and cantidad_hallada < cantidad_faltante:
                 diferencia = cantidad_faltante - cantidad_hallada
+                _antes = reg.cantidad
                 reg.cantidad = max(0, reg.cantidad - diferencia)
                 db.session.add(MovimientoInventario(
                     producto_id=tarea.producto_id,
@@ -1362,6 +1363,7 @@ class PickingService:
                     almacen_id=tarea.almacen_id,
                     tipo='AJUSTE_AUDITORIA',
                     cantidad=-diferencia,
+                    saldo_antes=_antes, saldo_despues=reg.cantidad,
                     motivo=f'Auditoría tarea {tarea.codigo}: hallado {cantidad_hallada} de {tarea.cantidad_solicitada} solicitadas',
                     numero_documento=tarea.referencia_documento,
                     usuario_id=admin_id,
@@ -1378,6 +1380,7 @@ class PickingService:
                     almacen_id=tarea.almacen_id,
                     tipo='AJUSTE_AUDITORIA',
                     cantidad=-reg.cantidad,
+                    saldo_antes=reg.cantidad, saldo_despues=0,
                     motivo=f'Auditoría tarea {tarea.codigo}: faltante confirmado, unidades no encontradas',
                     numero_documento=tarea.referencia_documento,
                     usuario_id=admin_id,
@@ -1404,6 +1407,7 @@ class PickingService:
                 reg_averia = UbicacionProducto.query.filter_by(
                     ubicacion_id=averia_ub.id, producto_id=tarea.producto_id
                 ).first()
+                _destino_antes = reg_averia.cantidad if reg_averia else 0
                 if reg_averia:
                     reg_averia.cantidad += a_mover
                 else:
@@ -1418,6 +1422,7 @@ class PickingService:
                         fecha_vencimiento=reg.fecha_vencimiento,
                     ))
 
+                _origen_antes = reg.cantidad
                 reg.cantidad = max(0, reg.cantidad - a_mover)
 
                 detalle = (f' (SIN zona AVERIAS de layout en el almacén — '
@@ -1436,6 +1441,7 @@ class PickingService:
                     almacen_id=tarea.almacen_id,
                     tipo='AJUSTE_AUDITORIA',
                     cantidad=-a_mover,
+                    saldo_antes=_origen_antes, saldo_despues=reg.cantidad,
                     motivo=motivo,
                     numero_documento=tarea.referencia_documento,
                     usuario_id=admin_id,
@@ -1449,6 +1455,7 @@ class PickingService:
                     almacen_id=tarea.almacen_id,
                     tipo='AJUSTE_AUDITORIA',
                     cantidad=a_mover,
+                    saldo_antes=_destino_antes, saldo_despues=_destino_antes + a_mover,
                     motivo=motivo,
                     numero_documento=tarea.referencia_documento,
                     usuario_id=admin_id,
@@ -1642,6 +1649,10 @@ class PickingService:
         # 0» conservaba `cantidad_recogida = 3` sin haberlas descontado.
         tarea.cantidad_recogida = cantidad_encontrada
         if cantidad_encontrada > 0:
+            # Una SALIDA: cantidad negativa y con su saldo (VAL-E1, 2026-09-29).
+            # Antes se escribía positiva y sin saldo, y quien suma el libro la
+            # leía como una entrada.
+            _antes = inv.cantidad if inv else None
             if inv:
                 inv.cantidad = max(0, inv.cantidad - cantidad_encontrada)
                 inv.reservado = max(0, inv.reservado - cantidad_encontrada)
@@ -1650,7 +1661,8 @@ class PickingService:
                 ubicacion_id=tarea.ubicacion_id,
                 almacen_id=tarea.almacen_id,
                 tipo='SHORT_PICK',
-                cantidad=cantidad_encontrada,
+                cantidad=-cantidad_encontrada,
+                saldo_antes=_antes, saldo_despues=(inv.cantidad if inv else None),
                 motivo=f'Short-pick — tarea {tarea.codigo} — faltó {cantidad_faltante}',
                 numero_documento=tarea.referencia_documento,
                 usuario_id=operario_id,

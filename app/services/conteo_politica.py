@@ -592,6 +592,9 @@ SIN_COSTO = 'SIN_COSTO'
 SUPERA_TOPE = 'SUPERA_TOPE'
 #: La entrada de un ítem sin fila en la bodega de Siesa (VAL-12): la firma el admin.
 SIN_FILA_EN_SIESA = 'SIN_FILA_EN_SIESA'
+#: Un sobrante con unidades del SKU empacadas esperando despacho (2026-09-29):
+#: puede ser esas cajas contadas. Lo confirma un supervisor.
+EMPACADO_POR_SALIR = 'EMPACADO_POR_SALIR'
 
 
 def pesos(valor) -> str:
@@ -750,13 +753,16 @@ PERIMETRO_DE_CONTEO = {
     CD: {'donde': 'toda la bodega', 'resto': 'el resto de la bodega',
          'cuente': 'Cuente estantería, estibas y cross-dock.',
          'no_cuente': 'NO cuente lo empacado (bultos, canastos) ni lo que está en el '
-                      'muelle o en un camión: eso ya va de salida.'},
+                      'muelle o en un camión: eso ya va de salida. NO cuente lo averiado ni '
+                      'lo devuelto que espera nota crédito.'},
     TIENDA: {'donde': 'toda la tienda', 'resto': 'el resto de la tienda',
              'cuente': 'Cuente la exhibición y la bodega de la tienda.',
-             'no_cuente': 'NO cuente lo empacado para un traslado que está por salir.'},
+             'no_cuente': 'NO cuente lo empacado para un traslado que está por salir, '
+                          'ni lo averiado.'},
     DESCONOCIDO: {'donde': 'todo el almacén', 'resto': 'el resto del almacén',
                   'cuente': 'Cuente todos los sitios donde pueda estar.',
-                  'no_cuente': 'NO cuente lo empacado ni lo que está por salir.'},
+                  'no_cuente': 'NO cuente lo empacado ni lo que está por salir, ni lo '
+                               'averiado.'},
 }
 
 

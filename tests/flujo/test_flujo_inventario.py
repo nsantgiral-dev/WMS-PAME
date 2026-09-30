@@ -186,6 +186,12 @@ class TestElDetectorNoEstaCiego:
             almacen_id=kardex.almacen_id, producto_id=kardex.producto.id,
             estado=EstadoConteo.AJUSTANDO, siesa_triggered=True,
             siesa_response='{"codigo": 0}',
+            # Desde el 2026-09-29 el WMS queda en LO CONTADO
+            # (`llevar_wms_a_lo_contado`), no en «WMS + delta»: la sesión trae
+            # la foto con la que se contó (32 contra un teórico de 38).
+            cantidad_fisica=32, teorico_siesa=38, existencia_siesa=38,
+            cant_pos_siesa=0, salida_sin_conf_siesa=0, fuente_existencia='SIESA',
+            foto_siesa_at=datetime.utcnow(), diferencia=-6,
             operario_id=usuario.id)
         db.session.add(sesion)
         db.session.flush()

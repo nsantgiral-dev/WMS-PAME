@@ -701,7 +701,8 @@ def eliminar_fila(almacen_id: int, pasillo: str, fila: int, forzar: bool = False
 # 4. Mecanismo B — asignar(ubicacion_id, producto_id, cantidad)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _traspasar_desde_general(ubicacion: Ubicacion, producto_id: int, cantidad: int) -> int:
+def _traspasar_desde_general(ubicacion: Ubicacion, producto_id: int, cantidad: int,
+                             usuario_id: int = None) -> int:
     """
     Fusión Layout↔Picking (solo NB1/CO003): al asignar un SKU a un hueco real,
     resta esa misma cantidad de SIESA-GENERAL (el bucket sin ubicación física
@@ -736,12 +737,22 @@ def _traspasar_desde_general(ubicacion: Ubicacion, producto_id: int, cantidad: i
         return 0
 
     movido = min(cantidad, reg_general.cantidad)
+    antes = reg_general.cantidad
     reg_general.cantidad -= movido
     reg_general.row_version += 1
+    # La pata de SIESA-GENERAL, con su saldo (VAL-E4, 2026-09-29): un traspaso
+    # de una sola pata se lee en el libro como una entrada que no existió.
+    db.session.add(MovimientoInventario(
+        producto_id=producto_id, ubicacion_id=general.id, almacen_id=ubicacion.almacen_id,
+        tipo='ASIGNACION_LAYOUT', cantidad=-movido,
+        saldo_antes=antes, saldo_despues=reg_general.cantidad,
+        motivo=f'Layout: {movido} uds de SIESA-GENERAL pasan a {ubicacion.codigo}',
+        usuario_id=usuario_id, siesa_sync='OMITIDO'))
     return movido
 
 
-def _traspasar_hacia_general(ubicacion: Ubicacion, producto_id: int, cantidad: int) -> int:
+def _traspasar_hacia_general(ubicacion: Ubicacion, producto_id: int, cantidad: int,
+                             usuario_id: int = None) -> int:
     """
     Inverso de _traspasar_desde_general() — usado por editar_cuerpo() antes de
     borrar un hueco al remodular: su stock físico real se devuelve a
@@ -770,6 +781,7 @@ def _traspasar_hacia_general(ubicacion: Ubicacion, producto_id: int, cantidad: i
     reg_general = UbicacionProducto.query.filter_by(
         ubicacion_id=general.id, producto_id=producto_id, lote=None,
     ).with_for_update().first()
+    antes = reg_general.cantidad if reg_general else 0
     if reg_general:
         reg_general.cantidad += cantidad
         reg_general.row_version += 1
@@ -778,6 +790,13 @@ def _traspasar_hacia_general(ubicacion: Ubicacion, producto_id: int, cantidad: i
             ubicacion_id=general.id, producto_id=producto_id, cantidad=cantidad,
             fecha_ingreso=datetime.utcnow(),
         ))
+    # La pata que entra a SIESA-GENERAL, con su saldo (VAL-E4).
+    db.session.add(MovimientoInventario(
+        producto_id=producto_id, ubicacion_id=general.id, almacen_id=ubicacion.almacen_id,
+        tipo='REMODULACION_CUERPO', cantidad=cantidad,
+        saldo_antes=antes, saldo_despues=antes + cantidad,
+        motivo=f'Layout: {ubicacion.codigo} remodulado — {cantidad} uds entran a SIESA-GENERAL',
+        usuario_id=usuario_id, siesa_sync='OMITIDO'))
     return cantidad
 
 
@@ -856,7 +875,8 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
         regs = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).with_for_update().all()
         for reg in regs:
             if reg.cantidad > 0:
-                movido = _traspasar_hacia_general(ub, reg.producto_id, reg.cantidad)
+                movido = _traspasar_hacia_general(ub, reg.producto_id, reg.cantidad,
+                                                  usuario_id=usuario_id)
                 db.session.add(MovimientoInventario(
                     producto_id=reg.producto_id,
                     ubicacion_id=ub.id,
@@ -1021,7 +1041,8 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
 
     # Lock de destino ya tomado arriba (reg) — ahora sí el de origen (SIESA-GENERAL),
     # mismo orden que confirmar_reposicion() para evitar deadlocks cruzados.
-    movido_de_general = _traspasar_desde_general(ubicacion, producto_id, cantidad)
+    movido_de_general = _traspasar_desde_general(ubicacion, producto_id, cantidad,
+                                                 usuario_id=usuario_id)
 
     motivo = f'Layout: {producto.codigo} asignado a {ubicacion.codigo}'
     if movido_de_general:

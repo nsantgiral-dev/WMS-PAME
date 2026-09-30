@@ -174,6 +174,33 @@ def registrar_conteo(id):
         return jsonify({'error': str(e)}), 500
 
 
+@conteo_bp.route('/<int:id>/costo-sugerido', methods=['GET'])
+@jwt_required()
+def costo_sugerido(id):
+    """Antes de aprobar: si la entrada necesita costo explícito (la bodega no
+    tiene promedio) y cuál sugiere el sistema. Quien aprueba lo acepta o lo
+    cambia con un motivo (`PUT /ajustar` con `costo_unitario`, `motivo_costo`).
+    Mismo permiso que aprobar."""
+    from app.models.almacen import Almacen
+    from app.models.usuario import Usuario
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Identidad de usuario inválida en el token'}), 422
+    usuario = db.session.get(Usuario, usuario_id)
+    if not usuario or usuario.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Solo un supervisor, admin o jefe de almacén puede aprobar ajustes de inventario'}), 403
+    no_aprueba = ConteoService.motivo_no_aprueba_ningun_ajuste(usuario)
+    if no_aprueba:
+        return jsonify({'error': no_aprueba}), 403
+    sesion = db.session.get(SesionConteo, id)
+    if not sesion:
+        return jsonify({'error': 'Sesión no encontrada'}), 404
+    almacen = db.session.get(Almacen, sesion.almacen_id)
+    return jsonify(ConteoService.costo_sugerido_entrada(
+        sesion, almacen.bodega_siesa_id if almacen else None)), 200
+
+
 @conteo_bp.route('/<int:id>/ajustar', methods=['PUT'])
 @jwt_required()
 def confirmar_ajuste(id):
@@ -200,7 +227,8 @@ def confirmar_ajuste(id):
     data = request.get_json(silent=True) or {}
     try:
         sesion = ConteoService.confirmar_ajuste(
-            id, supervisor_id, costo_unitario=data.get('costo_unitario'))
+            id, supervisor_id, costo_unitario=data.get('costo_unitario'),
+            motivo_costo=data.get('motivo_costo'))
         # [A22] 202 cuando el ajuste está encolado en DLQ (AJUSTANDO) — el supervisor
         # sabe que no completó todavía y no cierra la pantalla prematuramente.
         # 200 solo cuando siesa_triggered=True (Siesa ya confirmó el ajuste).

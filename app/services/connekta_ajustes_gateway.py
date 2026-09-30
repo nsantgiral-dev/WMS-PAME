@@ -82,6 +82,21 @@ class ConnektaAjustesGateway:
         if _costo_uni is not None and not _costo_uni > 0:
             raise ConnektaPayloadInvalido(
                 f'Costo unitario inválido para el ajuste de {item_codigo}: {costo_unitario!r}')
+        # **Con costo, es una ENTRADA (clase 61, concepto 601), no un ajuste.**
+        # La clase 63 rechaza cantidad y costo en la misma línea («El ajuste
+        # debe ser solo en costo o en solo cantidad», QA 2026-09-29, PAPELSP7878).
+        # El tipo ADI está autorizado en Siesa para Ajustes y para Entradas, así
+        # que el documento sigue siendo un ADI; cambian clase, concepto y motivo
+        # (spec 142951: clase 61=Entrada, concepto 601=Entrada).
+        _con_costo = _costo_uni is not None
+        _clase = 61 if _con_costo else 63
+        _concepto = 601 if _con_costo else core.concepto_ajustes
+        if _con_costo:
+            siesa_motivo = (getattr(core, 'motivo_entrada_inventario', '') or '').strip()
+            if not siesa_motivo:
+                raise ConnektaPayloadInvalido(
+                    'SIESA_MOTIVO_ENTRADA_INVENTARIO no está configurado: la entrada con '
+                    f'costo de {item_codigo} (concepto 601) no se envía sin su motivo.')
 
         fecha_hoy = core._fecha_hoy_bogota()
         cia = int(core.id_cia_siesa)
@@ -99,11 +114,11 @@ class ConnektaAjustesGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': core.nit_empresa or None,
-                    'f350_id_clase_docto': 63,
+                    'f350_id_clase_docto': _clase,
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia,
-                    'f450_id_concepto': core.concepto_ajustes,
+                    'f450_id_concepto': _concepto,
                     # ADI (Clase 63): bodegas de cabecera no aplican — la bodega real
                     # va únicamente en f470_id_bodega del bloque Movimientos.
                     'f450_id_bodega_salida': None,
@@ -137,7 +152,7 @@ class ConnektaAjustesGateway:
                     'f470_id_ubicacion_aux': None,
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
-                    'f470_id_concepto': core.concepto_ajustes,                       # 603 = Ajustes (spec 142951, obligatorio), override: SIESA_CONCEPTO_AJUSTES
+                    'f470_id_concepto': _concepto,                                   # 603 = Ajustes (override: SIESA_CONCEPTO_AJUSTES); 601 = Entrada con costo
                     'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': _centro_op,
                     'f470_id_ccosto_movto': None,

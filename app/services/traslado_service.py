@@ -1433,7 +1433,7 @@ class TrasladoService:
         declara en el log: el saldo queda corto respecto de Siesa hasta la
         carga de las 7am, y eso hay que poder explicarlo sin adivinar.
         """
-        from app.models.inventario import UbicacionProducto
+        from app.models.inventario import MovimientoInventario, UbicacionProducto
         from app.models.ubicacion import Ubicacion
         from app.services.picking_service import filtro_ubicacion_vendible
 
@@ -1457,9 +1457,19 @@ class TrasladoService:
             if restante <= 0:
                 break
             quita = min(reg.cantidad, restante)
+            antes = reg.cantidad
             reg.cantidad -= quita
             reg.row_version = (reg.row_version or 0) + 1
             restante -= quita
+            # La pata que sale del vendible, con su saldo (2026-09-29): la de
+            # entrada a averías ya tenía su movimiento; ésta no, y el libro leía
+            # un traslado interno como una entrada.
+            db.session.add(MovimientoInventario(
+                producto_id=producto_id, ubicacion_id=reg.ubicacion_id,
+                almacen_id=almacen.id, tipo='TRASPASO_AVERIAS', cantidad=-quita,
+                saldo_antes=antes, saldo_despues=reg.cantidad,
+                motivo=f'{referencia}: {quita} uds pasan a la zona de averías'[:200],
+                numero_documento=(referencia or '')[:50]))
 
         descontado = int(cantidad) - restante
         if restante > 0:

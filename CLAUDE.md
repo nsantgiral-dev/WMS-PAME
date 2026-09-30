@@ -2762,9 +2762,38 @@ DLQ no lo recalcula y el re-encolado lo copia (o lo resuelve si el job viejo
 no lo traía). Salidas y bodegas con promedio > 0: sin costo, como siempre. La
 auditoría de picking sin costo deja el ajuste en DESCUADRE para el líder.
 Tests: `test_conteo_teorico_pos.py::TestLaEntradaSinCostoNoEntraEnCero`,
-`test_connekta_ajustes_gateway.py::TestElCostoDeLaEntrada`; 5 mutaciones, las
-5 rojas. **Sin probar en vivo todavía**: que Siesa tome el costo mandado en
-una entrada por ajuste (motivo 01).
+`test_connekta_ajustes_gateway.py::TestElCostoDeLaEntrada`; 8 mutaciones, las
+8 rojas.
+
+**Con costo NO es un ajuste: es una ENTRADA (clase 61).** Primera prueba en QA
+(PAPELSP7878, job 543): la clase 63 rechazó cantidad + costo en la misma línea
+— «Movto Inventario: El ajuste debe ser solo en costo o en solo cantidad».
+Verificado sin depender del consultor (sus dos respuestas se contradecían:
+clase 60 vs 61, tipos de documento adivinados): el spec del 142951 dice
+**clase 61=Entrada, concepto 601=Entrada**; en Siesa el tipo **ADI** está
+autorizado para «Ajustes de inventario» **y** «Entradas» (Tipos de documentos
+→ Autorización por origen), y el concepto **0601 motivo 01 «Entrada de
+Inventario»** existe, activo, ni solo cantidad ni solo valor (capturas del
+2026-09-29). Así que la entrada con costo sale como ADI clase 61 / concepto
+601 / motivo `SIESA_MOTIVO_ENTRADA_INVENTARIO` (sin default; sin ella esa
+entrada no sale, `vars_criticas`). Todo lo demás sigue siendo clase 63.
+Pendiente: que el contador confirme la contrapartida del 0601-01.
+
+**Validado en QA el 2026-09-29 16:33:** ADI-00000041, origen «Entradas»,
+PAPELSP7878 12 und a $900 = $10.800; asiento débito 14350101 (inventario
+importación gravado 19 %) / crédito **61352801 (costo mercancía grav. 19 %)**
+— la contrapartida del 0601-01 es costo de ventas, no una cuenta de ingreso:
+decisión del contador.
+
+**Quien aprueba decide el costo (decisión del dueño, 2026-09-29).** El sistema
+sugiere y la persona acepta o cambia: `GET /api/conteo/<id>/costo-sugerido`
+(`ConteoService.costo_sugerido_entrada`) y la pantalla (`liderElegirCosto`)
+muestra el sugerido editable. Aceptarlo (a menos de $1: la pantalla redondea a
+pesos) conserva su fuente; cambiarlo exige `motivo_costo`, sale como fuente
+`MANUAL` con `costo_sugerido`/`costo_sugerido_fuente`/`costo_motivo` en el
+payload y un EDITAR en la bitácora (quién, sobre qué sugerido, por qué).
+Alejarse más de `AVISO_DIFERENCIA_COSTO` (50 %) del sugerido pide una
+confirmación extra en pantalla; no bloquea.
 
 ---
 
@@ -8104,9 +8133,10 @@ De los P2, solo el barato: con **un único admin** que contó un CC3 por encima
 del tope, el mensaje dice que no hay otro admin y qué hacer (recontar con otra
 persona, cancelar, o subir `CONTEO_TOPE_AUTOAPROBACION`).
 
-**Lo que NO cubre:** En un DESCUADRE el WMS recibe el delta de Siesa (contado − teórico): si el WMS
+**Lo que NO cubre:** ~~En un DESCUADRE el WMS recibe el delta de Siesa (contado − teórico): si el WMS
 ya difería del teórico al contar, esa diferencia queda (solo el MATCH lleva el
-WMS a lo contado). P2 abiertos: `ultimo_conteo_por_sku` no mira
+WMS a lo contado).~~ Cerrado el 2026-09-29: `llevar_wms_a_lo_contado` (ver «Conteo:
+lo que encontró el e2e hasta el 142951»). P2 abiertos: `ultimo_conteo_por_sku` no mira
 `fuente_existencia`; «no cuente lo empacado» mezcla lo remisionado con lo que
 Siesa todavía cuenta; cifras ocultas a toda supervisión (VAL-6); la auditoría
 de picking manda el total del WMS como conteo (VAL-8). `m051conteo` baja de
@@ -8364,3 +8394,93 @@ activa (el índice de una cadena viva por SKU × almacén deja como único
 candidato en conflicto al del CC1, que ya excluye el doble ciego); se deja por
 coherencia, no por un caso medido. El intercalado no mira si el SKU tiene
 otros huecos lejos del picking: el HUD los nombra todos y pide un total.
+
+## Conteo: lo que encontró el e2e hasta el 142951, cerrado (2026-09-29)
+
+`tests/flujo/test_e2e_conteo_escenarios.py` recorre los escenarios a–k del
+inventario cíclico hasta el job `AJUSTE_CONTEO` con el gateway real armando el
+142951 (solo `_post` capturado) y, después de cada uno, **un chequeo común de
+inventario** (`Mundo.verificar_inventario`): nada negativo ni reservado de más,
+todo cambio de cantidad con su movimiento, lo enviado a Siesa = contado −
+teórico una sola vez, el WMS en lo contado, cero BLOQUEA del auditor de
+conteo. `scripts/qa_conteo_escenarios_real.py`: 4 POST 142951 reales a Siesa
+QA (sobrante y faltante netos en PAPELSP9830, entrada con costo clase 61/601 y
+su neteo en PAPELSP7879), con guarda de host y tope de 5 POST. Encontró cuatro
+defectos:
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **P1 · el WMS con el delta de Siesa** | El job aplicaba al WMS el delta que viaja a Siesa (contado − teórico). Con el WMS distinto del teórico al contar —Siesa sin fila y el WMS con las unidades, lo normal— quedaba en el doble: estante 12, Siesa 12, **WMS 24** (medido en vivo, PAPELSP7879). En un hueco físico la carga de las 7:00 no lo corrige | `ConteoService.llevar_wms_a_lo_contado`, **la única que mueve el WMS por un conteo**: el SKU × almacén queda en lo contado + POS no acumulado + lo que el WMS se movió **después** del conteo (`movido_despues_del_conteo`: sus `MovimientoInventario` desde `foto_siesa_at`, sin los de la propia sesión — así la recuperación no mueve dos veces), repartido por `aplicar_ajuste_al_wms`. La usan el job (camino normal y recuperación) y el MATCH (`cuadrar_wms_con_lo_contado`). El delta de Siesa no cambió |
+| **P2 · ensayo dado por hecho** | Con `MODO_ENSAYO` el 142951 no salía pero la rama `AJUSTE_CONTEO` ponía AJUSTADO y movía el WMS; al re-correr, la guarda de «AJUSTADO sin bandera» ponía `siesa_triggered` | `AjusteNoEnviadoEnEnsayo` (determinista): el job queda FALLIDO con «ENSAYO — no se envió», la sesión sigue AJUSTANDO sin bandera ni respuesta, el WMS no se toca; con el ensayo apagado, «Reintentar» envía y cierra |
+| **P2 · CNT-04 contra la omisión autorizada** | Omitir el 2º conteo con motivo y que firme otro (el camino de C2) era BLOQUEA: la Salud en NO_CONFIABLE por cada omisión legítima | `ConteoService.omision_autorizada` (motivo escrito + firma de alguien fuera de `autores_del_ajuste`); CNT-04 la exime. Sin motivo, firmada por quien omitió o contó, o sin firma: sigue BLOQUEA |
+| **P2 · «no cuente lo empacado» era solo texto** | CC1 y CC2 contando las cajas remisionadas del muelle → AJ-ENT automático por lo que ya salió | `unidades_empacadas_por_salir` (la única definición; `empacado_por_salir` es `> 0`) dentro de `motivo_no_sale_solo`: un **sobrante** con unidades de ese SKU empacadas por salir no sale solo (`EMPACADO_POR_SALIR`, con la cifra `empacadas` para el supervisor; quien cuenta sigue ciego). Un faltante sale como siempre |
+
+**Trinquetes:** `tests/test_conteo_cuatro_defectos_e2e.py` (AST: solo
+`llevar_wms_a_lo_contado` llama `aplicar_ajuste_al_wms`, y el job y el MATCH
+pasan por ella; toda rama de `_ejecutar_job` que asigna el resultado de
+`_ejecutar_con_preflag` pregunta por `modo_ensayo`; una definición de
+empacado y de omisión autorizada; meta-tests y pisos) + los cuatro xfail del
+e2e, en verde. `test_conteo_unidad_sku_almacen` exige ahora la función nueva
+en la rama del job.
+
+**Lo que NO cubre:** el «movido después» confía en el libro: un cambio de
+`UbicacionProducto` sin su movimiento no se ve (el trinquete de restas sin
+destino lo acota); movimientos sin saldo se suman por su cantidad (contados en
+`sin_saldo`). El sobrante con cajas se juzga al contar: si las cajas salen
+antes de aprobar, la tarjeta ya no dice la cifra (sigue en DESCUADRE, firma un
+supervisor). La auditoría de picking manda el total del WMS como conteo
+(VAL-8, abierto): con POS pendiente, su WMS sube el POS. «Supervisor» es toda
+supervisión con permiso por monto (el jefe, hasta su tope). `Mundo.verificar_inventario`
+y `scripts/qa_conteo_escenarios_real.py` corrieron antes del arreglo: la fila
+de PAPELSP7879 en Siesa QA queda con existencia 0 y costo 403,75.
+
+### La validación del mismo día (VAL-E1/E2/E3, cerrados)
+
+La validación (`val-e2e-conteo` @ 35b4875f, sus xfail en
+`tests/flujo/test_zz_val_llevar_wms.py`, en verde) aceptó el fondo y rechazó
+tres P1: «lo movido después del conteo» leía el libro por su `cantidad`.
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **VAL-E1** | El SHORT_PICK escribía la salida POSITIVA y sin saldo: sumada como entrada, el WMS terminaba en +2× lo encontrado | Cantidad negativa y `saldo_antes`/`saldo_despues` (`picking_service.reportar_problema`). Las cuatro patas de `AJUSTE_AUDITORIA` también llevan saldo |
+| **VAL-E2** | REPOSICION (RESERVA→PICKING) dejaba UNA pata `+unidades` sin saldo: el WMS terminaba con esas unidades de más | Dos patas con su saldo: sale de RESERVA, entra a PICKING (`reposicion_service.confirmar_reposicion`) |
+| **VAL-E3** | `existencia_wms_del_sku` y `aplicar_ajuste_al_wms` sumaban la zona de averías (que Siesa ya pasó a AV1): un MATCH descontaba lo averiado del vendible | Los dos (y `ubicacion_de_la_cadena`) sobre `filtro_ubicacion_vendible()`, el mismo del sync. Una cadena colgada de un hueco no vendible mete el sobrante en el vendible con más unidades. Se quitó la declaración de aplazamiento de `test_agregar_stock_declara_la_zona` |
+| **Sincronización** (pedido del coordinador) | La carga de Siesa de las 7:00 (y su cero, `SIESA-CERO`) entre el conteo y la aprobación se sumaba como si fuera mercancía que se movió | `ConteoService.ORIGEN_DE_MOVIMIENTO`: tabla cerrada tipo → `FISICO` · `SINCRONIZACION` · `CONTEO` · `MANUAL`. `movido_despues_del_conteo` suma **solo** `FISICO` **con saldo** (delta = después − antes), en lugares vendibles; lo demás se cuenta (`no_fisicos`, `sin_saldo`, `sin_clasificar`) |
+
+Trinquetes (en el mismo archivo): todo `MovimientoInventario(...)` de `app/`
+y `flota/` declara `saldo_antes` y `saldo_despues` (inventario de excepciones
+**vacío**, solo encoge); todo `tipo` literal está en la tabla, y los escritores
+con `tipo` por parámetro están declarados con sus valores (3); los `tipo=` que
+viajan a `_entrar`/`aplicar_ajuste_al_wms`/`llevar_wms_a_lo_contado` también;
+`movido_despues_del_conteo` lee saldo y tabla y no `.cantidad`. Meta-tests
+(función anidada, docstring, tipo nuevo, tipo dinámico, `a if c else b`) y piso.
+
+**Lo que sigue sin cubrir:** un movimiento viejo sin saldo (anterior a esto)
+no cuenta como movido; el `AJUSTE` manual de la ruta de inventario es `MANUAL`
+(el conteo lo reemplaza); un SHORT_PICK sin fila de stock escribe saldos
+`None` y no cuenta. ~~`lugares_del_sku` (lo que el HUD nombra) sigue incluyendo
+la zona de averías.~~ Cerrado el mismo día: `lugares_del_sku` usa
+`filtro_ubicacion_vendible()` (ni averías ni devoluciones, como el total) y el
+perímetro de los tres tipos de almacén dice «NO cuente lo averiado»
+(`TestElHudNoNombraLoQueElTotalNoCuenta`).
+
+### VAL-E4 · ningún cambio de stock sin su movimiento (2026-09-29)
+
+La re-validación (`val-e2e-conteo2` @ e85d27bf, `tests/flujo/test_zz_val_llevar_wms2.py`,
+en verde) encontró otra pata sin escribir: los traspasos de Layout.
+`_traspasar_desde_general` (asignar un SKU a un hueco real) restaba de
+SIESA-GENERAL sin movimiento y `_traspasar_hacia_general` (remodular) sumaba
+igual: `movido_despues_del_conteo` veía una entrada que no existió (65 en vez
+de 45). Ahora las dos escriben su pata con saldo (`ASIGNACION_LAYOUT` /
+`REMODULACION_CUERPO`), como REPOSICION. El trinquete de la clase encontró uno
+más: `traslado_service._descontar_del_bucket_vendible` (el dictamen de avería
+sacaba del vendible sin movimiento) → tipo nuevo `TRASPASO_AVERIAS` (FISICO).
+
+**Trinquete:** `TestNingunCambioDeStockSinSuMovimiento`
+(`tests/test_conteo_cuatro_defectos_e2e.py`): en todo módulo de `app/`/`flota/`
+que maneja `UbicacionProducto`, toda función que cambia `.cantidad` (`=`,
+`+=`, `-=`, `.update({'cantidad'})`, `setattr`) construye un
+`MovimientoInventario` en la misma función (o en una anidada suya).
+Inventario de excepciones vacío, solo encoge; meta-tests y piso. **No ve:** un
+cambio de `.cantidad` de `UbicacionProducto` en un módulo que no nombra la
+clase (hoy ninguno) ni SQL crudo.

@@ -137,6 +137,11 @@ VARS_CRITICAS: tuple = (
     VarCritica('CONNEKTA_IKEY', None,
                'Credencial de Connekta: sin ella el WMS entra en modo simulación y '
                'NADA llega a Siesa', condicional=True),
+    VarCritica('SIESA_MOTIVO_ENTRADA_INVENTARIO', None,
+               'Motivo del concepto 601 para la entrada con costo (clase 61) de un '
+               'sobrante de conteo sin costo en la bodega — en PAME el 0601-01 '
+               '«Entrada de Inventario». Sin él esa entrada no sale a Siesa',
+               condicional=True),
     VarCritica('SIESA_NIT_EMPRESA', None,
                'NIT de la empresa: comprador de la entrada por OC 142948 y tercero '
                'del ajuste 142951 (Siesa rechaza vacío)'),
