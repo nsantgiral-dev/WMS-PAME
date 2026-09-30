@@ -166,7 +166,7 @@ async function tiendaAveriasIniciar() {
   try {
     const bodega = OPERARIO?.bodega_siesa_id;
     if (!bodega) { _TAV_ESTADO = 'sin-bodega'; tiendaAveriasRender(); return; }
-    const d = await get(`/api/traslados/stock-disponible?bodega=${bodega}`);
+    const d = await get(`/api/traslados/stock-disponible?bodega=${encodeURIComponent(bodega)}&completo=true`);
     _TAV_STOCK = (d.items || []).filter(i => i.producto_id && i.disponible > 0);
     _TAV_ESTADO = 'listo';
   } catch (e) { _TAV_ESTADO = 'error'; }
@@ -320,7 +320,7 @@ async function tiendaCargarStock() {
   if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
   try {
     const bodega = _TIENDA_ORIGEN.id || 'NB1';
-    const d = await get(`/api/traslados/stock-disponible?bodega=${bodega}`);
+    const d = await get(`/api/traslados/stock-disponible?bodega=${encodeURIComponent(bodega)}&completo=true`);
     _TIENDA_STOCK = (d.items || []).filter(i => i.producto_id && i.disponible > 0);
     _TIENDA_STOCK_META = { fuente: d.fuente || null, actualizado_en: d.actualizado_en || null };
     _TIENDA_STOCK_ESTADO = 'listo';
@@ -418,7 +418,7 @@ function tiendaRenderStock() {
     : _TIENDA_STOCK;
 
   if (!filtrado.length) {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Sin resultados para "' + _TIENDA_FILTRO + '"</div>';
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Sin resultados para «' + esc(_TIENDA_FILTRO) + '»</div>';
     return;
   }
 

@@ -176,3 +176,43 @@ class TestPermiso:
             headers={'Authorization': f'Bearer {token}'},
         )
         assert r.status_code == 403
+
+
+class TestLaTiendaRecibeLaListaEntera:
+    """«Solo salen algunos artículos» (2026-09-29, producción): la pantalla
+    «Pedir» y «Averías» de la tienda busca y pagina en el celular, pero pedía
+    sin `completo` y recibía solo la página 1 del servidor (30 productos).
+    Buscaba entre esos 30 y creía que era todo."""
+
+    def test_completo_trae_todo_lo_pedible(self, client, jwt_token_admin):
+        items = [_item(i) for i in range(1, 76)]      # producto_id 0 no es producto
+        items.append({**_item(90), 'disponible': 0})        # sin disponible
+        items.append({**_item(91), 'producto_id': None})    # no está en el WMS
+        cache = {**_resultado_cacheado(0), 'items': items, 'total': len(items)}
+        with patch('app.services.traslado_service.TrasladoService.get_stock_disponible',
+                   return_value=cache):
+            r = client.get('/api/traslados/stock-disponible?bodega=NS1&completo=true',
+                           headers={'Authorization': f'Bearer {jwt_token_admin}'})
+        d = r.get_json()
+        assert r.status_code == 200
+        assert len(d['items']) == 75
+        assert d['total_paginas'] == 1
+        assert {'SKU-090', 'SKU-091'}.isdisjoint({i['codigo_siesa'] for i in d['items']})
+
+    def test_sin_completo_sigue_paginando(self, client, jwt_token_admin):
+        cache = {**_resultado_cacheado(0), 'items': [_item(i) for i in range(75)]}
+        with patch('app.services.traslado_service.TrasladoService.get_stock_disponible',
+                   return_value=cache):
+            r = client.get('/api/traslados/stock-disponible?bodega=NS1',
+                           headers={'Authorization': f'Bearer {jwt_token_admin}'})
+        assert len(r.get_json()['items']) == 30
+
+    def test_las_dos_pantallas_de_tienda_piden_completo(self):
+        """El detector lee el código (sin comentarios) de tienda.js: toda
+        petición a stock-disponible desde la tienda lleva `completo=true`."""
+        import pathlib, re
+        src = pathlib.Path('app/static/pwa/tienda.js').read_text(encoding='utf-8')
+        sin_coment = re.sub(r'//[^\n]*|/\*.*?\*/', '', src, flags=re.S)
+        llamadas = re.findall(r'stock-disponible\?[^`\'"]*', sin_coment)
+        assert len(llamadas) >= 2, llamadas            # piso: Pedir y Averías
+        assert all('completo=true' in c for c in llamadas), llamadas

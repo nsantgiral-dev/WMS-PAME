@@ -1260,6 +1260,7 @@ def stock_disponible():
     ?q=texto       — filtra por nombre/código Siesa (paginado sobre el resultado filtrado)
     ?page=1        — página (default 1)
     ?per_page=30   — tamaño de página (default 30, tope 200)
+    ?completo=true — toda la lista pedible (producto WMS y disponible > 0), sin paginar
     ?debug=true    — incluye detalle de lo que Siesa devolvió vs WMS (solo admin)
     ?forzar=true   — invalida cache y recarga desde Siesa
 
@@ -1291,6 +1292,8 @@ def stock_disponible():
     except (TypeError, ValueError):
         per_page = 30
     per_page = max(1, min(per_page, 200))
+    # ?completo=true — toda la lista pedible de una vez (pantallas de tienda).
+    completo = request.args.get('completo', '').lower() == 'true'
 
     if forzar:
         TrasladoService.invalidar_cache_stock(bodega)
@@ -1310,6 +1313,18 @@ def stock_disponible():
             ]
         else:
             items_filtrados = items_todos
+
+        if completo:
+            # La tienda arma su pedido y su avería sobre la lista ENTERA de lo
+            # que tiene la bodega: la busca y la pagina en el celular. Con la
+            # paginación del servidor (2026-09-16) recibía solo la página 1 —
+            # 30 productos — y creía que era todo: «solo salen algunos
+            # artículos» (2026-09-29). Se manda solo lo pedible (producto del
+            # WMS y disponible > 0) para no cargar filas que la pantalla tira.
+            items_filtrados = [it for it in items_filtrados
+                               if it.get('producto_id') and (it.get('disponible') or 0) > 0]
+            per_page = max(1, len(items_filtrados))
+            page = 1
 
         total_filtrado = len(items_filtrados)
         total_paginas = max(1, -(-total_filtrado // per_page))  # ceil sin float
