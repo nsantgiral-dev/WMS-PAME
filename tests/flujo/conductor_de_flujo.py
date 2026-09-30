@@ -42,7 +42,7 @@ class Flujo:
 
 
 def _sufijo():
-    return uuid.uuid4().hex[:6]
+    return uuid.uuid4().hex[:12]   # 6 chocaban en el CI (2026-09-30)
 
 
 def sembrar_catalogo(db, almacen, n=2, con_stock=50, unidad_negocio='001'):
