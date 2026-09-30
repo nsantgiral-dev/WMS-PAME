@@ -948,11 +948,16 @@ class ConteoService:
         """
         from app.models.inventario import UbicacionProducto
         from app.models.ubicacion import Ubicacion
+        from app.services.picking_service import filtro_ubicacion_vendible
+        # Solo lugares vendibles, como el total (`existencia_wms_del_sku`):
+        # la zona de averías y la de devoluciones no se nombran — si se
+        # nombraran, quien cuenta las sumaría y el total no las tiene.
         filas = (db.session.query(Ubicacion)
                  .join(UbicacionProducto, UbicacionProducto.ubicacion_id == Ubicacion.id)
                  .filter(Ubicacion.almacen_id == almacen_id,
                          UbicacionProducto.producto_id == producto_id,
-                         UbicacionProducto.cantidad > 0)
+                         UbicacionProducto.cantidad > 0,
+                         filtro_ubicacion_vendible())
                  .distinct()
                  .all())
         fisicos = sorted({u.codigo for u in filas if u.es_fisica})

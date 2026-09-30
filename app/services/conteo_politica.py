@@ -753,13 +753,16 @@ PERIMETRO_DE_CONTEO = {
     CD: {'donde': 'toda la bodega', 'resto': 'el resto de la bodega',
          'cuente': 'Cuente estantería, estibas y cross-dock.',
          'no_cuente': 'NO cuente lo empacado (bultos, canastos) ni lo que está en el '
-                      'muelle o en un camión: eso ya va de salida.'},
+                      'muelle o en un camión: eso ya va de salida. NO cuente lo averiado ni '
+                      'lo devuelto que espera nota crédito.'},
     TIENDA: {'donde': 'toda la tienda', 'resto': 'el resto de la tienda',
              'cuente': 'Cuente la exhibición y la bodega de la tienda.',
-             'no_cuente': 'NO cuente lo empacado para un traslado que está por salir.'},
+             'no_cuente': 'NO cuente lo empacado para un traslado que está por salir, '
+                          'ni lo averiado.'},
     DESCONOCIDO: {'donde': 'todo el almacén', 'resto': 'el resto del almacén',
                   'cuente': 'Cuente todos los sitios donde pueda estar.',
-                  'no_cuente': 'NO cuente lo empacado ni lo que está por salir.'},
+                  'no_cuente': 'NO cuente lo empacado ni lo que está por salir, ni lo '
+                               'averiado.'},
 }
 
 

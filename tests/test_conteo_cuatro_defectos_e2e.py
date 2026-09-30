@@ -453,3 +453,27 @@ class TestLasOperacionesRealesDespuesDelConteo:
         assert st in (200, 202), r
         m.ejecutar_ajustes()
         assert m.por_lugar(p) == {'PIK-1': 0, 'RES-1': 3, 'AVE-1': 50}, m.por_lugar(p)
+
+
+class TestElHudNoNombraLoQueElTotalNoCuenta:
+
+    def test_ni_averias_ni_devoluciones_y_el_perimetro_lo_dice(self, m):
+        m.ub(m.nb1, 'AVE-1', 'AVERIAS')
+        m.ub(m.nb1, 'DEV-1', 'DEVOLUCION')
+        p = m.producto(lugares={'PIK-1': 10, 'AVE-1': 4, 'DEV-1': 2}, existencia=10)
+        sid = m.manual(m.sofi, p)
+        t = m.abrir(m.ana, sid)
+        assert [l['codigo'] for l in t['lugares']] == ['PIK-1'], t['lugares']
+        assert 'NO cuente lo averiado' in t['perimetro']['no_cuente']
+        r = m.contar(m.beto, m.manual(m.sofi, m.producto(lugares={'PIK-2': 1})), 1)
+        assert r['resultado'] == 'MATCH'
+
+    def test_todo_perimetro_dice_lo_averiado(self):
+        from app.services.conteo_politica import PERIMETRO_DE_CONTEO
+        assert all('averiado' in v['no_cuente'] for v in PERIMETRO_DE_CONTEO.values())
+
+    def test_los_lugares_y_el_total_usan_la_misma_politica(self):
+        texto = (APP / 'services' / 'conteo_service.py').read_text(encoding='utf-8')
+        fns = {f.name: f for f in _funciones(ast.parse(texto))}
+        for nombre in ('lugares_del_sku', 'existencia_wms_del_sku', 'aplicar_ajuste_al_wms'):
+            assert _llamadas(fns[nombre], 'filtro_ubicacion_vendible'), nombre

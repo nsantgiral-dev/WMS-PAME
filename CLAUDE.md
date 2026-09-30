@@ -8458,5 +8458,8 @@ viajan a `_entrar`/`aplicar_ajuste_al_wms`/`llevar_wms_a_lo_contado` también;
 **Lo que sigue sin cubrir:** un movimiento viejo sin saldo (anterior a esto)
 no cuenta como movido; el `AJUSTE` manual de la ruta de inventario es `MANUAL`
 (el conteo lo reemplaza); un SHORT_PICK sin fila de stock escribe saldos
-`None` y no cuenta. `lugares_del_sku` (lo que el HUD nombra) sigue incluyendo
-la zona de averías.
+`None` y no cuenta. ~~`lugares_del_sku` (lo que el HUD nombra) sigue incluyendo
+la zona de averías.~~ Cerrado el mismo día: `lugares_del_sku` usa
+`filtro_ubicacion_vendible()` (ni averías ni devoluciones, como el total) y el
+perímetro de los tres tipos de almacén dice «NO cuente lo averiado»
+(`TestElHudNoNombraLoQueElTotalNoCuenta`).
