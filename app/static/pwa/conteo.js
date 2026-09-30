@@ -859,12 +859,12 @@ async function _cargarOperariosConteo(almacenId) {
   }
 }
 
-/** Opciones de un selector de destinatario: la cola, los presentes, los que
- * todavía no dieron señal (se pueden elegir: el líder sabe quién vino) y los
- * ausentes o inactivos —deshabilitados, con su motivo—. */
+/** Opciones de un selector de destinatario: la cola, los que pueden recibirlo
+ * (el conteo no exige señal: quien todavía no abrió la aplicación sale con su
+ * aviso) y los ausentes o inactivos —deshabilitados, con su motivo—. */
 function _opcionesOperariosConteo(c) {
   const disp = (c.disponibles || []).map(u =>
-    `<option value="${esc(u.id)}">${esc(u.nombre)}</option>`).join('');
+    `<option value="${esc(u.id)}">${esc(u.nombre)}${u.presencia === 'SIN_SENAL' ? ' (todavía no ha abierto la aplicación)' : ''}</option>`).join('');
   const no = (c.no_disponibles || []).map(u => u.presencia === 'SIN_SENAL'
     ? `<option value="${esc(u.id)}">${esc(u.nombre)} (todavía no ha abierto la aplicación)</option>`
     : `<option value="no-${esc(u.id)}" disabled>${esc(u.nombre)} — ${esc(u.presencia_texto)}</option>`).join('');

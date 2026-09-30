@@ -335,9 +335,9 @@ class TestRepartir:
     def test_el_cc2_no_va_a_quien_hizo_el_cc1(self, db, nb1):
         """Solo Ana presente, y el único pendiente es el CC2 de algo que ella
         contó: no se le da."""
-        from app.services import asignacion
+        from app.services import asignacion, presencia
         for u in ('luis', 'caro'):
-            nb1[u].ultima_senal_at = None
+            presencia.declarar_ausencia(nb1[u].id, 'PERMISO', por_id=nb1['sup'].id)
         db.session.commit()
         cc1 = _conteo(db, nb1['almacen'], operario=nb1['ana'], estado='SEGUNDO_CONTEO')
         cc2 = _conteo(db, nb1['almacen'], origen=cc1)
@@ -347,8 +347,9 @@ class TestRepartir:
         assert _sesion(db, cc2.id).operario_id is None
 
     def test_nadie_presente_no_se_asigna_y_se_dice(self, app, db, client, nb1):
+        from app.services import presencia
         for u in ('ana', 'luis', 'caro'):
-            nb1[u].ultima_senal_at = datetime.utcnow() - timedelta(hours=6)
+            presencia.declarar_ausencia(nb1[u].id, 'PERMISO', por_id=nb1['sup'].id)
         db.session.commit()
         s = _conteo(db, nb1['almacen'])
         d = client.post('/api/conteo/asignar-lote', headers=_tok(app, nb1['sup']),
@@ -442,20 +443,19 @@ class TestQuienNoEstaSuelta:
         assert db.session.get(TareaPicking, pk.id).ultimo_operario_id == luis.id
         assert BitacoraAccion.query.filter_by(accion='DESASIGNAR').count() == 3
 
-    def test_el_barrido_suelta_lo_no_empezado_de_quien_no_da_senal(self, db, nb1):
+    def test_el_barrido_no_le_quita_conteos_a_quien_no_da_senal(self, db, nb1):
+        """Decisión del dueño (2026-09-30): el conteo no exige señal. El
+        barrido no suelta ningún conteo de quien lleva horas sin señal."""
         from app.services import asignacion
         caro = nb1['caro']
         pend = _conteo(db, nb1['almacen'], operario=caro)
         curso = _conteo(db, nb1['almacen'], operario=caro, estado='EN_PROCESO')
-        otra = _conteo(db, nb1['almacen'], operario=nb1['ana'])
         caro.ultima_senal_at = datetime.utcnow() - timedelta(hours=3)
         db.session.commit()
         r = asignacion.barrer()
-        assert r['conteos'] == 1, r
-        assert _sesion(db, pend.id).operario_id is None
-        assert _sesion(db, curso.id).operario_id == caro.id, (
-            'lo EMPEZADO lo cuida el barrido de inactividad, que mide la tarea')
-        assert _sesion(db, otra.id).operario_id == nb1['ana'].id
+        assert r['conteos'] == 0, r
+        assert _sesion(db, pend.id).operario_id == caro.id
+        assert _sesion(db, curso.id).operario_id == caro.id
 
     def test_la_reposicion_en_curso_de_un_ausente_no_se_suelta_va_a_por_decidir(self, db, nb1):
         """Un LPN camino de PICKING es mercancía a medio mover, como un carro de
@@ -598,18 +598,32 @@ class TestLasPuertas:
         from app.services.conteo_service import ConteoService
         # Como en la vida real: el CC1 ya está contado (SEGUNDO_CONTEO), así que
         # no es el «conflicto de hueco» lo que aparta a Ana, sino el doble ciego.
+        from app.services import presencia
         cc1 = _conteo(db, nb1['almacen'], operario=nb1['ana'], estado='SEGUNDO_CONTEO')
-        nb1['luis'].ultima_senal_at = None                    # Luis no vino
+        presencia.declarar_ausencia(nb1['luis'].id, 'PERMISO', por_id=nb1['sup'].id)
         db.session.commit()
         cc2 = ConteoService._crear_conteo_verificacion(cc1, None)
         db.session.commit()
         assert cc2.operario_id == nb1['caro'].id, 'Luis (id menor) no vino; Ana hizo el CC1'
 
-    def test_sin_par_presente_el_cc2_queda_en_la_cola(self, db, nb1):
+    def test_el_cc2_pasa_en_el_momento_aunque_el_otro_no_haya_dado_senal(self, db, nb1):
+        """Decisión del dueño (2026-09-30): terminado el 1er conteo, el 2º
+        pasa inmediatamente al otro operario, sin esperar su «señal»."""
         from app.services.conteo_service import ConteoService
-        cc1 = _conteo(db, nb1['almacen'], operario=nb1['ana'], estado='EN_PROCESO')
+        cc1 = _conteo(db, nb1['almacen'], operario=nb1['ana'], estado='SEGUNDO_CONTEO')
         for u in ('luis', 'caro'):
             nb1[u].ultima_senal_at = None
+        db.session.commit()
+        cc2 = ConteoService._crear_conteo_verificacion(cc1, None)
+        db.session.commit()
+        assert cc2.operario_id == nb1['luis'].id
+
+    def test_sin_par_presente_el_cc2_queda_en_la_cola(self, db, nb1):
+        from app.services.conteo_service import ConteoService
+        from app.services import presencia
+        cc1 = _conteo(db, nb1['almacen'], operario=nb1['ana'], estado='EN_PROCESO')
+        for u in ('luis', 'caro'):
+            presencia.declarar_ausencia(nb1[u].id, 'PERMISO', por_id=nb1['sup'].id)
         db.session.commit()
         cc2 = ConteoService._crear_conteo_verificacion(cc1, nb1['ana'].id)
         db.session.commit()
@@ -662,13 +676,13 @@ class TestLasPuertas:
         assert _sesion(db, sid).operario_id == nuevo.id, (
             'el barrido le quitó el conteo manual que el líder le dio')
 
-    def test_el_barrido_si_suelta_lo_rutinario_de_quien_no_da_senal(self, db, nb1):
+    def test_el_barrido_tampoco_suelta_lo_rutinario_de_quien_no_da_senal(self, db, nb1):
         from app.services import asignacion
         nuevo = _persona(db, nb1['almacen'], 'SinSenal', senal=False)
         rutina = _conteo(db, nb1['almacen'], operario=nuevo)
         manual = _conteo(db, nb1['almacen'], operario=nuevo, tipo='MANUAL')
         asignacion.barrer()
-        assert _sesion(db, rutina.id).operario_id is None
+        assert _sesion(db, rutina.id).operario_id == nuevo.id
         assert _sesion(db, manual.id).operario_id == nuevo.id
 
     def test_el_conteo_manual_a_un_ausente_se_sigue_rechazando(self, db, nb1):
@@ -688,14 +702,24 @@ class TestLasPuertas:
         asignacion.barrer()
         assert _sesion(db, manual.id).operario_id is None
 
-    def test_reasignar_sigue_exigiendo_senal(self, db, nb1):
-        """Solo el conteo manual se relajó: reasignar por /editar sigue
-        pidiendo que la persona esté."""
+    def test_reasignar_a_quien_no_da_senal_se_permite(self, db, nb1):
+        """El conteo no exige señal (2026-09-30): reasignar por /editar a
+        quien todavía no abrió la aplicación se permite."""
         from app.services.conteo_service import ConteoService
         nuevo = _persona(db, nb1['almacen'], 'OtroSin', senal=False)
         s = _conteo(db, nb1['almacen'])
-        with pytest.raises(ValueError, match='no se le asigna trabajo'):
-            ConteoService.reasignar_operario(s, nuevo.id)
+        ConteoService.reasignar_operario(s, nuevo.id)
+        db.session.commit()
+        assert _sesion(db, s.id).operario_id == nuevo.id
+
+    def test_el_picking_si_sigue_exigiendo_senal(self, db, nb1):
+        """Solo el conteo dejó de exigir señal: los demás trabajos no."""
+        from app.services import asignacion
+        nuevo = _persona(db, nb1['almacen'], 'SinSenalPk', senal=False)
+        assert asignacion.motivo_no_asignable(nuevo, asignacion.PICKING,
+                                              almacen_id=nb1['almacen'].id)
+        assert asignacion.motivo_no_asignable(nuevo, asignacion.CONTEO,
+                                              almacen_id=nb1['almacen'].id) is None
 
     def test_forzar_un_conteo_a_la_jefa_se_rechaza(self, db, nb1):
         from app.services.conteo_service import ConteoService
