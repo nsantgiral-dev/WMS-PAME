@@ -177,11 +177,14 @@ _ENV_TOL_TOPE_VALOR = 'CONTEO_TOLERANCIA_TOPE_VALOR'
 _ENV_TOPE_AUTOAJUSTE = 'CONTEO_TOPE_AUTOAJUSTE'
 _ENV_TOPE_JEFE = 'CONTEO_TOPE_APROBACION_JEFE'
 _ENV_TOPE_AUTOAPROBACION = 'CONTEO_TOPE_AUTOAPROBACION'
+#: Decisión del dueño (2026-09-30): todo ajuste de conteo lo aprueba una persona.
+_ENV_AJUSTE_AUTOMATICO = 'CONTEO_AJUSTE_AUTOMATICO'
 
 #: Los nombres de las variables, para el trinquete de «un solo sitio».
 VARIABLES_DE_ENTORNO = (_ENV_CUPO, _ENV_CUPO_BODEGA, _ENV_INTERVALOS, _ENV_WATCHDOG_DIAS,
                         _ENV_TOL_UNIDADES, _ENV_TOL_PCT, _ENV_TOL_TOPE_VALOR,
-                        _ENV_TOPE_AUTOAJUSTE, _ENV_TOPE_JEFE, _ENV_TOPE_AUTOAPROBACION)
+                        _ENV_TOPE_AUTOAJUSTE, _ENV_TOPE_JEFE, _ENV_TOPE_AUTOAPROBACION,
+                        _ENV_AJUSTE_AUTOMATICO)
 
 #: Unidades de diferencia que se aceptan sin segundo conteo, por clase. Ver el
 #: encabezado: A 0 (estricta), B y C una unidad suelta.
@@ -595,6 +598,23 @@ SIN_FILA_EN_SIESA = 'SIN_FILA_EN_SIESA'
 #: Un sobrante con unidades del SKU empacadas esperando despacho (2026-09-29):
 #: puede ser esas cajas contadas. Lo confirma un supervisor.
 EMPACADO_POR_SALIR = 'EMPACADO_POR_SALIR'
+#: Ningún ajuste de conteo sale solo mientras `CONTEO_AJUSTE_AUTOMATICO` no
+#: esté en `true` (decisión del dueño, 2026-09-30).
+APROBACION_OBLIGATORIA = 'APROBACION_OBLIGATORIA'
+
+
+def ajuste_automatico() -> bool:
+    """¿Un ajuste de conteo puede salir SOLO a Siesa (tolerancia, CC1 == CC2)?
+
+    **No, por defecto** (decisión del dueño, 2026-09-30): «quisiera que la
+    generación del documento no fuera automática, sino que tuviéramos que
+    aprobarlo desde Ajustes esperando decisión; así vemos el costo antes».
+    Todo ajuste queda en DESCUADRE y lo aprueba un líder con su valor y su
+    costo a la vista. Solo `CONTEO_AJUSTE_AUTOMATICO=true` (literal) lo
+    vuelve a encender, con los topes de siempre. Cualquier otro valor, apagado:
+    ante la duda, una persona mira (Regla 0).
+    """
+    return os.environ.get(_ENV_AJUSTE_AUTOMATICO, '').strip().lower() == 'true'
 
 
 def pesos(valor) -> str:
@@ -705,6 +725,10 @@ def motivo_tope_autoajuste(diferencia, costo):
         return {'codigo': SUPERA_TOPE, 'mensaje': (
             f'el ajuste vale {pesos(valor)} y supera el tope de {pesos(tope)} para '
             'ajustes automáticos — lo aprueba un líder')}
+    if not ajuste_automatico():
+        return {'codigo': APROBACION_OBLIGATORIA, 'mensaje': (
+            f'todo ajuste de conteo lo aprueba una persona antes de ir a Siesa '
+            f'(vale {pesos(valor)}): revise la cantidad y el costo y apruébelo')}
     return None
 
 
