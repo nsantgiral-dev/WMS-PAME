@@ -257,7 +257,7 @@ def _ventanas_declaradas(base=None):
             if isinstance(v, ast.Tuple) and v.elts and all(
                     isinstance(e, ast.Call) and isinstance(e.func, ast.Name)
                     and e.func.id == 'time' for e in v.elts):
-                out.add(f'{f.relative_to(base)}::{t.id}')
+                out.add(f'{f.relative_to(base).as_posix()}::{t.id}')
     return out
 
 
@@ -276,7 +276,7 @@ def _lectores_de_la_variable(base=None):
             for n in ast.walk(arbol):
                 if (isinstance(n, ast.Constant) and n.value == 'SIESA_VENTANA'
                         and id(n) not in docs):
-                    out.add(str(f.relative_to(base)))
+                    out.add(f.relative_to(base).as_posix())
     return out
 
 
@@ -352,7 +352,7 @@ class TestLaFrescura:
             for n in ast.walk(ast.parse(f.read_text(encoding='utf-8'))):
                 if (isinstance(n, ast.Attribute) and n.attr == 'updated_at'
                         and isinstance(n.value, ast.Name) and n.value.id == 'StockSiesa'):
-                    hallados.add(str(f.relative_to(RAIZ)))
+                    hallados.add(f.relative_to(RAIZ).as_posix())
         assert hallados <= permitidos, hallados - permitidos
         assert 'app/services/inventario_siesa_service.py' in hallados
 
@@ -456,7 +456,7 @@ def _rangos_de_hora(base=None):
                     if (k.arg == 'hour' and isinstance(k.value, ast.Constant)
                             and isinstance(k.value.value, str)
                             and any(c in k.value.value for c in '-,/')):
-                        out.add((str(f.relative_to(base)), n.lineno))
+                        out.add((f.relative_to(base).as_posix(), n.lineno))
     return out
 
 

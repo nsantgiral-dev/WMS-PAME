@@ -8,6 +8,7 @@ veces: el reporte semanal de flota (dos correos) y el refresco de existencias
 `--preload`— no corría nunca: Gunicorn solo lee hooks de su configuración.
 """
 import ast
+import pytest
 import pathlib
 import runpy
 from datetime import datetime, timedelta
@@ -109,6 +110,8 @@ class TestElRefrescoDeExistencias:
 class TestElHookDeGunicornCorre:
 
     def test_vive_en_la_configuracion_que_gunicorn_lee(self):
+        # Gunicorn solo corre en Unix (importa `grp`); en Windows no hay qué medir.
+        pytest.importorskip('grp')
         from gunicorn.config import Config
         assert Config().settings['config'].default == './gunicorn.conf.py'
         ns = runpy.run_path(str(RAIZ / 'gunicorn.conf.py'))

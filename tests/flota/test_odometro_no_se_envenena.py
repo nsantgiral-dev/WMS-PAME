@@ -631,7 +631,7 @@ def _escanear():
         for p in (RAIZ / base).rglob('*.py'):
             total += 1
             src = p.read_text(encoding='utf-8')
-            nombre = str(p.relative_to(RAIZ))
+            nombre = p.relative_to(RAIZ).as_posix()
             hallados += _traducciones(src, nombre)
             if nombre.endswith('adaptadores/modelos.py'):
                 a_dominio = sum(1 for n in ast.walk(ast.parse(src))

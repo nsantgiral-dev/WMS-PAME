@@ -87,7 +87,7 @@ def _llamadas_a_date():
                     and not nodo.args):
                 receptor = ast.unparse(nodo.func.value)
                 salida.append((
-                    f'{ruta.relative_to(_RAIZ)}:{nodo.lineno}',
+                    f'{ruta.relative_to(_RAIZ).as_posix()}:{nodo.lineno}',
                     receptor,
                     'astimezone' in receptor,
                 ))

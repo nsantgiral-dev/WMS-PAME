@@ -526,7 +526,7 @@ def triggers_sin_resolucion(fuentes: dict) -> dict:
 
 
 def _fuentes_app():
-    return {str(p.relative_to(RAIZ)): p.read_text(encoding='utf-8') for p in APP.rglob('*.py')}
+    return {p.relative_to(RAIZ).as_posix(): p.read_text(encoding='utf-8') for p in APP.rglob('*.py')}
 
 
 class TestTodoPostDeLaLiquidacionPasaPorLaResolucion:

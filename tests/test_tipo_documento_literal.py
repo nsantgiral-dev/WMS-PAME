@@ -205,7 +205,7 @@ def _todo():
     esc, lec = [], []
     constantes = _valores_constantes()
     for p in _archivos():
-        rel = str(p.relative_to(RAIZ))
+        rel = p.relative_to(RAIZ).as_posix()
         src = p.read_text(encoding='utf-8')
         esc += escritores(src, rel, constantes)
         lec += lectores(src, rel)

@@ -297,7 +297,7 @@ class TestUnaSolaReglaDelNombre:
         from pathlib import Path
         raiz = Path(__file__).resolve().parent.parent / 'app'
         propio = raiz / 'services' / 'vendedores.py'
-        infractores = [str(p.relative_to(raiz)) for p in raiz.rglob('*.py')
+        infractores = [p.relative_to(raiz).as_posix() for p in raiz.rglob('*.py')
                        if p != propio and self._lecturas_de_apellido(
                            ast.parse(p.read_text(encoding='utf-8')))]
         assert infractores == [], (

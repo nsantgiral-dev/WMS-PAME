@@ -499,7 +499,7 @@ def _todas():
     salida, n = [], 0
     for base in ('app', 'flota'):
         for p in sorted((RAIZ / base).rglob('*.py')):
-            rel = str(p.relative_to(RAIZ))
+            rel = p.relative_to(RAIZ).as_posix()
             n += 1
             if rel == 'app/services/kardex_service.py':
                 continue      # el dueño
@@ -589,7 +589,7 @@ class TestLasBodegasDeProyectoTienenUnDueno:
     def test_un_dueno(self):
         usos = []
         for p in sorted((RAIZ / 'app').rglob('*.py')):
-            usos.extend(self._usos(p.read_text(encoding='utf-8'), str(p.relative_to(RAIZ))))
+            usos.extend(self._usos(p.read_text(encoding='utf-8'), p.relative_to(RAIZ).as_posix()))
         fuera = sorted({u for u in usos
                         if u not in {('app/services/kardex_service.py', 'bodegas_de_proyecto'),
                                      ('app/services/kardex_service.py', '<modulo>')}})

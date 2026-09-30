@@ -621,7 +621,7 @@ def _aperturas(base=None):
     base = base or RAIZ
     hallados, archivos = {}, 0
     for f in sorted((base / 'app').rglob('*.py')):
-        rel = str(f.relative_to(base))
+        rel = f.relative_to(base).as_posix()
         arbol = ast.parse(f.read_text(encoding='utf-8'))
         archivos += 1
         alias = _alias_de_estado_conteo(arbol)
@@ -762,7 +762,7 @@ def _sin_foto_de_inicio(base=None):
     base = base or RAIZ
     hallados = {}
     for f in sorted((base / 'app').rglob('*.py')):
-        rel = str(f.relative_to(base))
+        rel = f.relative_to(base).as_posix()
         arbol = ast.parse(f.read_text(encoding='utf-8'))
 
         def visitar(nodo, pila):

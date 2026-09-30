@@ -41,7 +41,7 @@ def _leer(ruta):
 
 
 def _rel(ruta):
-    return os.path.relpath(ruta, _RAIZ)
+    return os.path.relpath(ruta, _RAIZ).replace(os.sep, "/")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -712,7 +712,7 @@ class TestTrinqueteAdvertencias:
             for n in ast.walk(arbol):
                 if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                         and n.func.attr == 'reload'):
-                    malas.append(f'{py.relative_to(_RAIZ)}:{n.lineno}')
+                    malas.append(f'{py.relative_to(_RAIZ).as_posix()}:{n.lineno}')
         assert not malas, (
             '\n'.join(malas)
             + '\n\nHacé la comprobación en un subproceso: contesta la misma '
@@ -1311,7 +1311,7 @@ class TestNadaSeMideSinLector:
                 usos = len(re.findall(rf'\b{re.escape(n.name)}\s*\(', prod))
                 if usos <= 1 and n.name not in js:
                     huerfanas.append(
-                        f'{os.path.relpath(ruta, _RAIZ)}::{n.name}')
+                        f'{os.path.relpath(ruta, _RAIZ).replace(os.sep, "/")}::{n.name}')
         assert not huerfanas, (
             '\n'.join(f'  · {h}' for h in sorted(huerfanas))
             + '\n\nCódigo correcto, probado y que nadie llama. Conectalo o '

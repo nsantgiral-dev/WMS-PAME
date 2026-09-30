@@ -123,7 +123,7 @@ def _jobs(base=None):
                             and fn.func.id == 'con_latido' and fn.args
                             and isinstance(fn.args[0], ast.Constant)
                             and fn.args[0].value == ident)
-                out.append((str(f.relative_to(base)), ident, envuelto))
+                out.append((f.relative_to(base).as_posix(), ident, envuelto))
     return out
 
 

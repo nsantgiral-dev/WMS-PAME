@@ -238,7 +238,7 @@ def _columnas_de_modelos():
                     if isinstance(t, ast.Name):
                         # Ruta relativa, no `p.name`: ahora hay modelos en tres
                         # directorios y `modelos.py:262` no dice cuál.
-                        donde = f'{p.relative_to(_RAIZ)}:{n.lineno}'
+                        donde = f'{p.relative_to(_RAIZ).as_posix()}:{n.lineno}'
                         fuera.append((tabla, t.id, donde))
     return tuple(fuera)
 
@@ -292,7 +292,7 @@ class TestNingunaColumnaSinMigracion:
         recorría solo `app/models/` y daba verde sobre **doce tablas que no
         veía**. Si alguien vuelve a angostar `_archivos_de_modelos`, esto se
         pone rojo en vez de dejar el punto ciego a oscuras otra vez."""
-        hallados = {str(p.relative_to(_RAIZ)) for p in _archivos_de_modelos()}
+        hallados = {p.relative_to(_RAIZ).as_posix() for p in _archivos_de_modelos()}
         faltan = [s for s in _ANTES_CIEGOS if s not in hallados]
         assert not faltan, (
             f'el barrido de modelos ya no alcanza: {faltan}. Eran invisibles '
@@ -329,7 +329,7 @@ class TestNingunaColumnaSinMigracion:
                 )
                 if not literal:
                     sin_literal.append(
-                        f'{p.relative_to(_RAIZ)}:{clase.lineno} {clase.name}')
+                        f'{p.relative_to(_RAIZ).as_posix()}:{clase.lineno} {clase.name}')
         assert not sin_literal, (
             f'modelo(s) sin `__tablename__` literal:\n  '
             + '\n  '.join(sin_literal) +

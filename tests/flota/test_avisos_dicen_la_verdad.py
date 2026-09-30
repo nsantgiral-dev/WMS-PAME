@@ -445,7 +445,7 @@ class TestElPanelNoLeeElEntornoDeLaWeb:
         return malas
 
     def test_el_repo(self):
-        fuentes = [(str(p.relative_to(RAIZ)), p.read_text(encoding='utf-8'))
+        fuentes = [(p.relative_to(RAIZ).as_posix(), p.read_text(encoding='utf-8'))
                    for p in sorted((RAIZ / 'flota' / 'api').glob('*.py'))]
         assert len(fuentes) >= 10, 'piso: no se leyó flota/api'
         assert self._lecturas(fuentes) == []

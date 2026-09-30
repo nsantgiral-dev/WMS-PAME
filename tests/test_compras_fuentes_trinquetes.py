@@ -426,7 +426,7 @@ class TestElSyncNoCierraSinVerTodo:
                             and n.func.attr == 'delete':
                         texto = ast.unparse(n)
                         assert 'OcLineaSiesa' not in texto and 'oc_linea' not in texto, (
-                            f'{p.relative_to(RAIZ)}:{n.lineno} borra líneas de OC')
+                            f'{p.relative_to(RAIZ).as_posix()}:{n.lineno} borra líneas de OC')
                 if p.name == 'compras_oc_sync.py':
                     assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                                    and n.func.attr == 'delete' for n in ast.walk(arbol))

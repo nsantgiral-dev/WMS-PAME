@@ -197,7 +197,7 @@ def _posts_http(base=None):
                 if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
                 for c in _llamadas(fn, 'post', mod={'requests', '_requests'}):
-                    out.setdefault(str(f.relative_to(base)), []).append((fn, c.lineno))
+                    out.setdefault(f.relative_to(base).as_posix(), []).append((fn, c.lineno))
     return out
 
 

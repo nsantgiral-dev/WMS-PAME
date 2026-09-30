@@ -105,7 +105,7 @@ class TestElHuecoSigueDeclarado:
 
     def test_el_archivo_de_invariantes_existe(self):
         assert _INVARIANTES.exists(), (
-            f'{_INVARIANTES.relative_to(_RAIZ)} no está. Eran los únicos tests '
+            f'{_INVARIANTES.relative_to(_RAIZ).as_posix()} no está. Eran los únicos tests '
             f'que ejercían los CHECK, los triggers y los índices parciales '
             f'contra PostgreSQL — el motor de producción. Borrarlos deja los '
             f'invariantes de flota probados solo contra SQLite, que es lo que '
@@ -115,11 +115,11 @@ class TestElHuecoSigueDeclarado:
         """Sin el script, correrlos exige recordar la variable de entorno y el
         marcador. Lo que hay que recordar, no se hace."""
         assert _CORREDOR.exists(), (
-            f'falta {_CORREDOR.relative_to(_RAIZ)} — el único camino barato '
+            f'falta {_CORREDOR.relative_to(_RAIZ).as_posix()} — el único camino barato '
             f'para ejercer los invariantes de PostgreSQL')
         import os
         assert os.access(_CORREDOR, os.X_OK), (
-            f'{_CORREDOR.relative_to(_RAIZ)} no es ejecutable')
+            f'{_CORREDOR.relative_to(_RAIZ).as_posix()} no es ejecutable')
 
     def test_el_corredor_se_niega_contra_un_host_remoto(self):
         """La guarda que impide que estos tests —que crean, borran y

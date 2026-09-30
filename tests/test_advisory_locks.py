@@ -211,7 +211,7 @@ class TestNingunSQLDeAdvisoryFueraDelHelper:
             if f == _HELPER:
                 continue
             lineas = sql_de_advisory(src)
-            rel = str(f.relative_to(RAIZ))
+            rel = f.relative_to(RAIZ).as_posix()
             if lineas and rel not in EXCEPCIONES_SQL:
                 fuera[rel] = lineas
         assert not fuera, (
@@ -243,7 +243,7 @@ class TestTodaClaveSaleDelRegistro:
             malas, n = claves_sueltas(src)
             total += n
             if malas:
-                sueltas[str(f.relative_to(RAIZ))] = malas
+                sueltas[f.relative_to(RAIZ).as_posix()] = malas
         assert not sueltas, (
             '\nClaves de advisory lock que no salen del registro de '
             'app/utils/lock.py:\n'
@@ -278,7 +278,7 @@ class TestTodoLockDeSesionSeLibera:
                 continue
             m, n = tomas_sin_liberar(src)
             total += n
-            malas += [f'{f.relative_to(RAIZ)}:{x}' for x in m]
+            malas += [f'{f.relative_to(RAIZ).as_posix()}:{x}' for x in m]
         assert not malas, (
             '\nToman un lock de sesión sin un finally que lo libere:\n'
             + '\n'.join(f'  · {m}' for m in malas))

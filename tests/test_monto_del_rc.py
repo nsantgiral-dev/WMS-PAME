@@ -132,7 +132,7 @@ class TestTodoMontoDelRcPasaPorLaPolitica:
         vistas = {}
         for p in sorted((RAIZ / 'app').rglob('*.py')):
             for nombre, fn in _funciones_con_override(p.read_text(encoding='utf-8')).items():
-                vistas[(str(p.relative_to(RAIZ)), nombre)] = fn
+                vistas[(p.relative_to(RAIZ).as_posix(), nombre)] = fn
         assert len(vistas) >= 2, sorted(vistas)       # piso: monto_rc + registrar
         for (rel, nombre), fn in vistas.items():
             if nombre == 'exigir_override_permitido':

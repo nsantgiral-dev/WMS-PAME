@@ -627,7 +627,7 @@ class TestBloqueoPorVelocidadDelKardex:
 def _archivos():
     for base in ('app', 'flota'):
         for p in (RAIZ / base).rglob('*.py'):
-            yield str(p.relative_to(RAIZ)), p.read_text(encoding='utf-8')
+            yield p.relative_to(RAIZ).as_posix(), p.read_text(encoding='utf-8')
 
 
 def _por_funcion(src):

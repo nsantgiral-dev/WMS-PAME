@@ -1001,7 +1001,7 @@ def _restas_contra_existencia(base=None):
     base = base or RAIZ
     hallados, archivos = {}, 0
     for f in sorted((base / 'app').rglob('*.py')):
-        rel = str(f.relative_to(base))
+        rel = f.relative_to(base).as_posix()
         arbol = ast.parse(f.read_text(encoding='utf-8'))
         archivos += 1
         for n in ast.walk(arbol):
@@ -1132,7 +1132,7 @@ def _lecturas(base=None):
         return None
 
     for f in sorted((base / 'app').rglob('*.py')):
-        rel = str(f.relative_to(base))
+        rel = f.relative_to(base).as_posix()
         arbol = ast.parse(f.read_text(encoding='utf-8'))
 
         def visitar(nodo, pila):

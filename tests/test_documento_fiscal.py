@@ -228,7 +228,7 @@ class TestTodoLectorDeEstadoUsaLaTabla:
     def test_nadie_interpreta_el_numero_a_mano(self):
         hallados = set()
         for p in _archivos():
-            rel = str(p.relative_to(RAIZ))
+            rel = p.relative_to(RAIZ).as_posix()
             hallados |= _lectores_de_estado_sin_tabla(p.read_text(encoding='utf-8'), rel)
         nuevos = hallados - set(LECTORES_DE_ESTADO_SIN_TABLA)
         assert not nuevos, (
@@ -239,7 +239,7 @@ class TestTodoLectorDeEstadoUsaLaTabla:
     def test_el_inventario_solo_encoge(self):
         hallados = set()
         for p in _archivos():
-            rel = str(p.relative_to(RAIZ))
+            rel = p.relative_to(RAIZ).as_posix()
             hallados |= _lectores_de_estado_sin_tabla(p.read_text(encoding='utf-8'), rel)
         assert set(LECTORES_DE_ESTADO_SIN_TABLA) <= hallados, (
             'una entrada del inventario ya no existe: sacala')
@@ -1261,7 +1261,7 @@ def _toca_una_caja(fn):
 def _sitios(raiz=APP):
     out = {}
     for p in _archivos(raiz):
-        rel = str(p.relative_to(RAIZ))
+        rel = p.relative_to(RAIZ).as_posix()
         for nombre, fn in _funciones(p.read_text(encoding='utf-8')):
             out[f'{rel}::{nombre}'] = fn
     return out

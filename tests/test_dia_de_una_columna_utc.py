@@ -146,7 +146,7 @@ def _archivos():
 def test_ningun_dia_sale_de_date_sobre_una_columna_utc():
     encontrados = []
     for p in _archivos():
-        rel = str(p.relative_to(RAIZ))
+        rel = p.relative_to(RAIZ).as_posix()
         for sitio in _sitios(p.read_text(encoding='utf-8'), rel):
             if (sitio[0], sitio[2]) not in EXCEPCIONES:
                 encontrados.append(sitio)

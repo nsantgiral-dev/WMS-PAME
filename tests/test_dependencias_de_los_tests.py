@@ -79,7 +79,7 @@ def _faltantes(archivos, permitidas):
                 continue
             dists = {d.lower().replace('_', '-') for d in mapa.get(mod, [])}
             if not dists or not (dists & permitidas):
-                malos.append(f'{f.relative_to(RAIZ)}:{linea} import {mod} '
+                malos.append(f'{f.relative_to(RAIZ).as_posix()}:{linea} import {mod} '
                              f'(distribución: {sorted(dists) or "desconocida"})')
     return malos
 

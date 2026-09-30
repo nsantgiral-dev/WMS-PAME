@@ -108,7 +108,7 @@ class TestNadieMasCalculaElAmbiente:
             if py.name == 'connekta_gateway.py':
                 continue                     # la fuente única
             if self._HUELLA.search(py.read_text(encoding='utf-8')):
-                culpables.append(str(py.relative_to(_RAIZ)))
+                culpables.append(py.relative_to(_RAIZ).as_posix())
         assert not culpables, (
             '\nVuelven a calcular el ambiente por su cuenta:\n'
             + '\n'.join(f'  · {c}' for c in culpables)

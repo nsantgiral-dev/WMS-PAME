@@ -499,7 +499,7 @@ class TestLosDocumentos:
 def _fuentes(carpetas=('app', 'flota')):
     for carpeta in carpetas:
         for p in sorted((RAIZ / carpeta).rglob('*.py')):
-            yield str(p.relative_to(RAIZ)), p.read_text(encoding='utf-8')
+            yield p.relative_to(RAIZ).as_posix(), p.read_text(encoding='utf-8')
 
 
 def _funciones(arbol):
