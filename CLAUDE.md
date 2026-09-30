@@ -8463,3 +8463,24 @@ la zona de averías.~~ Cerrado el mismo día: `lugares_del_sku` usa
 `filtro_ubicacion_vendible()` (ni averías ni devoluciones, como el total) y el
 perímetro de los tres tipos de almacén dice «NO cuente lo averiado»
 (`TestElHudNoNombraLoQueElTotalNoCuenta`).
+
+### VAL-E4 · ningún cambio de stock sin su movimiento (2026-09-29)
+
+La re-validación (`val-e2e-conteo2` @ e85d27bf, `tests/flujo/test_zz_val_llevar_wms2.py`,
+en verde) encontró otra pata sin escribir: los traspasos de Layout.
+`_traspasar_desde_general` (asignar un SKU a un hueco real) restaba de
+SIESA-GENERAL sin movimiento y `_traspasar_hacia_general` (remodular) sumaba
+igual: `movido_despues_del_conteo` veía una entrada que no existió (65 en vez
+de 45). Ahora las dos escriben su pata con saldo (`ASIGNACION_LAYOUT` /
+`REMODULACION_CUERPO`), como REPOSICION. El trinquete de la clase encontró uno
+más: `traslado_service._descontar_del_bucket_vendible` (el dictamen de avería
+sacaba del vendible sin movimiento) → tipo nuevo `TRASPASO_AVERIAS` (FISICO).
+
+**Trinquete:** `TestNingunCambioDeStockSinSuMovimiento`
+(`tests/test_conteo_cuatro_defectos_e2e.py`): en todo módulo de `app/`/`flota/`
+que maneja `UbicacionProducto`, toda función que cambia `.cantidad` (`=`,
+`+=`, `-=`, `.update({'cantidad'})`, `setattr`) construye un
+`MovimientoInventario` en la misma función (o en una anidada suya).
+Inventario de excepciones vacío, solo encoge; meta-tests y piso. **No ve:** un
+cambio de `.cantidad` de `UbicacionProducto` en un módulo que no nombra la
+clase (hoy ninguno) ni SQL crudo.

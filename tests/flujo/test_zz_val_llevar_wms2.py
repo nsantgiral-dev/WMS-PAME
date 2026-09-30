@@ -8,11 +8,6 @@ from tests.flujo.test_zz_val_mios2 import _faltante_encolado
 
 class TestLayoutDespuesDelConteo:
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'VAL-E4: layout_service.asignar_producto suma al hueco (ASIGNACION_LAYOUT, con '
-        'saldo) y resta de SIESA-GENERAL en _traspasar_desde_general SIN movimiento: '
-        'el total no cambia, pero movido_despues_del_conteo ve +20 y el WMS termina con '
-        '20 de más (65 en vez de 45).'))
     def test_asignar_a_picking_entre_el_conteo_y_el_job(self, m):
         from app.services import layout_service
         pik = m.ub(m.nb1, 'PIK-9', 'PICKING')

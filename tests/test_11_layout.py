@@ -892,10 +892,13 @@ def test_editar_cuerpo_devuelve_stock_a_siesa_general_antes_de_borrar(db, almace
     assert reg.cantidad == 40  # ninguna unidad se perdió
 
     from app.models.inventario import MovimientoInventario
-    mov = MovimientoInventario.query.filter_by(
-        tipo='REMODULACION_CUERPO', producto_id=producto.id
-    ).first()
-    assert mov is not None and mov.cantidad == -40
+    # Dos patas, cada una con su saldo (VAL-E4, 2026-09-29): sale del hueco,
+    # entra a SIESA-GENERAL.
+    movs = MovimientoInventario.query.filter_by(
+        tipo='REMODULACION_CUERPO', producto_id=producto.id).all()
+    assert sorted(m.cantidad for m in movs) == [-40, 40]
+    assert {m.ubicacion_id for m in movs if m.cantidad > 0} == {general.id}
+    assert all(m.saldo_despues - m.saldo_antes == m.cantidad for m in movs)
 
 
 def test_editar_cuerpo_bloquea_si_hay_historial_real(db, almacen, producto):

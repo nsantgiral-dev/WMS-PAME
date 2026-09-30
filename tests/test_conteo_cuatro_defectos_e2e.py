@@ -477,3 +477,95 @@ class TestElHudNoNombraLoQueElTotalNoCuenta:
         fns = {f.name: f for f in _funciones(ast.parse(texto))}
         for nombre in ('lugares_del_sku', 'existencia_wms_del_sku', 'aplicar_ajuste_al_wms'):
             assert _llamadas(fns[nombre], 'filtro_ubicacion_vendible'), nombre
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VAL-E4 · ningún cambio de stock sin su movimiento (la clase)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _escribe_cantidad(n) -> bool:
+    """Las tres escrituras de `.cantidad`: asignación (`=`, `+=`, `-=`),
+    `.update({'cantidad': …})` y `setattr(x, 'cantidad', …)`."""
+    if isinstance(n, (ast.Assign, ast.AugAssign)):
+        ts = n.targets if isinstance(n, ast.Assign) else [n.target]
+        return any(isinstance(x, ast.Attribute) and x.attr == 'cantidad' for x in ts)
+    if isinstance(n, ast.Call) and getattr(n.func, 'attr', None) == 'update' and n.args \
+            and isinstance(n.args[0], ast.Dict):
+        return any(isinstance(k, ast.Constant) and k.value == 'cantidad' for k in n.args[0].keys)
+    if isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'setattr' and len(n.args) > 1:
+        return isinstance(n.args[1], ast.Constant) and n.args[1].value == 'cantidad'
+    return False
+
+
+def cambios_de_stock_sin_movimiento(fuentes: dict) -> set:
+    """`{'archivo::funcion'}` que cambian `.cantidad` en un módulo que maneja
+    `UbicacionProducto` sin construir un `MovimientoInventario` en la misma
+    función (una función anidada suya cuenta: es el mismo cambio)."""
+    out = set()
+    for ruta, texto in fuentes.items():
+        if 'UbicacionProducto' not in texto:
+            continue
+        for fn in _funciones(ast.parse(texto)):
+            pila, propios = list(ast.iter_child_nodes(fn)), []
+            while pila:
+                n = pila.pop()
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                propios.append(n)
+                pila.extend(ast.iter_child_nodes(n))
+            if not any(_escribe_cantidad(n) for n in propios):
+                continue
+            mov = any(isinstance(c, ast.Call) and (getattr(c.func, 'id', None) == 'MovimientoInventario'
+                                                   or getattr(c.func, 'attr', None) == 'MovimientoInventario')
+                      for c in ast.walk(fn))
+            if not mov:
+                out.add(f'{ruta}::{fn.name}')
+    return out
+
+
+#: Funciones que cambian stock sin su movimiento, con su porqué. Solo encoge.
+#: Vacío desde el 2026-09-29 (VAL-E4 cerró los traspasos de Layout y la pata
+#: del vendible del dictamen de averías).
+CAMBIOS_SIN_MOVIMIENTO: dict = {}
+
+
+class TestNingunCambioDeStockSinSuMovimiento:
+
+    def test_la_clase(self):
+        hallados = cambios_de_stock_sin_movimiento(_fuentes_app_y_flota())
+        assert hallados == set(CAMBIOS_SIN_MOVIMIENTO), hallados
+
+    def test_el_escaner_ve_las_tres_escrituras_y_no_lo_sano(self):
+        falso = {'x.py': (
+            'from m import UbicacionProducto\n'
+            'def a(reg):\n    """reg.cantidad -= 1"""\n    # reg.cantidad = 0\n    reg.cantidad -= 1\n'
+            'def b(q):\n    q.update({"cantidad": 0})\n'
+            'def c(r):\n    setattr(r, "cantidad", 3)\n'
+            'def d(reg):\n    reg.cantidad = 5\n    db.session.add(MovimientoInventario(tipo="X"))\n'
+            'def e(reg):\n    def _m():\n        MovimientoInventario(tipo="X")\n'
+            '    reg.cantidad = 1\n    _m()\n'
+            'def f(reg):\n    x = reg.cantidad\n'),
+            'otro.py': 'def g(item):\n    item.cantidad = 1\n'}
+        assert cambios_de_stock_sin_movimiento(falso) == {'x.py::a', 'x.py::b', 'x.py::c'}
+
+    def test_piso(self):
+        fs = _fuentes_app_y_flota()
+        n = 0
+        for ruta, texto in fs.items():
+            if 'UbicacionProducto' in texto:
+                n += sum(1 for fn in _funciones(ast.parse(texto))
+                         if any(_escribe_cantidad(x) for x in ast.walk(fn)))
+        assert n >= 18, n
+
+    def test_el_traspaso_de_layout_deja_sus_dos_patas(self, m):
+        """Asignar a un hueco real saca de SIESA-GENERAL: dos patas con saldo,
+        y el total del SKU no cambia en el libro."""
+        from app.models.inventario import MovimientoInventario
+        from app.services import layout_service
+        assert m.nb1.tiene_fusion_layout_activa          # NB1 / 003
+        pik = m.ub(m.nb1, 'PIK-9', 'PICKING')
+        p = m.producto(lugares={'SIESA-GENERAL': 50})
+        layout_service.asignar_producto(pik.id, p.id, 20, usuario_id=m.adri.id, capacidad_maxima=100)
+        movs = MovimientoInventario.query.filter_by(producto_id=p.id, tipo='ASIGNACION_LAYOUT').all()
+        assert sorted(x.saldo_despues - x.saldo_antes for x in movs) == [-20, 20]
+        assert m.wms(p) == 50
