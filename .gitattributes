@@ -1,1 +1,6 @@
+# El repo se guarda con saltos de línea de Linux (LF) y así se descarga en
+# cualquier sistema. Los tests que leen el código (arneses de Node, AST, texto)
+# buscan saltos LF; con core.autocrlf=true en Windows los archivos llegaban con
+# CRLF y esos tests fallaban solo en local (en el CI, Linux, pasaban).
+* text=auto eol=lf
 *.pdf -text binary
