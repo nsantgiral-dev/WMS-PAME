@@ -106,6 +106,18 @@ class TestElCostoDeLaEntrada:
         assert mov['f470_id_motivo'] == '01'
         assert doc['f350_id_tipo_docto'] == 'ADI'
 
+    def test_el_costo_va_con_los_decimales_de_la_moneda_local(self, app, monkeypatch):
+        """PAPELSP11310 (QA, 2026-09-30): el promedio ponderado de otras bodegas
+        dio 625,0994 y Siesa rechazó el documento: «La cantidad de decimales del
+        costo unitario deben ser iguales a la cantidad de decimales de unidades
+        de la moneda local». El peso lleva 2."""
+        p = self._payload(app, monkeypatch, motivo_codigo='AJ-ENT', costo_unitario=625.0994)
+        assert p['Movimientos'][0]['f470_costo_prom_uni'] == 625.10
+
+    def test_un_costo_que_redondea_a_cero_no_sale(self, app, monkeypatch):
+        with pytest.raises(ValueError, match='Costo unitario inválido'):
+            self._payload(app, monkeypatch, motivo_codigo='AJ-ENT', costo_unitario=0.004)
+
     def test_la_entrada_con_costo_sin_motivo_configurado_no_sale(self, app, monkeypatch):
         with pytest.raises(ValueError, match='SIESA_MOTIVO_ENTRADA_INVENTARIO'):
             self._payload(app, monkeypatch, motivo_entrada='',

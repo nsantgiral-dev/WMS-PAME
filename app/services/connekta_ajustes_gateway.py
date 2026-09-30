@@ -22,6 +22,10 @@ import logging
 # `_ejecutar_con_preflag` a bajar el pre-flag (tanda 2, 2026-09-25).
 from app.services.connekta_gateway import ConnektaPayloadInvalido  # noqa: E402
 
+#: Decimales del peso colombiano en Siesa (un costo unitario con más decimales
+#: se rechaza: ver el costo de la entrada en `enviar_ajuste_inventario`).
+DECIMALES_MONEDA_LOCAL = 2
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,7 +81,12 @@ class ConnektaAjustesGateway:
         # sobrante de conteo cíclico solo se registra si alcanza a cubrir todo el déficit; un
         # faltante ahí nunca podrá registrarse hasta que los compromisos se liberen.
         siesa_motivo = core.motivo_ajuste_entrada if es_entrada else core.motivo_ajuste_salida
-        _costo_uni = (round(float(costo_unitario), 4)
+        # Con los decimales de la moneda local (COP: 2), no 4: Siesa QA rechazó
+        # 625,0994 (PAPELSP11310, 2026-09-30) con «La cantidad de decimales del
+        # costo unitario deben ser iguales a la cantidad de decimales de
+        # unidades de la moneda local». El promedio ponderado de otras bodegas
+        # sale con más decimales; se redondea acá, donde nace el documento.
+        _costo_uni = (round(float(costo_unitario), DECIMALES_MONEDA_LOCAL)
                       if es_entrada and costo_unitario is not None else None)
         if _costo_uni is not None and not _costo_uni > 0:
             raise ConnektaPayloadInvalido(
