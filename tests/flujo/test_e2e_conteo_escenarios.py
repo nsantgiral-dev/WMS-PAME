@@ -975,14 +975,18 @@ class TestJ_Asignacion:
     def test_reparto_ausencia_regreso_y_supervisor_solo_cc3(self, m):
         from app.services import asignacion, presencia
         from app.models.conteo import SesionConteo
-        dani = m.persona('dani', 'operario', puede_picar=True, senal=False)   # sin señal
+        # Sin señal todavía (no ha abierto la aplicación): desde el 2026-09-30 el
+        # conteo no exige señal, así que entra al reparto como los demás.
+        dani = m.persona('dani', 'operario', puede_picar=True, senal=False)
         prods = [m.producto(lugares={'SIESA-GENERAL': 10}) for _ in range(6)]
         ids = [m.manual(m.sofi, p) for p in prods]
         presencia.declarar_ausencia(m.caro.id, 'INCAPACIDAD', por_id=m.sofi.id)
         st, r = m.post(m.sofi, '/api/conteo/asignar-lote', {'almacen_id': m.nb1.id})
         assert st == 200, r
         duenos = {m.s(i).operario_id for i in ids}
-        assert duenos <= {m.ana.id, m.beto.id} and duenos, (duenos, r)
+        assert duenos <= {m.ana.id, m.beto.id, dani.id} and duenos, (duenos, r)
+        assert dani.id in duenos, 'sin señal no deja a nadie fuera del reparto'
+        assert m.caro.id not in duenos, 'la ausente declarada sí queda fuera'
         # El supervisor no recibe rutinarios aunque la cola tenga.
         st, t = m.get(m.sofi, '/api/mobile/tarea-actual')
         assert t.get('sin_tareas') or t.get('id') not in ids, t
@@ -998,7 +1002,6 @@ class TestJ_Asignacion:
         m.db.session.commit()
         st, r = m.post(m.sofi, '/api/conteo/asignar-lote', {'almacen_id': m.nb1.id})
         assert m.caro.id in {m.s(i).operario_id for i in ids}, r
-        assert dani.id not in {m.s(i).operario_id for i in ids}
         assert m.beto.id not in {m.s(i).operario_id for i in ids}
         m.verificar_inventario()
 
