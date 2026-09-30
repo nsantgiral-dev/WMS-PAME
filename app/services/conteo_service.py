@@ -1161,6 +1161,8 @@ class ConteoService:
         recuperación). Sin foto del conteo no hay objetivo: no mueve nada y lo
         dice (`sin_foto`)."""
         if sesion.cantidad_fisica is None or sesion.teorico_siesa is None:
+            logger.warning('[CONTEO] %s sin foto del conteo: el WMS no se mueve (no hay '
+                           'objetivo); lo corrige un recuento', sesion.codigo)
             return {'movimientos': [], 'sin_descontar': 0, 'sin_foto': True}
         objetivo = int(sesion.cantidad_fisica) + int(sesion.cant_pos_siesa or 0)
         despues = ConteoService.movido_despues_del_conteo(sesion)
