@@ -694,13 +694,6 @@ class TestE_PedidoEnCurso:
         m.verificar_inventario()
 
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'DEFECTO P2: el perímetro «no cuente lo empacado» es solo un texto del HUD. '
-        'Con cajas remisionadas esperando en el muelle (empacado_por_salir=True), '
-        'si CC1 y CC2 las cuentan igual, sale un AJ-ENT automático por las '
-        'unidades de las cajas (bajo el tope): Siesa sube 10 que ya salieron. '
-        'Ninguna guarda de motivo_no_sale_solo / motivo_bloqueo_ajuste '
-        '(conteo_service.py:455 / :3035) mira empacado_por_salir en un sobrante.'))
     def test_contar_las_cajas_del_muelle_no_ajusta_solo(self, m):
         from tests.flujo.conductor_de_flujo import hacer_packing, hacer_picking, siesa_emitio
         p = m.producto(lugares={'PIK-1': 50})
@@ -711,8 +704,36 @@ class TestE_PedidoEnCurso:
             siesa_emitio(m.db, f.packing_id)
         m.siesa.poner(p.codigo, 40)
         sid = m.manual(m.sofi, p)
-        m.cc1_cc2(sid, m.ana, m.beto, 50)            # los dos cuentan las cajas
+        cc2, r = m.cc1_cc2(sid, m.ana, m.beto, 50)   # los dos cuentan las cajas
         assert m.jobs(sid) == [], 'nació un AJ-ENT por mercancía ya remisionada'
+        assert 'empacad' not in json.dumps(r), r      # quien cuenta sigue ciego
+        s = m.s(sid)
+        assert s.estado == 'DESCUADRE'
+        ns = s.to_dict()['no_sale_solo']
+        assert (ns['codigo'], ns['empacadas']) == ('EMPACADO_POR_SALIR', 10), ns
+        assert '10 und' in ns['mensaje']
+        # El supervisor confirma (aquí: sí estaban de más en el estante) y sale.
+        st, r = m.put(m.sofi, f'/api/conteo/{sid}/ajustar')
+        assert st == 202, r
+        m.ejecutar_ajustes()
+        assert _mov(m.ejecutados[0][1])['f470_cant_base'] == 10
+        m.verificar_inventario()
+
+    def test_un_faltante_con_cajas_en_el_muelle_si_sale_solo(self, m):
+        from tests.flujo.conductor_de_flujo import hacer_packing, hacer_picking, siesa_emitio
+        p = m.producto(lugares={'PIK-1': 50})
+        f = _pedido(m, p)
+        with m.simulando():
+            hacer_picking(m.db, f, 10, 10)
+            hacer_packing(m.db, f)
+            siesa_emitio(m.db, f.packing_id)
+        m.siesa.poner(p.codigo, 40)
+        sid = m.manual(m.sofi, p)
+        m.cc1_cc2(sid, m.ana, m.beto, 38)            # contar las cajas no explica un faltante
+        assert len(m.jobs(sid)) == 1
+        m.ejecutar_ajustes()
+        assert m.wms(p) == 38
+        m.verificar_inventario()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -836,8 +857,7 @@ class TestH_SinFila:
         assert (doc['f350_id_clase_docto'], doc['f450_id_concepto'], mov['f470_id_concepto'],
                 mov['f470_id_motivo'], mov['f470_cant_base'], mov['f470_costo_prom_uni']) \
             == (61, 601, 601, '01', 12, 1500.0)
-        # El WMS del SKU queda en 24 (defecto declarado abajo, xfail).
-        m.verificar_inventario(wms_en_lo_contado=False)
+        m.verificar_inventario()
 
     def test_sin_costo_en_ninguna_fuente_pide_el_costo(self, m):
         p, sid = self._sin_fila_contado(m, costo_otra=None)
@@ -848,15 +868,8 @@ class TestH_SinFila:
         assert st == 202, r
         m.ejecutar_ajustes()
         assert _mov(m.ejecutados[0][1])['f470_costo_prom_uni'] == 800.0
-        m.verificar_inventario(wms_en_lo_contado=False)
+        m.verificar_inventario()
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'DEFECTO P1: con Siesa sin fila el WMS ya tenía las unidades (por eso se '
-        'contó), y el job AJUSTE_CONTEO aplica el delta de Siesa (+12) encima: '
-        'estante 12, Siesa 12, WMS 24. Si el lugar de la cadena es físico, la '
-        'carga de las 7:00 no lo corrige (solo pone en cero SIESA-GENERAL). '
-        'aplicar_ajuste_al_wms (conteo_service.py:985) suma el delta de Siesa en '
-        'vez de dejar el SKU en lo contado; solo el MATCH lo hace (cuadrar_wms_con_lo_contado).'))
     def test_tras_la_entrada_el_wms_queda_en_lo_contado(self, m):
         p, sid = self._sin_fila_contado(m)
         st, r = m.put(m.adri, f'/api/conteo/{sid}/ajustar')
@@ -1042,15 +1055,8 @@ class TestK_Excepciones:
         assert st == 202, r
         m.ejecutar_ajustes()
         assert m.wms(p) == 47
-        # CNT-04 lo marca BLOQUEA (defecto declarado abajo, xfail).
-        m.verificar_inventario(auditoria_declarada=('CNT-04',))
+        m.verificar_inventario()
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'DEFECTO P2: omitir el 2º conteo con motivo y que firme otra persona es '
-        'el camino sancionado por C2 (ConteoService.omitir_verificacion), pero '
-        'CNT-04 (auditoria/conteo.py) lo reporta como BLOQUEA «ajustado con '
-        'diferencia sin segundo conteo»: cada omisión legítima deja la Salud en '
-        'NO_CONFIABLE. Debería eximir la raíz con verificacion_omitida_* (o bajar a AVISA).'))
     def test_la_omision_sancionada_no_es_un_bloqueante(self, m):
         p = m.producto(lugares={'SIESA-GENERAL': 50})
         sid = m.manual(m.sofi, p)
@@ -1092,17 +1098,6 @@ class TestK_Excepciones:
 
 class TestModoEnsayo:
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'DEFECTO P2: en MODO_ENSAYO el 142951 no sale (el gateway devuelve '
-        '{modo_ensayo: True}), _ejecutar_con_preflag baja la bandera, pero la '
-        'rama AJUSTE_CONTEO de _ejecutar_job (siesa_job_service.py:1510 y :1527; y si el job se re-ejecuta, la guarda de :1362 le pone siesa_triggered=True) '
-        'sigue: pone la sesión AJUSTADO, guarda la respuesta de ensayo como '
-        'desenlace y mueve el WMS (aplicar_ajuste_al_wms). Siesa no cambió y el '
-        'WMS sí: en QA (.env.qa trae MODO_ENSAYO=true) cada ajuste de conteo '
-        'descuadra el WMS en silencio. Visto en la corrida de '
-        'scripts/qa_conteo_escenarios_real.py sin --si-de-verdad (WMS 1741, '
-        'Siesa 1739, sesión AJUSTADO). Los traslados ya lo resolvieron '
-        '(TrasladoNoEnviadoEnEnsayo).'))
     def test_un_ajuste_no_enviado_no_se_da_por_ajustado(self, m, monkeypatch):
         from app.services.connekta_gateway import ConnektaGateway
         monkeypatch.setattr(ConnektaGateway, '_post',
@@ -1114,8 +1109,18 @@ class TestModoEnsayo:
         m.cc1_cc2(sid, m.ana, m.beto, 46)
         from app.models.siesa_job import SiesaJob
         from app.services.siesa_job_service import _ejecutar_job
+        from app.services.siesa_job_service import AjusteNoEnviadoEnEnsayo
         (job,) = SiesaJob.query.filter_by(tipo='AJUSTE_CONTEO', referencia_id=sid).all()
-        _ejecutar_job(job)
+        with pytest.raises(AjusteNoEnviadoEnEnsayo, match='ENSAYO — no se envió'):
+            _ejecutar_job(job)
+        m.db.session.rollback()
         s = m.s(sid)
         assert s.estado != 'AJUSTADO', 'la sesión quedó AJUSTADO sin que el 142951 saliera'
+        assert (s.estado, s.siesa_triggered, s.siesa_response) == ('AJUSTANDO', False, None)
         assert m.wms(p) == 50, 'el WMS se movió con Siesa intacta'
+        # Con el ensayo apagado, el mismo job envía y cierra.
+        monkeypatch.setattr(ConnektaGateway, '_post',
+                            lambda self, c, n, payload, url=None, extra_params=None:
+                            m.siesa.post(c, n, payload))
+        _ejecutar_job(job)
+        assert (m.s(sid).estado, m.wms(p), len(m.siesa.posts)) == ('AJUSTADO', 46, 1)

@@ -194,6 +194,13 @@ def un_descuadre_se_cuenta_dos_veces(ctx=None):
         if s.ajuste_por_tolerancia and not SesionConteo.query.filter(
                 SesionConteo.sesion_origen_id == s.id).first():
             continue
+        # **La omisión autorizada (C2, 2026-09-29) tampoco es un bloqueante**:
+        # motivo escrito y la firma de OTRA persona (`omision_autorizada`, la
+        # política). Sin motivo, firmada por quien omitió o por quien contó, o
+        # sin firma, se sigue marcando.
+        from app.services.conteo_service import ConteoService
+        if ConteoService.omision_autorizada(s):
+            continue
         hay = SesionConteo.query.filter(
             SesionConteo.sesion_origen_id == s.id,
             SesionConteo.cantidad_fisica.isnot(None),

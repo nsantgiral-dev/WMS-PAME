@@ -694,6 +694,18 @@ class TrasladoNoEnviadoEnEnsayo(ErrorDeterminista):
     el STS."""
 
 
+class AjusteNoEnviadoEnEnsayo(ErrorDeterminista):
+    """MODO_ENSAYO bloqueó el 142951 de un ajuste de conteo (2026-09-29).
+
+    Antes la rama AJUSTE_CONTEO seguía de largo con la respuesta de ensayo:
+    la sesión quedaba AJUSTADO, el WMS se movía y, si el job se volvía a
+    correr, la guarda de «AJUSTADO sin bandera» le ponía `siesa_triggered`.
+    Siesa intacta y el WMS movido, en silencio (en QA `.env.qa` trae
+    MODO_ENSAYO=true). Ahora el job queda FALLIDO con este motivo, la sesión
+    sigue AJUSTANDO sin bandera y el WMS no se toca: con el ensayo apagado,
+    «Reintentar» el job envía el ajuste."""
+
+
 class NotaCreditoSinLineas(ErrorDeterminista):
     """La NC de una devolución contada no encontró NINGUNA de sus líneas en la
     factura.
@@ -1394,8 +1406,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     if not sesion_cteo.siesa_response:
                         sesion_cteo.siesa_response = json.dumps({'recuperado_dlq': True, 'job_id': job.id})
                     # Reaplicar cambio de inventario WMS — la misma política que
-                    # el camino normal (`aplicar_ajuste_al_wms`, VAL-2): el SKU
-                    # en el almacén queda en lo contado, no un hueco con piso 0.
+                    # el camino normal (`llevar_wms_a_lo_contado`): el SKU en el
+                    # almacén queda en lo contado; si ya se había movido, no
+                    # vuelve a mover nada (los movimientos de la sesión no cuentan).
                     _mc = payload.get('motivo_codigo')
                     _cant = payload.get('cantidad', 0)
                     if payload.get('tarea_picking_id'):
@@ -1408,8 +1421,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                             _inv.bloqueado = max(0, _inv.bloqueado - _cant)
                     if _mc and _cant:
                         from app.services.conteo_service import ConteoService as _CSR
-                        _CSR.aplicar_ajuste_al_wms(sesion_cteo, _mc, _cant,
-                                                   documento=payload.get('referencia'))
+                        _CSR.llevar_wms_a_lo_contado(sesion_cteo,
+                                                     documento=payload.get('referencia'))
                     db.session.commit()
                     logger.info(
                         f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} recuperada → AJUSTADO'
@@ -1497,6 +1510,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             # en la bodega lo trae): el DLQ no lo recalcula.
             costo_unitario=payload.get('costo_unitario'),
         ))
+        if resultado.get('modo_ensayo'):
+            # Sin documento real no hay ajuste: ni AJUSTADO, ni WMS, ni bandera
+            # (el helper ya la bajó). Declarado en el job.
+            raise AjusteNoEnviadoEnEnsayo(
+                f'AJUSTE_CONTEO job={job.id}: ENSAYO — no se envió. MODO_ENSAYO bloqueó '
+                f'el 142951 de la sesión {sesion_cteo.codigo} ({payload["motivo_codigo"]} '
+                f'{payload["cantidad"]} de {item_codigo}); la sesión sigue AJUSTANDO y el '
+                f'WMS no se movió. Reintente con el ensayo apagado.')
         _now = datetime.utcnow()
 
         # Commit completo: estado + respuesta + inventario. `siesa_triggered`
@@ -1512,8 +1533,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
 
             # Actualizar stock WMS local — mantiene sincronía sin esperar sync
             # nocturna. El SKU en el ALMACÉN queda en lo contado, repartido
-            # entre sus huecos (`ConteoService.aplicar_ajuste_al_wms`, VAL-2):
-            # antes el delta del total iba a un solo hueco con piso 0.
+            # entre sus huecos (`ConteoService.llevar_wms_a_lo_contado`).
             motivo_codigo = payload['motivo_codigo']
             cantidad_ajuste = payload['cantidad']
             tarea_picking_id = payload.get('tarea_picking_id')
@@ -1527,9 +1547,10 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                        ).with_for_update().first())
                 if inv:
                     inv.bloqueado = max(0, inv.bloqueado - cantidad_ajuste)
+            # El WMS queda en LO CONTADO (+ POS y lo movido después), no en
+            # «WMS + delta de Siesa»: el delta es de Siesa, no del WMS.
             from app.services.conteo_service import ConteoService as _CSW
-            _CSW.aplicar_ajuste_al_wms(sesion_cteo, motivo_codigo, cantidad_ajuste,
-                                       documento=payload.get('referencia'))
+            _CSW.llevar_wms_a_lo_contado(sesion_cteo, documento=payload.get('referencia'))
 
             db.session.commit()
         except Exception as _e:

@@ -458,8 +458,9 @@ class ConteoService:
 
         **Una política, una función** para todo ajuste automático: el de
         tolerancia, el de CC1 == CC2, la pantalla (`to_dict`) y la guarda de
-        `_encolar_ajuste_fisico` cuando no hay aprobador. Hoy: sin costo, o
-        valor por encima de `CONTEO_TOPE_AUTOAJUSTE`
+        `_encolar_ajuste_fisico` cuando no hay aprobador. Hoy: la entrada de
+        un ítem sin fila en Siesa, un sobrante con unidades del SKU empacadas
+        por salir, sin costo, o valor por encima de `CONTEO_TOPE_AUTOAJUSTE`
         (`conteo_politica.motivo_tope_autoajuste`).
         """
         from app.services import conteo_politica as politica
@@ -473,6 +474,20 @@ class ConteoService:
             return {'codigo': politica.SIN_FILA_EN_SIESA, 'mensaje': (
                 'Siesa no tenía este producto en la bodega: esta entrada no sale sola, '
                 'la aprueba el admin')}
+        if diferencia > 0 and sesion.producto_id and sesion.almacen_id:
+            # El perímetro «no cuente lo empacado» es un texto del HUD: si hay
+            # cajas de este SKU esperando salir, un sobrante puede ser esas
+            # mismas cajas contadas (su remisión ya descontó Siesa). No sale
+            # solo; lo confirma un supervisor viendo cuántas hay.
+            empacadas = ConteoService.unidades_empacadas_por_salir(
+                sesion.producto_id, sesion.almacen_id)
+            if empacadas > 0:
+                return {'codigo': politica.EMPACADO_POR_SALIR, 'empacadas': empacadas,
+                        'mensaje': (
+                            f'Hay {empacadas} und de este producto empacadas esperando '
+                            f'despacho: si el conteo las incluyó, el sobrante de '
+                            f'{diferencia} und es falso. No sale solo: un supervisor '
+                            f'confirma que no se contaron')}
         return politica.motivo_tope_autoajuste(diferencia, sesion.costo_prom_uni_siesa)
 
     @staticmethod
@@ -547,6 +562,25 @@ class ConteoService:
         if raiz.verificacion_omitida_por_id:
             autores[raiz.verificacion_omitida_por_id] = 'OMITIO'
         return autores
+
+    @staticmethod
+    def omision_autorizada(sesion: SesionConteo) -> bool:
+        """¿El 2º conteo de esta cadena se saltó por el camino autorizado (C2,
+        `omitir_verificacion`)? Con motivo escrito, y el ajuste firmado por
+        OTRA persona: ni quien omitió ni quien contó o corrigió
+        (`autores_del_ajuste`). Un ajuste automático (sin firma) no lo es.
+        La usa CNT-04: la omisión autorizada es el proceso, no un bloqueante;
+        la que no lo es sigue marcándose."""
+        from app.services.bitacora import motivo_obligatorio
+        raiz = ConteoService._raiz_de(sesion)
+        if not raiz.verificacion_omitida_por_id:
+            return False
+        try:
+            motivo_obligatorio(raiz.verificacion_omitida_motivo)
+        except ValueError:
+            return False
+        firma = raiz.aprobador_id
+        return bool(firma) and firma not in ConteoService.autores_del_ajuste(raiz)
 
     @staticmethod
     def definido_por_cc3(sesion: SesionConteo) -> bool:
@@ -942,6 +976,14 @@ class ConteoService:
     @staticmethod
     def empacado_por_salir(producto_id: int, almacen_id: int) -> bool:
         """¿Hay unidades de este SKU empacadas en el almacén, esperando salir?
+        Sin cifras (el HUD de quien cuenta): `unidades_empacadas_por_salir > 0`."""
+        return ConteoService.unidades_empacadas_por_salir(producto_id, almacen_id) > 0
+
+    @staticmethod
+    def unidades_empacadas_por_salir(producto_id: int, almacen_id: int) -> int:
+        """Cuántas unidades de este SKU hay empacadas en el almacén, esperando
+        salir. **La única definición de «empacado por salir»**: el HUD la lee
+        como sí/no y la guarda del sobrante (`motivo_no_sale_solo`) con la cifra.
         (P1-3, 2026-09-27). Sin cifras: es para decirle a quien cuenta «no las
         cuente». Empacado = en una caja que se está armando o ya armada
         (EN_PROCESO/VERIFICADO), un despacho con bultos todavía en el muelle o
@@ -968,18 +1010,18 @@ class ConteoService:
             SolicitudTraslado.id == TareaPacking.solicitud_id,
             SolicitudTraslado.estado.in_((EstadoTraslado.EN_PACKING,
                                           EstadoTraslado.PREPARADO))))
-        return db.session.query(
-            db.session.query(TareaPacking.id)
-            .join(ItemPacking, ItemPacking.tarea_id == TareaPacking.id)
-            .filter(TareaPacking.almacen_id == almacen_id,
-                    ItemPacking.producto_id == producto_id,
-                    ItemPacking.cantidad_real > 0,
-                    or_(TareaPacking.estado.in_((EstadoPacking.EN_PROCESO,
-                                                 EstadoPacking.VERIFICADO)),
-                        and_(TareaPacking.estado == EstadoPacking.DESPACHADO,
-                             bulto_por_salir),
-                        traslado_por_salir))
-            .exists()).scalar()
+        total = (db.session.query(db.func.coalesce(db.func.sum(ItemPacking.cantidad_real), 0))
+                 .join(TareaPacking, ItemPacking.tarea_id == TareaPacking.id)
+                 .filter(TareaPacking.almacen_id == almacen_id,
+                         ItemPacking.producto_id == producto_id,
+                         ItemPacking.cantidad_real > 0,
+                         or_(TareaPacking.estado.in_((EstadoPacking.EN_PROCESO,
+                                                      EstadoPacking.VERIFICADO)),
+                             and_(TareaPacking.estado == EstadoPacking.DESPACHADO,
+                                  bulto_por_salir),
+                             traslado_por_salir))
+                 .scalar())
+        return int(total or 0)
 
     @staticmethod
     def aplicar_ajuste_al_wms(sesion: SesionConteo, motivo_codigo: str, cantidad: int,
@@ -1066,30 +1108,83 @@ class ConteoService:
                 'la carga de existencias.', sesion.codigo, cantidad, pendiente)
         return {'movimientos': movimientos, 'sin_descontar': pendiente}
 
+    #: Movimientos que escribe `llevar_wms_a_lo_contado` (el ajuste aceptado
+    #: por Siesa y el cuadre de un MATCH). Los de la MISMA sesión no cuentan
+    #: como «lo que pasó después del conteo»: así una segunda llamada (la
+    #: recuperación de una sesión atascada en AJUSTANDO) no mueve nada.
+    TIPOS_MOVIMIENTO_DEL_CONTEO = ('AJUSTE_CONTEO', 'CUADRE_CONTEO')
+
+    @staticmethod
+    def movido_despues_del_conteo(sesion: SesionConteo) -> dict:
+        """Cuánto cambió el WMS del SKU en el almacén DESPUÉS del instante del
+        conteo (`foto_siesa_at`), sumando sus `MovimientoInventario` (un
+        picking confirmado, una recepción, un traslado). Sin los de esta
+        misma sesión. El signo sale del saldo antes → después cuando la fila
+        lo trae (el libro tiene dos convenciones: el picking escribe la salida
+        en positivo); sin saldo, la cantidad tal cual, contado aparte.
+        Sin instante del conteo: 0 y `sin_instante` (declarado)."""
+        from app.models.inventario import MovimientoInventario as M
+        if sesion.foto_siesa_at is None:
+            return {'delta': 0, 'movimientos': 0, 'sin_saldo': 0, 'sin_instante': True}
+        q = M.query.filter(M.producto_id == sesion.producto_id,
+                           M.almacen_id == sesion.almacen_id,
+                           M.fecha > sesion.foto_siesa_at)
+        delta = n = sin_saldo = 0
+        for m in q.all():
+            if (m.tipo in ConteoService.TIPOS_MOVIMIENTO_DEL_CONTEO
+                    and (m.numero_documento or '') == (sesion.codigo or '')[:50]):
+                continue
+            n += 1
+            if m.saldo_antes is not None and m.saldo_despues is not None:
+                delta += m.saldo_despues - m.saldo_antes
+            else:
+                delta += m.cantidad or 0
+                sin_saldo += 1
+        return {'delta': delta, 'movimientos': n, 'sin_saldo': sin_saldo, 'sin_instante': False}
+
+    @staticmethod
+    def llevar_wms_a_lo_contado(sesion: SesionConteo, *, tipo: str = 'AJUSTE_CONTEO',
+                                documento: str = None) -> dict:
+        """**La única que mueve el WMS por un conteo** (2026-09-29): el SKU en
+        el almacén queda en LO CONTADO + el POS que Siesa no acumuló, más lo
+        que se movió en el WMS después del conteo — repartido entre sus
+        lugares con `aplicar_ajuste_al_wms`.
+
+        El delta que viaja a Siesa (contado − teórico) y el movimiento del WMS
+        son cosas distintas. Antes el job aplicaba el delta de Siesa al WMS:
+        si el WMS ya difería del teórico al contar (Siesa sin fila y el WMS
+        con las unidades, lo normal), quedaba en el doble — estante 12, Siesa
+        12, WMS 24 — y en un hueco físico la carga de las 7:00 no lo corrige.
+
+        La usan el MATCH (`tipo='CUADRE_CONTEO'`, Siesa no se toca) y el job
+        `AJUSTE_CONTEO` después de que Siesa aceptó el 142951 (camino normal y
+        recuperación). Sin foto del conteo no hay objetivo: no mueve nada y lo
+        dice (`sin_foto`)."""
+        if sesion.cantidad_fisica is None or sesion.teorico_siesa is None:
+            return {'movimientos': [], 'sin_descontar': 0, 'sin_foto': True}
+        objetivo = int(sesion.cantidad_fisica) + int(sesion.cant_pos_siesa or 0)
+        despues = ConteoService.movido_despues_del_conteo(sesion)
+        ahora = ConteoService.existencia_wms_del_sku(sesion.producto_id, sesion.almacen_id)
+        delta = objetivo + despues['delta'] - ahora
+        if despues['movimientos']:
+            logger.info('[CONTEO] %s: el WMS se movió %+d después del conteo (%s movimientos): '
+                        'el objetivo es lo contado %s + POS %s + eso', sesion.codigo,
+                        despues['delta'], despues['movimientos'], sesion.cantidad_fisica,
+                        sesion.cant_pos_siesa or 0)
+        if delta == 0:
+            return {'movimientos': [], 'sin_descontar': 0, 'movido_despues': despues}
+        r = ConteoService.aplicar_ajuste_al_wms(
+            sesion, 'AJ-ENT' if delta > 0 else 'AJ-SAL', abs(delta),
+            documento=documento or sesion.codigo, tipo=tipo)
+        r['movido_despues'] = despues
+        return r
+
     @staticmethod
     def cuadrar_wms_con_lo_contado(sesion: SesionConteo) -> dict:
         """Un conteo que **cuadró con Siesa** deja el WMS del SKU en lo contado,
-        en todos sus lugares, sin tocar Siesa (VAL-11, 2026-09-29).
-
-        Antes un MATCH no tocaba el WMS: con Siesa en 0 (sin fila) y el hueco
-        vacío de verdad, el conteo cerraba en 0 y el WMS seguía con las
-        unidades fantasma (9 SKUs de NB1 en CROSS-DOCK, 4.052 und) — y el FEFO
-        mandaba al picker a buscarlas. El objetivo es lo contado más el POS que
-        Siesa todavía no acumuló (`cant_pos_siesa`): el WMS refleja la
-        existencia de Siesa, que lo incluye, y así la carga de las 7:00 no lo
-        deshace. La diferencia se aplica con `aplicar_ajuste_al_wms` (misma
-        regla de reparto, mismo rastro por hueco).
-        """
-        if sesion.cantidad_fisica is None or sesion.teorico_siesa is None:
-            return {'movimientos': [], 'sin_descontar': 0}
-        objetivo = int(sesion.cantidad_fisica) + int(sesion.cant_pos_siesa or 0)
-        delta = objetivo - ConteoService.existencia_wms_del_sku(sesion.producto_id,
-                                                                  sesion.almacen_id)
-        if delta == 0:
-            return {'movimientos': [], 'sin_descontar': 0}
-        return ConteoService.aplicar_ajuste_al_wms(
-            sesion, 'AJ-ENT' if delta > 0 else 'AJ-SAL', abs(delta),
-            documento=sesion.codigo, tipo='CUADRE_CONTEO')
+        en todos sus lugares, sin tocar Siesa (VAL-11, 2026-09-29). Es
+        `llevar_wms_a_lo_contado` con su tipo de movimiento: una política."""
+        return ConteoService.llevar_wms_a_lo_contado(sesion, tipo='CUADRE_CONTEO')
 
     @staticmethod
     def nueva_raiz(*, producto, almacen_id: int, tipo: str, codigo: str,

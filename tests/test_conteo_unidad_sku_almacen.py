@@ -702,9 +702,10 @@ class TestLaCantidadDelWmsEsDelSku:
 
     def test_el_job_del_ajuste_mueve_el_wms_por_la_politica(self):
         """La rama AJUSTE_CONTEO de `_ejecutar_job` no toca `.cantidad` a mano:
-        llama `aplicar_ajuste_al_wms` (el SKU en el almacén queda en lo contado)."""
+        llama `llevar_wms_a_lo_contado` (el SKU en el almacén queda en lo
+        contado, no «WMS + delta de Siesa»; 2026-09-29)."""
         rama = _rama_del_job('AJUSTE_CONTEO')
-        assert any(isinstance(c, ast.Call) and getattr(c.func, 'attr', None) == 'aplicar_ajuste_al_wms'
+        assert any(isinstance(c, ast.Call) and getattr(c.func, 'attr', None) == 'llevar_wms_a_lo_contado'
                    for c in ast.walk(rama))
         escrituras = [n.lineno for n in ast.walk(rama)
                       if isinstance(n, (ast.Assign, ast.AugAssign))

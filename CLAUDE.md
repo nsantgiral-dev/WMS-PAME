@@ -8133,9 +8133,10 @@ De los P2, solo el barato: con **un único admin** que contó un CC3 por encima
 del tope, el mensaje dice que no hay otro admin y qué hacer (recontar con otra
 persona, cancelar, o subir `CONTEO_TOPE_AUTOAPROBACION`).
 
-**Lo que NO cubre:** En un DESCUADRE el WMS recibe el delta de Siesa (contado − teórico): si el WMS
+**Lo que NO cubre:** ~~En un DESCUADRE el WMS recibe el delta de Siesa (contado − teórico): si el WMS
 ya difería del teórico al contar, esa diferencia queda (solo el MATCH lleva el
-WMS a lo contado). P2 abiertos: `ultimo_conteo_por_sku` no mira
+WMS a lo contado).~~ Cerrado el 2026-09-29: `llevar_wms_a_lo_contado` (ver «Conteo:
+lo que encontró el e2e hasta el 142951»). P2 abiertos: `ultimo_conteo_por_sku` no mira
 `fuente_existencia`; «no cuente lo empacado» mezcla lo remisionado con lo que
 Siesa todavía cuenta; cifras ocultas a toda supervisión (VAL-6); la auditoría
 de picking manda el total del WMS como conteo (VAL-8). `m051conteo` baja de
@@ -8393,3 +8394,42 @@ activa (el índice de una cadena viva por SKU × almacén deja como único
 candidato en conflicto al del CC1, que ya excluye el doble ciego); se deja por
 coherencia, no por un caso medido. El intercalado no mira si el SKU tiene
 otros huecos lejos del picking: el HUD los nombra todos y pide un total.
+
+## Conteo: lo que encontró el e2e hasta el 142951, cerrado (2026-09-29)
+
+`tests/flujo/test_e2e_conteo_escenarios.py` recorre los escenarios a–k del
+inventario cíclico hasta el job `AJUSTE_CONTEO` con el gateway real armando el
+142951 (solo `_post` capturado) y, después de cada uno, **un chequeo común de
+inventario** (`Mundo.verificar_inventario`): nada negativo ni reservado de más,
+todo cambio de cantidad con su movimiento, lo enviado a Siesa = contado −
+teórico una sola vez, el WMS en lo contado, cero BLOQUEA del auditor de
+conteo. `scripts/qa_conteo_escenarios_real.py`: 4 POST 142951 reales a Siesa
+QA (sobrante y faltante netos en PAPELSP9830, entrada con costo clase 61/601 y
+su neteo en PAPELSP7879), con guarda de host y tope de 5 POST. Encontró cuatro
+defectos:
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **P1 · el WMS con el delta de Siesa** | El job aplicaba al WMS el delta que viaja a Siesa (contado − teórico). Con el WMS distinto del teórico al contar —Siesa sin fila y el WMS con las unidades, lo normal— quedaba en el doble: estante 12, Siesa 12, **WMS 24** (medido en vivo, PAPELSP7879). En un hueco físico la carga de las 7:00 no lo corrige | `ConteoService.llevar_wms_a_lo_contado`, **la única que mueve el WMS por un conteo**: el SKU × almacén queda en lo contado + POS no acumulado + lo que el WMS se movió **después** del conteo (`movido_despues_del_conteo`: sus `MovimientoInventario` desde `foto_siesa_at`, sin los de la propia sesión — así la recuperación no mueve dos veces), repartido por `aplicar_ajuste_al_wms`. La usan el job (camino normal y recuperación) y el MATCH (`cuadrar_wms_con_lo_contado`). El delta de Siesa no cambió |
+| **P2 · ensayo dado por hecho** | Con `MODO_ENSAYO` el 142951 no salía pero la rama `AJUSTE_CONTEO` ponía AJUSTADO y movía el WMS; al re-correr, la guarda de «AJUSTADO sin bandera» ponía `siesa_triggered` | `AjusteNoEnviadoEnEnsayo` (determinista): el job queda FALLIDO con «ENSAYO — no se envió», la sesión sigue AJUSTANDO sin bandera ni respuesta, el WMS no se toca; con el ensayo apagado, «Reintentar» envía y cierra |
+| **P2 · CNT-04 contra la omisión autorizada** | Omitir el 2º conteo con motivo y que firme otro (el camino de C2) era BLOQUEA: la Salud en NO_CONFIABLE por cada omisión legítima | `ConteoService.omision_autorizada` (motivo escrito + firma de alguien fuera de `autores_del_ajuste`); CNT-04 la exime. Sin motivo, firmada por quien omitió o contó, o sin firma: sigue BLOQUEA |
+| **P2 · «no cuente lo empacado» era solo texto** | CC1 y CC2 contando las cajas remisionadas del muelle → AJ-ENT automático por lo que ya salió | `unidades_empacadas_por_salir` (la única definición; `empacado_por_salir` es `> 0`) dentro de `motivo_no_sale_solo`: un **sobrante** con unidades de ese SKU empacadas por salir no sale solo (`EMPACADO_POR_SALIR`, con la cifra `empacadas` para el supervisor; quien cuenta sigue ciego). Un faltante sale como siempre |
+
+**Trinquetes:** `tests/test_conteo_cuatro_defectos_e2e.py` (AST: solo
+`llevar_wms_a_lo_contado` llama `aplicar_ajuste_al_wms`, y el job y el MATCH
+pasan por ella; toda rama de `_ejecutar_job` que asigna el resultado de
+`_ejecutar_con_preflag` pregunta por `modo_ensayo`; una definición de
+empacado y de omisión autorizada; meta-tests y pisos) + los cuatro xfail del
+e2e, en verde. `test_conteo_unidad_sku_almacen` exige ahora la función nueva
+en la rama del job.
+
+**Lo que NO cubre:** el «movido después» confía en el libro: un cambio de
+`UbicacionProducto` sin su movimiento no se ve (el trinquete de restas sin
+destino lo acota); movimientos sin saldo se suman por su cantidad (contados en
+`sin_saldo`). El sobrante con cajas se juzga al contar: si las cajas salen
+antes de aprobar, la tarjeta ya no dice la cifra (sigue en DESCUADRE, firma un
+supervisor). La auditoría de picking manda el total del WMS como conteo
+(VAL-8, abierto): con POS pendiente, su WMS sube el POS. «Supervisor» es toda
+supervisión con permiso por monto (el jefe, hasta su tope). `Mundo.verificar_inventario`
+y `scripts/qa_conteo_escenarios_real.py` corrieron antes del arreglo: la fila
+de PAPELSP7879 en Siesa QA queda con existencia 0 y costo 403,75.
