@@ -408,3 +408,48 @@ class TestLaSincronizacionNoEsMovimientoFisico:
         assert st == 202, r
         m.ejecutar_ajustes()
         assert m.wms(p) == 46
+
+
+class TestLasOperacionesRealesDespuesDelConteo:
+    """Las mismas formas que la validación armó a mano, pero con el servicio
+    que las escribe: si vuelve a dejar una pata sin saldo, esto lo ve."""
+
+    def test_reposicion_real_no_suma_unidades(self, m):
+        from app.models.inventario import MovimientoInventario
+        from app.models.lpn import LPN
+        from app.models.tarea_reposicion import TareaReposicion
+        from app.services.reposicion_service import confirmar_reposicion
+        p = m.producto(lugares={'PIK-1': 20, 'RES-1': 30}, costo=90000)
+        sid = m.manual(m.sofi, p)
+        m.cc1_cc2(sid, m.ana, m.beto, 45)                        # espera firma
+        pik, res = m.ub(m.nb1, 'PIK-1'), m.ub(m.nb1, 'RES-1')
+        lpn = LPN(codigo='LPN-E2E-1', producto_id=p.id, factor_conversion=10,
+                  cantidad_actual=10, estado='ACTIVO', almacen_id=m.nb1.id, ubicacion_id=res.id)
+        m.db.session.add(lpn)
+        m.db.session.flush()
+        t = TareaReposicion(codigo='REP-E2E-1', producto_id=p.id, almacen_id=m.nb1.id,
+                            cantidad_unidades=10, ubicacion_reserva_id=res.id,
+                            ubicacion_picking_id=pik.id, lpn_id=lpn.id, estado='EN_PROCESO',
+                            abastecedor_id=m.caro.id)
+        m.db.session.add(t)
+        m.db.session.commit()
+        confirmar_reposicion(t.id, m.caro.id)
+        movs = MovimientoInventario.query.filter_by(producto_id=p.id, tipo='REPOSICION').all()
+        assert sorted(x.saldo_despues - x.saldo_antes for x in movs) == [-10, 10]
+        assert m.wms(p) == 50
+        st, r = m.put(m.adri, f'/api/conteo/{sid}/ajustar')
+        assert st == 202, r
+        m.ejecutar_ajustes()
+        assert m.wms(p) == 45, m.por_lugar(p)
+
+    def test_el_faltante_no_sale_de_la_zona_de_averias(self, m):
+        """PIK-1 (el lugar de la cadena) 10 + RES-1 5 vendibles y 50 averiadas:
+        contadas 3, se quitan 12 del vendible, nunca de averías."""
+        m.ub(m.nb1, 'AVE-1', 'AVERIAS')
+        p = m.producto(lugares={'PIK-1': 10, 'RES-1': 5, 'AVE-1': 50}, existencia=15, costo=100)
+        sid = m.manual(m.sofi, p)
+        m.cc1_cc2(sid, m.ana, m.beto, 3)
+        st, r = m.put(m.adri, f'/api/conteo/{sid}/ajustar')
+        assert st in (200, 202), r
+        m.ejecutar_ajustes()
+        assert m.por_lugar(p) == {'PIK-1': 0, 'RES-1': 3, 'AVE-1': 50}, m.por_lugar(p)
