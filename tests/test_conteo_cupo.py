@@ -51,6 +51,9 @@ def _config_limpia(monkeypatch):
     from app.services.conteo_politica import VARIABLES_DE_ENTORNO
     for nombre in VARIABLES_DE_ENTORNO:
         monkeypatch.delenv(nombre, raising=False)
+    # El camino automático (tolerancia, CC1 == CC2) sigue detrás del interruptor;
+    # el defecto —todo espera aprobación— lo prueba test_conteo_ajuste_siempre_aprobado.
+    monkeypatch.setenv('CONTEO_AJUSTE_AUTOMATICO', 'true')
 
 
 class Mundo:
