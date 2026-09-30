@@ -3278,7 +3278,12 @@
         <button onclick="conteosCerrarEdicion()" style="background:none;border:none;color:var(--tx3);font-size:var(--fs-xl);cursor:pointer;">✕</button>
       </div>
       <div id="conteo-edit-info"></div>
-      <div style="margin-bottom:12px;">
+      <div id="conteo-edit-operario-bloque" style="display:none;margin-bottom:12px;">
+        <label style="font-size:var(--fs-xs);color:var(--tx2);display:block;margin-bottom:4px;">Quién lo cuenta</label>
+        <select id="conteo-edit-operario"
+          style="width:100%;background:var(--bg-s);border:1px solid var(--brd);color:var(--tx);border-radius:8px;padding:10px;font-size:var(--fs-sm);box-sizing:border-box;"></select>
+      </div>
+      <div id="conteo-edit-cantidad-bloque" style="margin-bottom:12px;">
         <label style="font-size:var(--fs-xs);color:var(--tx2);display:block;margin-bottom:4px;">Cantidad física corregida</label>
         <input id="conteo-edit-cantidad" type="number" inputmode="numeric" min="0" step="1"
           style="width:100%;background:var(--bg-s);border:1px solid var(--brd);color:var(--tx);border-radius:8px;padding:10px;font-size:var(--fs-md);box-sizing:border-box;"

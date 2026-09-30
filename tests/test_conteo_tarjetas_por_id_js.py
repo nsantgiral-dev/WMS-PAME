@@ -30,7 +30,7 @@ const fs = require('fs'); const vm = require('vm');
 const base = process.argv.slice(1).filter(a => a !== '--')[0];
 const elementos = {};
 const el = (id) => (elementos[id] = elementos[id] || { id, style: {}, value: '', disabled: false, innerHTML: '', textContent: '', title: '' });
-const ctx = { console, window: {}, globalThis: {}, document: { getElementById: el } };
+const ctx = { console, URLSearchParams, window: {}, globalThis: {}, document: { getElementById: el } };
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(base + '/util.js', 'utf8'), ctx);
 vm.runInContext(fs.readFileSync(base + '/conteo.js', 'utf8'), ctx);
