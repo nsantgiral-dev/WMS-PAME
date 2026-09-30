@@ -3636,10 +3636,21 @@ class ConteoService:
 
         Sí cuando el promedio de la bodega que leyó el conteo es desconocido
         o ≤ 0: sin fila en Siesa (la fila en cero no trae costo) o con una
-        fila de costo 0. Con promedio > 0 no hace falta: Siesa lo usa solo.
+        fila de costo 0.
+
+        **Y también cuando la bodega tenía existencia ≤ 0, aunque su fila
+        traiga promedio** (QA, 2026-09-30): PAPELSP7879 en NB1, existencia 0
+        y promedio $403,75 en la fila; CC1 = CC2 = 12 → ADI-00000046 entró las
+        12 und como ajuste solo de cantidad (clase 63) **sin asiento** (Débito
+        y Crédito PCGA $0), y el promedio quedó en $33,65. Sin unidades en la
+        bodega, Siesa no valoriza el ajuste con ese promedio. Con existencia
+        > 0 y promedio > 0 se sigue dejando a Siesa (su promedio vigente).
         """
         costo = sesion.costo_prom_uni_siesa
-        return costo is None or float(costo) <= 0
+        if costo is None or float(costo) <= 0:
+            return True
+        existencia = sesion.existencia_siesa
+        return existencia is None or existencia <= 0
 
     #: Desde qué diferencia (fracción) entre el costo escrito y el sugerido la
     #: pantalla pide una confirmación extra. No bloquea: avisa (un 9.000
