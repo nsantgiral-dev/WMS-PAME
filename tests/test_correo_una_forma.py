@@ -117,7 +117,7 @@ class TestTrinqueteUnCorreoUnaForma:
                 continue
             v = violaciones(f.read_text(encoding='utf-8'))
             if v:
-                malos[str(f.relative_to(RAIZ))] = v
+                malos[f.relative_to(RAIZ).as_posix()] = v
         assert not malos, (
             f'Un correo tratado por su cuenta: {malos}. Buscá con Usuario.por_email '
             f'y guardá con normalizar_email (app/models/usuario.py).')

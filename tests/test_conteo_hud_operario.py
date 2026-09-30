@@ -594,7 +594,7 @@ def _llamadas_a_registrar(fuentes):
 
 
 def _fuentes_app():
-    return {str(f.relative_to(RAIZ)): f.read_text(encoding='utf-8')
+    return {f.relative_to(RAIZ).as_posix(): f.read_text(encoding='utf-8')
             for f in sorted((RAIZ / 'app').rglob('*.py'))}
 
 

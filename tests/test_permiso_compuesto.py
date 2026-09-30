@@ -222,7 +222,7 @@ def violaciones(resultado: dict) -> list:
 
 
 def _fuentes_app():
-    return {str(p.relative_to(RAIZ)): p.read_text(encoding='utf-8')
+    return {p.relative_to(RAIZ).as_posix(): p.read_text(encoding='utf-8')
             for p in APP.rglob('*.py')}
 
 

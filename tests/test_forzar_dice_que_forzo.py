@@ -102,7 +102,7 @@ def llamadas_forzar(fuentes):
 
 
 def _fuentes_repo():
-    return {str(p.relative_to(RAIZ)): p.read_text(encoding='utf-8')
+    return {p.relative_to(RAIZ).as_posix(): p.read_text(encoding='utf-8')
             for base in ('app', 'flota', 'scripts') for p in (RAIZ / base).rglob('*.py')}
 
 

@@ -387,7 +387,7 @@ class TestNadieMasDecideElNivelPython:
         for p in _archivos_py():
             if p == LA_POLITICA:
                 continue
-            rel = str(p.relative_to(RAIZ))
+            rel = p.relative_to(RAIZ).as_posix()
             for linea, que, ambito in _violaciones_con_ambito(p.read_text(encoding='utf-8')):
                 if rel not in INVENTARIO_PY and (rel, ambito) not in OTROS_SEMAFOROS:
                     malos.append(f'{rel}:{linea} {que}')

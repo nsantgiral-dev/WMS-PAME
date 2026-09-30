@@ -149,7 +149,7 @@ def quienes_llaman(fuentes: dict, nombre: str) -> set:
 
 
 def _fuentes_app():
-    return {str(p.relative_to(RAIZ)): p.read_text(encoding='utf-8') for p in APP.rglob('*.py')}
+    return {p.relative_to(RAIZ).as_posix(): p.read_text(encoding='utf-8') for p in APP.rglob('*.py')}
 
 
 #: Quién puede repartir un movimiento de conteo en el WMS. Solo encoge.
@@ -304,7 +304,7 @@ def tipos_literales(fuentes: dict) -> tuple:
 
 def _fuentes_app_y_flota():
     fs = _fuentes_app()
-    fs.update({str(p.relative_to(RAIZ)): p.read_text(encoding='utf-8')
+    fs.update({p.relative_to(RAIZ).as_posix(): p.read_text(encoding='utf-8')
                for p in (RAIZ / 'flota').rglob('*.py')})
     return fs
 

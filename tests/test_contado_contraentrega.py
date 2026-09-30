@@ -136,8 +136,14 @@ class TestLaTablaSaleDelPDF:
         pdf = _RAIZ / 'docs' / 'siesa-specs' / 'Condiciones de pago.pdf'
         if not shutil.which('pdftotext') or not pdf.exists():
             pytest.skip('sin pdftotext o sin el PDF')
-        texto = subprocess.run(['pdftotext', '-layout', str(pdf), '-'],
-                               capture_output=True, text=True, check=True).stdout
+        # `-raw` y no `-layout`: el pdftotext de Windows (xpdf 4) corre la
+        # columna «Dias Vcto» una fila con `-layout`; en orden de lectura las
+        # filas salen enteras en poppler y en xpdf. Y UTF-8 explícito: sin eso,
+        # en Windows sale en Latin-1 y con PYTHONUTF8=1 la lectura falla en el
+        # hilo de subprocess y stdout queda en None.
+        texto = subprocess.run(['pdftotext', '-enc', 'UTF-8', '-raw', str(pdf), '-'],
+                               capture_output=True, text=True, encoding='utf-8',
+                               check=True).stdout
         import re
         leidos = {}
         for linea in texto.splitlines():

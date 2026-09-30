@@ -165,7 +165,7 @@ def _imports_rotos(base=None):
                 try:
                     m = importlib.import_module(n.module)
                 except Exception as e:     # noqa: BLE001
-                    rotos.append((str(f.relative_to(base)), n.lineno, n.module, repr(e)[:80]))
+                    rotos.append((f.relative_to(base).as_posix(), n.lineno, n.module, repr(e)[:80]))
                     continue
                 for a in n.names:
                     if a.name == '*' or hasattr(m, a.name):
@@ -173,7 +173,7 @@ def _imports_rotos(base=None):
                     try:
                         importlib.import_module(f'{n.module}.{a.name}')
                     except Exception:      # noqa: BLE001
-                        rotos.append((str(f.relative_to(base)), n.lineno, n.module, a.name))
+                        rotos.append((f.relative_to(base).as_posix(), n.lineno, n.module, a.name))
     return rotos
 
 

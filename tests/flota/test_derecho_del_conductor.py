@@ -748,7 +748,7 @@ const ctx = {
 };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
-vm.runInContext(fs.readFileSync(FLOTAJS.replace(/[^/]+$/, 'util.js'), 'utf-8'), ctx);
+vm.runInContext(fs.readFileSync(FLOTAJS.replace(/[^/\\]+$/, 'util.js'), 'utf-8'), ctx);
 vm.runInContext('var OPERARIO = ' + JSON.stringify({ rol: G.rol }) + ';', ctx);
 vm.runInContext(fs.readFileSync(FLOTAJS, 'utf-8'), ctx);
 vm.runInContext('FLOTA_ESTADO = ' + JSON.stringify(G.estado) + '; FLOTA_PLACA = "DRA100";'

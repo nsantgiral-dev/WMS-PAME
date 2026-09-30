@@ -125,7 +125,7 @@ class TestNadieMasDecideLaAptitud:
             for fn in ast.walk(arbol):
                 if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     if any(self._lee(n) for n in ast.walk(fn)):
-                        out.add(f'{f.relative_to(base)}::{fn.name}')
+                        out.add(f'{f.relative_to(base).as_posix()}::{fn.name}')
         return out
 
     def test_nadie_mas_lo_lee(self):

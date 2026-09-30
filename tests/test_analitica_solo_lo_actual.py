@@ -414,7 +414,7 @@ class TestUnaSolaFuenteDelCorte:
             for n in ast.walk(tree):
                 if (isinstance(n, ast.Constant) and isinstance(n.value, str)
                         and n.value == 'FECHA_INICIO_AUDITORIA' and id(n) not in docs):
-                    culpables.append(str(f.relative_to(RAIZ)))
+                    culpables.append(f.relative_to(RAIZ).as_posix())
         assert not culpables, culpables
 
     def test_ningun_invariante_corta_con_una_fecha_literal(self):
@@ -778,7 +778,7 @@ def consultas_de_fallido(src: str):
 def _todas_las_consultas_de_fallido():
     out = {}
     for f in _archivos_py():
-        rel = str(f.relative_to(RAIZ))
+        rel = f.relative_to(RAIZ).as_posix()
         for fn, ln in consultas_de_fallido(f.read_text(encoding='utf-8')):
             out.setdefault(f'{rel}::{fn}', []).append(ln)
     return out

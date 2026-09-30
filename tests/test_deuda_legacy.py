@@ -36,7 +36,7 @@ def _contar(directorio):
             with open(ruta, encoding='utf-8') as f:
                 n = len(re.findall(r'\.query\.get\(', f.read()))
             if n:
-                por_archivo[os.path.relpath(ruta, _RAIZ)] = n
+                por_archivo[os.path.relpath(ruta, _RAIZ).replace(os.sep, "/")] = n
                 total += n
     return total, por_archivo
 
@@ -152,7 +152,7 @@ class TestNadaCriticoQuedaFueraDelRepo:
         tracked = self._tracked()
         raiz = pathlib.Path(_RAIZ)
         en_disco = {
-            str(f.relative_to(raiz))
+            f.relative_to(raiz).as_posix()
             for f in (raiz / 'scripts').rglob('*')
             if f.is_file() and f.suffix in ('.py', '.sh')
             and '__pycache__' not in f.parts

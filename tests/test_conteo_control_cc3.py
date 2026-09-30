@@ -325,7 +325,7 @@ class TestTodaVistaPregunta:
             for nombre, fn in _funciones(ast.parse(ruta.read_text(encoding='utf-8'))):
                 if any(isinstance(c, ast.Call) and getattr(c.func, 'attr', None) == '_to_dict_completo'
                        for c in ast.walk(fn)):
-                    llamadores.add((str(ruta.relative_to(RAIZ)), nombre))
+                    llamadores.add((ruta.relative_to(RAIZ).as_posix(), nombre))
         assert llamadores == {('app/models/conteo.py', 'SesionConteo.to_dict')}
 
     def test_piso(self):

@@ -411,7 +411,11 @@ class TestSaludPublicaLaFrescura:
 
     def test_health_siesa_trae_las_fotos(self, client, db, jwt_token_admin):
         from app.services import fotos_siesa_service as f
-        f.fotografiar_ventas('003', _DIA, _Siesa({_V: [[{'alerta': 'x'}]]}))
+        from app.utils.fecha import dia_operativo
+        # Un día dentro de la ventana que mira la salud (los últimos 7): con
+        # _DIA fijo el test se volvía rojo solo, pasada una semana.
+        dia = dia_operativo() - timedelta(days=1)
+        f.fotografiar_ventas('003', dia, _Siesa({_V: [[{'alerta': 'x'}]]}))
         r = client.get('/api/health/siesa',
                        headers={'Authorization': f'Bearer {jwt_token_admin}'})
         fotos = r.get_json()['fotos_siesa']

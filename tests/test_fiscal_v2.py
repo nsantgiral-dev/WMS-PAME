@@ -241,7 +241,7 @@ class TestNadieLeeElCircuitoSinDejarloProbar:
     def test_fuera_del_gateway_nadie_compara_con_open(self):
         malos = {}
         for p in _archivos():
-            rel = str(p.relative_to(RAIZ))
+            rel = p.relative_to(RAIZ).as_posix()
             if rel.endswith(('connekta_gateway.py', 'connekta_circuit_breaker.py')):
                 continue
             ls = _comparaciones_open(p.read_text(encoding='utf-8'))

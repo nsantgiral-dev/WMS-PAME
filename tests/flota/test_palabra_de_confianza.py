@@ -106,7 +106,7 @@ class TestNadieVuelveAConvertirlaAMano:
                 nombre = (a.id if isinstance(a, ast.Name)
                           else a.attr if isinstance(a, ast.Attribute) else '')
                 if nombre == 'marca' or nombre.endswith('_marca'):
-                    malas.append(f'{py.relative_to(_RAIZ)}:{n.lineno}')
+                    malas.append(f'{py.relative_to(_RAIZ).as_posix()}:{n.lineno}')
         return malas
 
     def test_ningun_sitio_de_flota_hace_str_sobre_una_marca(self):

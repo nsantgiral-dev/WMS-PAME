@@ -656,7 +656,7 @@ def _compara_con_efectivo(nodo) -> bool:
 
 def _sitios(detector, fuente_por_archivo=None):
     out = {}
-    fuentes = fuente_por_archivo or {str(p.relative_to(RAIZ)): p.read_text(encoding='utf-8')
+    fuentes = fuente_por_archivo or {p.relative_to(RAIZ).as_posix(): p.read_text(encoding='utf-8')
                                      for p in _archivos()}
     for rel, texto in fuentes.items():
         arbol = ast.parse(texto)

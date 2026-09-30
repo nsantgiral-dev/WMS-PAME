@@ -356,7 +356,7 @@ class TestLoYaPedidoConSuAntiguedad:
     def test_ninguna_funcion_de_compras_lo_lee_sin_su_parte_vencida(self):
         malos = []
         for p in _archivos_de_compras():
-            malos += _sin_antiguedad(p.read_text(encoding='utf-8'), str(p.relative_to(RAIZ)))
+            malos += _sin_antiguedad(p.read_text(encoding='utf-8'), p.relative_to(RAIZ).as_posix())
         assert not malos, (f'{malos}: leen lo ya pedido (`en_transito`) de una fila del ROP '
                            'sin leer `en_transito_vencido`: una OC vencida hace meses se '
                            'mostraría o decidiría callada.')

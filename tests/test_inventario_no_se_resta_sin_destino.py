@@ -119,7 +119,7 @@ def _sitios_que_restan(base: pathlib.Path = None):
     base = base or RAIZ
     encontrados = {}
     for f in sorted((base / 'app').rglob('*.py')):
-        rel = str(f.relative_to(base))
+        rel = f.relative_to(base).as_posix()
         try:
             arbol = ast.parse(f.read_text(encoding='utf-8'))
         except SyntaxError:

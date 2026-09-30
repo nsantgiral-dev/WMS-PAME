@@ -1105,7 +1105,7 @@ def _escritores_de_estado_entrega(base=RAIZ):
         for nombre, fn in _funciones(arbol):
             nodos = _propio(fn)
             if _escribe_estado_entrega(nodos):
-                out.append((str(f.relative_to(base)), nombre,
+                out.append((f.relative_to(base).as_posix(), nombre,
                             _llama(nodos, 'sincronizar_con_parada')))
     return out
 
@@ -1157,7 +1157,7 @@ def _creadores_de_ruta(base=RAIZ):
             for n in _propio(fn):
                 if isinstance(n, ast.Call) and getattr(n.func, 'attr', getattr(n.func, 'id', None)) \
                         == 'crear_devolucion' and any(k.arg == 'recaudo_entrega_id' for k in n.keywords):
-                    out.append((str(f.relative_to(base)), nombre))
+                    out.append((f.relative_to(base).as_posix(), nombre))
     return out
 
 
@@ -1188,12 +1188,12 @@ def _escritores_de_estado_devolucion(base=RAIZ):
                     v = n.value
                     if isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) \
                             and v.value.id in alias:
-                        out.append((str(f.relative_to(base)), nombre, 'asigna'))
+                        out.append((f.relative_to(base).as_posix(), nombre, 'asigna'))
                     elif isinstance(v, ast.Name) and v.id == 'nuevo' and nombre == 'cambiar_estado':
-                        out.append((str(f.relative_to(base)), nombre, 'asigna'))
+                        out.append((f.relative_to(base).as_posix(), nombre, 'asigna'))
                 if isinstance(n, ast.Call) and getattr(n.func, 'id', None) == 'DevolucionCliente' \
                         and any(k.arg == 'estado' for k in n.keywords):
-                    out.append((str(f.relative_to(base)), nombre, 'crea'))
+                    out.append((f.relative_to(base).as_posix(), nombre, 'crea'))
     return sorted(set(out))
 
 

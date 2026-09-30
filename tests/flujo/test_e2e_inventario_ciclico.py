@@ -1528,7 +1528,7 @@ class TestLaRespuestaAlQueCuentaEsCiega:
         return out
 
     def test_toda_puerta_que_cierra_un_conteo_pasa_por_la_politica(self):
-        fuentes = {str(f.relative_to(RAIZ)): f.read_text(encoding='utf-8')
+        fuentes = {f.relative_to(RAIZ).as_posix(): f.read_text(encoding='utf-8')
                    for f in sorted((RAIZ / 'app').rglob('*.py'))}
         llamadores = self._llamadores(fuentes)
         assert len(llamadores) >= 2, f'el escáner dejó de ver las puertas: {llamadores}'

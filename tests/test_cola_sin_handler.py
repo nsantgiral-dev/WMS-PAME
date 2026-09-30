@@ -86,7 +86,7 @@ def _tipos_encolados():
                 v = _lit(c)
                 if v and v.isupper():
                     encontrados.setdefault(v, []).append(
-                        f'{py.relative_to(_RAIZ)}:{n.lineno}')
+                        f'{py.relative_to(_RAIZ).as_posix()}:{n.lineno}')
                     break
     return encontrados
 

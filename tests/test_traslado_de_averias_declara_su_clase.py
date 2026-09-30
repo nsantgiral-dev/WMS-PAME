@@ -106,7 +106,7 @@ class TestUnaSolaRespuesta:
                 continue  # la definición misma
             for n, linea in enumerate(py.read_text(encoding='utf-8').splitlines(), 1):
                 if patron.search(linea):
-                    infractores.append(f'{py.relative_to(raiz)}:{n}')
+                    infractores.append(f'{py.relative_to(raiz).as_posix()}:{n}')
         assert not infractores, (
             'Comparación literal contra `clase_traslado` fuera del modelo. '
             'Usá `solicitud.es_averia()`:\n  ' + '\n  '.join(infractores))

@@ -231,7 +231,7 @@ class TestUnaSolaLista:
                 # Una lista/tupla literal con 3+ nombres de variables SIESA es
                 # un catálogo paralelo naciendo.
                 if len(re.findall(r"'SIESA_[A-Z_]+'", linea)) >= 3:
-                    sospechosos.append(f'{py.relative_to(_RAIZ)}:{n}')
+                    sospechosos.append(f'{py.relative_to(_RAIZ).as_posix()}:{n}')
         assert not sospechosos, (
             'posible catálogo paralelo de variables:\n'
             + '\n'.join(f'  · {s}' for s in sospechosos)

@@ -88,7 +88,7 @@ def _escritores_desde_siesa(base=None):
                 continue
             ns = _nombres(fn)
             if ns & FUENTES_SIESA:
-                out[f'{f.relative_to(base)}::{fn.name}'] = bool(ns & GUARDAS)
+                out[f'{f.relative_to(base).as_posix()}::{fn.name}'] = bool(ns & GUARDAS)
     return out
 
 

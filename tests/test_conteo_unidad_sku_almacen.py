@@ -442,7 +442,7 @@ def _llama(fn, nombre):
 
 def _fuentes():
     for ruta in sorted(APP.rglob('*.py')):
-        yield str(ruta.relative_to(RAIZ)), ruta.read_text(encoding='utf-8')
+        yield ruta.relative_to(RAIZ).as_posix(), ruta.read_text(encoding='utf-8')
 
 
 def _escanear(fuentes):

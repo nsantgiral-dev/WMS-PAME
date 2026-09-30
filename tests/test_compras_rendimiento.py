@@ -386,7 +386,7 @@ class TestNingunRequestCalculaLaDemanda:
             if f.name == 'compras_rop.py':
                 continue
             if self._llamadas(f.read_text(encoding='utf-8')) & self.CARO:
-                malos.append(str(f.relative_to(RAIZ)))
+                malos.append(f.relative_to(RAIZ).as_posix())
         assert vistos >= 200
         assert not malos, f'llaman a calcular_demanda_rop fuera de compras_rop: {malos}'
 
@@ -394,7 +394,7 @@ class TestNingunRequestCalculaLaDemanda:
         malos = []
         for f in list((RAIZ / 'app' / 'routes').rglob('*.py')) + list((RAIZ / 'flota' / 'api').rglob('*.py')):
             if self._llamadas(f.read_text(encoding='utf-8')) & (self.CARO | self.PUERTAS_DEL_WORKER):
-                malos.append(str(f.relative_to(RAIZ)))
+                malos.append(f.relative_to(RAIZ).as_posix())
         assert not malos, f'una ruta calcula la demanda en caliente: {malos}'
 
     def test_el_detector_ve_las_dos_formas(self):

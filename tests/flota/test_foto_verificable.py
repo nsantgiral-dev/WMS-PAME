@@ -216,7 +216,7 @@ def _llamadas():
                 if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
                         isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                         and n.func.attr == 'atributos_sin_dato' for n in ast.walk(fn)):
-                    out.add((str(f.relative_to(RAIZ)), fn.name))
+                    out.add((f.relative_to(RAIZ).as_posix(), fn.name))
     return out
 
 

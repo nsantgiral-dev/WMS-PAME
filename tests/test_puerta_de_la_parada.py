@@ -409,7 +409,7 @@ def _llama(fuente: str, funcion: str, guarda: str) -> bool:
 def _todas():
     out = {}
     for p in sorted((RAIZ / 'app').rglob('*.py')) + sorted((RAIZ / 'flota').rglob('*.py')):
-        rel = str(p.relative_to(RAIZ))
+        rel = p.relative_to(RAIZ).as_posix()
         for fn in _escrituras(p.read_text(encoding='utf-8')):
             out[(rel, fn)] = p
     return out

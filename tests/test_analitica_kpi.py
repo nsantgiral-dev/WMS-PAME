@@ -751,7 +751,7 @@ class TestElCusumEsElDeVigia:
             for p in raiz.rglob('*.py'):
                 h = _recursiones_cusum(p.read_text(encoding='utf-8'))
                 if h:
-                    sitios[str(p.relative_to(RAIZ))] = h
+                    sitios[p.relative_to(RAIZ).as_posix()] = h
         assert list(sitios) == ['app/services/vigia_service.py'], sitios
         assert len(sitios['app/services/vigia_service.py']) == 2, \
             'piso: S+ y S− de cusum_bilateral — si da 0, el escáner se rompió'

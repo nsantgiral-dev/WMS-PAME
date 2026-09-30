@@ -447,7 +447,7 @@ def _todos():
     for base in ('app', 'flota'):
         for p in sorted((RAIZ / base).rglob('*.py')):
             n += 1
-            salida += _usos(p.read_text(encoding='utf-8'), str(p.relative_to(RAIZ)))
+            salida += _usos(p.read_text(encoding='utf-8'), p.relative_to(RAIZ).as_posix())
     return salida, n
 
 

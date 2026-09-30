@@ -265,7 +265,7 @@ class TestNingunaFechaDelReciboFueraDeLaPolitica:
         for p in sorted((RAIZ / 'app').rglob('*.py')):
             t, m = fechas_fuera_de_la_politica(p.read_text(encoding='utf-8'))
             total += t
-            malos += [f'{p.relative_to(RAIZ)}::{x}' for x in m]
+            malos += [f'{p.relative_to(RAIZ).as_posix()}::{x}' for x in m]
         assert total >= 3, 'el escáner no encontró las fechas del 142888: se rompió'
         assert not malos, (f'{malos}: una fecha del recibo de caja que no sale de '
                            '`politica_cobro.fechas_del_recibo`.')

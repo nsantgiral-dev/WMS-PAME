@@ -539,7 +539,7 @@ def _todos_los_usos():
     usos = []
     for base in ('app', 'flota', 'scripts'):
         for p in (RAIZ / base).rglob('*.py'):
-            rel = str(p.relative_to(RAIZ))
+            rel = p.relative_to(RAIZ).as_posix()
             usos += _usos(p.read_text(encoding='utf-8'), rel)
     return usos
 

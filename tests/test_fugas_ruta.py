@@ -279,7 +279,7 @@ def _llamadas_rc(fuentes):
 
 
 def _fuentes_app():
-    return [(str(p.relative_to(_RAIZ)), p.read_text(encoding='utf-8'))
+    return [(p.relative_to(_RAIZ).as_posix(), p.read_text(encoding='utf-8'))
             for p in _APP.rglob('*.py')]
 
 

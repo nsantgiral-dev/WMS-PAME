@@ -122,7 +122,7 @@ def escanear(fuentes: dict):
 
 
 def _fuentes_app():
-    return {str(p.relative_to(APP)): p.read_text(encoding='utf-8')
+    return {p.relative_to(APP).as_posix(): p.read_text(encoding='utf-8')
             for p in APP.rglob('*.py') if p.name not in _GATEWAY}
 
 

@@ -442,7 +442,7 @@ class TestNadieDescargaElKardexSolo:
                 for n in ast.walk(arbol):
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                             and n.func.attr == 'descargar_kardex'):
-                        hallados.append(str(py.relative_to(_RAIZ)))
+                        hallados.append(py.relative_to(_RAIZ).as_posix())
         return hallados
 
     def test_solo_la_ruta_la_dispara(self):

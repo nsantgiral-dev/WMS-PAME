@@ -186,7 +186,7 @@ class TestNoHayUnaSegundaCopiaDelMaestro:
                 continue
             for nodo in ast.walk(arbol):
                 if self._es_mapa_de_co(nodo):
-                    fuera.append(f'{py.relative_to(_RAIZ)}:{nodo.lineno}')
+                    fuera.append(f'{py.relative_to(_RAIZ).as_posix()}:{nodo.lineno}')
         return fuera
 
     def test_el_maestro_vive_en_un_solo_archivo(self):
