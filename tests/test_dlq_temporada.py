@@ -118,7 +118,7 @@ def mundo(siesa_real, monkeypatch):
 def _caja(db, almacen, i, creada=None):
     from app.models.packing import TareaPacking
     from app.models.siesa_job import SiesaJob
-    s = uuid.uuid4().hex[:6]
+    s = uuid.uuid4().hex[:12]   # 6 chocaban entre cientos de cajas (CI, 2026-09-30)
     consec = str(50000 + i)
     t = TareaPacking(codigo=f'PK-T-{s}', almacen_id=almacen.id, estado='VERIFICADO',
                      tipo_documento='PEDIDO', numero_pedido_siesa=f'PD{consec}',
