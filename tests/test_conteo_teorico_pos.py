@@ -284,6 +284,9 @@ class TestLaBaseEsElTeorico:
         Cuando el POS acumule, Siesa quedará en 0 + 1 − 1 = 0, que es lo que
         hay. Con la existencia cruda: 0 − 0 = MATCH, y Siesa terminaría en −1."""
         siesa.poner(existencia=0, pos=1)
+        # Con existencia 0 la entrada lleva costo explícito (ADI-00000046):
+        # un costo en otra bodega para que salga sola; este test mide la cantidad.
+        siesa.otras_bodegas = [('FC1', 5, SiesaFalsa.COSTO)]
         cc1_id, r1 = _cc1(tienda, 0)
         assert r1['resultado'] == 'SEGUNDO_CONTEO'
         r2 = _cc2(tienda, r1, 0)
@@ -596,25 +599,44 @@ class TestLaEntradaSinCostoNoEntraEnCero:
         assert client.get(f'/api/conteo/{cc1_id}/costo-sugerido', headers=h_op).status_code == 403
 
     def test_la_ruta_de_costo_sugerido_con_promedio_no_pide_costo(self, db, siesa, tienda, client):
+        """Con unidades y promedio en la bodega, Siesa usa su promedio. (Con
+        existencia 0 sí pide costo: ver `test_existencia_cero_con_promedio_lleva_costo`.)"""
         from flask_jwt_extended import create_access_token
-        siesa.poner(existencia=0, costo=1000.0)
-        cc1_id, r1 = _cc1(tienda, 10)
-        _cc2(tienda, r1, 10)
+        siesa.poner(existencia=5, costo=1000.0)
+        cc1_id, r1 = _cc1(tienda, 15)
+        _cc2(tienda, r1, 15)
         h = {'Authorization': f'Bearer {create_access_token(identity=str(tienda["admin"].id))}'}
         d = client.get(f'/api/conteo/{cc1_id}/costo-sugerido', headers=h).get_json()
         assert d['requiere_costo'] is False and d['sugerido'] is None
 
-    def test_con_promedio_en_la_bodega_no_lleva_costo(self, db, siesa, tienda):
-        """La fila con costo > 0: Siesa usa su promedio, como siempre."""
+    def test_con_unidades_y_promedio_en_la_bodega_no_lleva_costo(self, db, siesa, tienda):
+        """La fila con existencia > 0 y costo > 0: Siesa usa su promedio."""
         from app.services.conteo_service import ConteoService
-        siesa.poner(existencia=0, costo=1000.0)
-        cc1_id, r1 = _cc1(tienda, 10)
-        _cc2(tienda, r1, 10)
+        siesa.poner(existencia=5, costo=1000.0)
+        cc1_id, r1 = _cc1(tienda, 15)
+        _cc2(tienda, r1, 15)
         if _jobs(cc1_id) == []:
             ConteoService.confirmar_ajuste(cc1_id, tienda['admin'].id)
         p = _un_job(cc1_id)
         assert p['motivo_codigo'] == 'AJ-ENT'
         assert p['costo_unitario'] is None
+
+    def test_existencia_cero_con_promedio_lleva_costo(self, db, siesa, tienda):
+        """ADI-00000046 (QA, 2026-09-30): PAPELSP7879 en NB1 con existencia 0
+        y promedio $403,75 en la fila. CC1 = CC2 = 12 salió solo como ajuste
+        de cantidad y entró sin asiento (PCGA $0). Este test decía antes lo
+        contrario (existencia 0 + promedio → sin costo): Siesa lo refutó.
+        Ahora lleva costo explícito (entrada clase 61), del nivel 1."""
+        from app.services.conteo_service import ConteoService
+        siesa.poner(existencia=0, costo=403.75)
+        siesa.otras_bodegas = [('NC1', 0, 403.75)]
+        cc1_id, r1 = _cc1(tienda, 12)
+        _cc2(tienda, r1, 12)
+        if _jobs(cc1_id) == []:
+            ConteoService.confirmar_ajuste(cc1_id, tienda['admin'].id)
+        p = _un_job(cc1_id)
+        assert p['motivo_codigo'] == 'AJ-ENT'
+        assert (p['costo_unitario'], p['costo_fuente']) == (403.75, 'SIESA_OTRAS_BODEGAS')
 
     def test_una_fila_con_costo_cero_tambien_lleva_costo(self, db, siesa, tienda):
         """PAPELSP11926 en PC1 (QA): fila con promedio 0 — entraría en $0 igual."""
