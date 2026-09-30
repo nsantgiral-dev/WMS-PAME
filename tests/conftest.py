@@ -52,6 +52,13 @@ os.environ.pop('RAILWAY_ENVIRONMENT_NAME', None)
 # puesta y el de producción no. La suite corre sin ella (sin restricción); el
 # test que quiera una ventana la declara con monkeypatch.
 os.environ.pop('SIESA_VENTANA', None)
+# Desde el 2026-09-30 ningún ajuste de conteo sale solo salvo que
+# `CONTEO_AJUSTE_AUTOMATICO=true` (decisión del dueño). La suite mide las
+# reglas del camino automático (tolerancia, CC1 == CC2, topes), que siguen
+# vivas detrás del interruptor: se encienden acá. El comportamiento por
+# defecto —todo espera aprobación— lo prueba
+# `tests/test_conteo_ajuste_siempre_aprobado.py` borrando la variable.
+os.environ['CONTEO_AJUSTE_AUTOMATICO'] = 'true'
 
 
 from app import create_app
