@@ -1428,6 +1428,10 @@ function conteoAbrirEdicionId(id) {
 }
 
 let _CONTEO_EDICION_ID = null;
+/** El dueño que tenía el conteo al abrir el modal: solo se manda si cambia. */
+let _CONTEO_EDICION_OPERARIO = null;
+/** La lista de operarios del modal ya llegó (antes, guardar no reasigna). */
+let _CONTEO_EDICION_LISTA = false;
 
 /**
  * Open the admin edit modal for a conteo session.
@@ -1470,6 +1474,34 @@ function conteoAbrirEdicion(s) {
   const motivoInput = document.getElementById('conteo-edit-motivo');
   if (motivoInput) motivoInput.value = '';
 
+  // Reasignar: solo lo que nadie contó todavía (PENDIENTE / EN_PROCESO, la
+  // misma lista que `ConteoService.ESTADOS_REASIGNABLES`). El servidor decide
+  // el resto (puesto, presencia, doble ciego); acá solo se ofrece.
+  const reasignable = ['PENDIENTE', 'EN_PROCESO'].includes(s.estado);
+  const bloqueOp = document.getElementById('conteo-edit-operario-bloque');
+  const selOp = document.getElementById('conteo-edit-operario');
+  const bloqueCant = document.getElementById('conteo-edit-cantidad-bloque');
+  // Lo que todavía no se contó no tiene cantidad que corregir.
+  if (bloqueCant) bloqueCant.style.display = reasignable ? 'none' : '';
+  _CONTEO_EDICION_OPERARIO = s.operario_id ?? null;
+  if (bloqueOp) bloqueOp.style.display = reasignable ? '' : 'none';
+  if (reasignable && selOp) {
+    _CONTEO_EDICION_LISTA = false;
+    selOp.innerHTML = '<option value="">Cargando…</option>';
+    _cargarOperariosConteo(s.almacen_id).then(c => {
+      if (_CONTEO_EDICION_ID !== s.id) return;
+      selOp.innerHTML = _opcionesOperariosConteo(c);
+      const actual = s.operario_id != null ? String(s.operario_id) : '';
+      // Si el dueño actual ya no figura (no está o no puede), se muestra igual:
+      // dejarlo es no cambiar nada.
+      if (actual && !c.disponibles.concat(c.no_disponibles).some(u => String(u.id) === actual)) {
+        selOp.innerHTML += `<option value="${esc(actual)}">${esc(s.operario_nombre || ('Usuario #' + actual))} (actual)</option>`;
+      }
+      selOp.value = actual;
+      _CONTEO_EDICION_LISTA = true;
+    });
+  }
+
   m.style.display = 'flex';
 }
 
@@ -1490,10 +1522,22 @@ async function conteoGuardarEdicion() {
 
   const body = { motivo_edicion: motivo };
   const cantEl = document.getElementById('conteo-edit-cantidad');
-  if (cantEl && !cantEl.disabled && cantRaw !== '') {
+  const bloqueCant = document.getElementById('conteo-edit-cantidad-bloque');
+  const cantVisible = !bloqueCant || bloqueCant.style.display !== 'none';
+  if (cantEl && cantVisible && !cantEl.disabled && cantRaw !== '') {
     const cant = parseInt(cantRaw, 10);
     if (isNaN(cant) || cant < 0) { alerta('Cantidad inválida', 'error'); return; }
     body.cantidad_fisica = cant;
+  }
+  const bloqueOp = document.getElementById('conteo-edit-operario-bloque');
+  const selOp = document.getElementById('conteo-edit-operario');
+  if (bloqueOp && bloqueOp.style.display !== 'none' && selOp) {
+    if (!_CONTEO_EDICION_LISTA) { alerta('Espere a que cargue la lista de operarios', 'error'); return; }
+    const nuevo = selOp.value === '' ? null : parseInt(selOp.value, 10);
+    if (nuevo !== (_CONTEO_EDICION_OPERARIO ?? null)) body.operario_id = nuevo;
+  }
+  if (!('cantidad_fisica' in body) && !('operario_id' in body)) {
+    alerta('No cambió nada: elija otra persona o corrija la cantidad', 'error'); return;
   }
 
   try {
