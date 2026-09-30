@@ -8433,3 +8433,30 @@ supervisor). La auditoría de picking manda el total del WMS como conteo
 supervisión con permiso por monto (el jefe, hasta su tope). `Mundo.verificar_inventario`
 y `scripts/qa_conteo_escenarios_real.py` corrieron antes del arreglo: la fila
 de PAPELSP7879 en Siesa QA queda con existencia 0 y costo 403,75.
+
+### La validación del mismo día (VAL-E1/E2/E3, cerrados)
+
+La validación (`val-e2e-conteo` @ 35b4875f, sus xfail en
+`tests/flujo/test_zz_val_llevar_wms.py`, en verde) aceptó el fondo y rechazó
+tres P1: «lo movido después del conteo» leía el libro por su `cantidad`.
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **VAL-E1** | El SHORT_PICK escribía la salida POSITIVA y sin saldo: sumada como entrada, el WMS terminaba en +2× lo encontrado | Cantidad negativa y `saldo_antes`/`saldo_despues` (`picking_service.reportar_problema`). Las cuatro patas de `AJUSTE_AUDITORIA` también llevan saldo |
+| **VAL-E2** | REPOSICION (RESERVA→PICKING) dejaba UNA pata `+unidades` sin saldo: el WMS terminaba con esas unidades de más | Dos patas con su saldo: sale de RESERVA, entra a PICKING (`reposicion_service.confirmar_reposicion`) |
+| **VAL-E3** | `existencia_wms_del_sku` y `aplicar_ajuste_al_wms` sumaban la zona de averías (que Siesa ya pasó a AV1): un MATCH descontaba lo averiado del vendible | Los dos (y `ubicacion_de_la_cadena`) sobre `filtro_ubicacion_vendible()`, el mismo del sync. Una cadena colgada de un hueco no vendible mete el sobrante en el vendible con más unidades. Se quitó la declaración de aplazamiento de `test_agregar_stock_declara_la_zona` |
+| **Sincronización** (pedido del coordinador) | La carga de Siesa de las 7:00 (y su cero, `SIESA-CERO`) entre el conteo y la aprobación se sumaba como si fuera mercancía que se movió | `ConteoService.ORIGEN_DE_MOVIMIENTO`: tabla cerrada tipo → `FISICO` · `SINCRONIZACION` · `CONTEO` · `MANUAL`. `movido_despues_del_conteo` suma **solo** `FISICO` **con saldo** (delta = después − antes), en lugares vendibles; lo demás se cuenta (`no_fisicos`, `sin_saldo`, `sin_clasificar`) |
+
+Trinquetes (en el mismo archivo): todo `MovimientoInventario(...)` de `app/`
+y `flota/` declara `saldo_antes` y `saldo_despues` (inventario de excepciones
+**vacío**, solo encoge); todo `tipo` literal está en la tabla, y los escritores
+con `tipo` por parámetro están declarados con sus valores (3); los `tipo=` que
+viajan a `_entrar`/`aplicar_ajuste_al_wms`/`llevar_wms_a_lo_contado` también;
+`movido_despues_del_conteo` lee saldo y tabla y no `.cantidad`. Meta-tests
+(función anidada, docstring, tipo nuevo, tipo dinámico, `a if c else b`) y piso.
+
+**Lo que sigue sin cubrir:** un movimiento viejo sin saldo (anterior a esto)
+no cuenta como movido; el `AJUSTE` manual de la ruta de inventario es `MANUAL`
+(el conteo lo reemplaza); un SHORT_PICK sin fila de stock escribe saldos
+`None` y no cuenta. `lugares_del_sku` (lo que el HUD nombra) sigue incluyendo
+la zona de averías.

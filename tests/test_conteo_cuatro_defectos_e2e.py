@@ -252,3 +252,159 @@ class TestUnaDefinicionDeEmpacadoPorSalir:
         assert _llamadas(fns['un_descuadre_se_cuenta_dos_veces'], 'omision_autorizada')
         assert not any(isinstance(a, ast.Attribute) and a.attr.startswith('verificacion_omitida')
                        for a in ast.walk(fns['un_descuadre_se_cuenta_dos_veces']))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VAL-E1/E2 · el libro dice cuánto cambió el WMS, y de dónde vino el cambio
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _constructores_de_movimiento(fuentes: dict):
+    """`[(clave 'archivo::funcion', ast.Call)]` de cada `MovimientoInventario(...)`."""
+    def propios(fn):
+        """Los nodos de `fn` sin entrar a sus funciones anidadas: cada
+        constructor pertenece a la función más interna."""
+        pila = list(ast.iter_child_nodes(fn))
+        while pila:
+            n = pila.pop()
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            yield n
+            pila.extend(ast.iter_child_nodes(n))
+    out = []
+    for ruta, texto in fuentes.items():
+        for fn in _funciones(ast.parse(texto)):
+            for c in propios(fn):
+                if isinstance(c, ast.Call) and (getattr(c.func, 'id', None) == 'MovimientoInventario'
+                                                or getattr(c.func, 'attr', None) == 'MovimientoInventario'):
+                    out.append((f'{ruta}::{fn.name}', c))
+    return out
+
+
+def sin_saldo(fuentes: dict) -> set:
+    """Constructores que cambian cantidad sin declarar `saldo_antes` y
+    `saldo_despues` (aunque sea `None` cuando no hay fila)."""
+    return {k for k, c in _constructores_de_movimiento(fuentes)
+            if not {'saldo_antes', 'saldo_despues'} <= {kw.arg for kw in c.keywords}}
+
+
+def tipos_literales(fuentes: dict) -> tuple:
+    """(`{tipo literal}`, `{clave con tipo no literal}`) de los constructores.
+    Un `a if c else b` con dos literales cuenta como literales."""
+    literales, dinamicos = set(), set()
+    for k, c in _constructores_de_movimiento(fuentes):
+        tipo = next((kw.value for kw in c.keywords if kw.arg == 'tipo'), None)
+        valores = ([tipo] if not isinstance(tipo, ast.IfExp) else [tipo.body, tipo.orelse])
+        if tipo is not None and all(isinstance(v, ast.Constant) and isinstance(v.value, str)
+                                    for v in valores):
+            literales |= {v.value for v in valores}
+        else:
+            dinamicos.add(k)
+    return literales, dinamicos
+
+
+def _fuentes_app_y_flota():
+    fs = _fuentes_app()
+    fs.update({str(p.relative_to(RAIZ)): p.read_text(encoding='utf-8')
+               for p in (RAIZ / 'flota').rglob('*.py')})
+    return fs
+
+
+#: Escritores sin saldo. Solo encoge. Vacío desde el 2026-09-29.
+SIN_SALDO_DECLARADOS: dict = {}
+
+#: Escritores cuyo `tipo` no es literal, con los valores que puede tomar
+#: (verificados a mano en el código). Solo encoge.
+TIPO_DINAMICO = {
+    'app/routes/inventario.py::ajuste_inventario': {'ENTRADA', 'SALIDA', 'AJUSTE'},
+    'app/services/conteo_service.py::_mov': {'AJUSTE_CONTEO', 'CUADRE_CONTEO'},
+    'app/services/devolucion_cliente_service.py::_entrar': {
+        'DEVOLUCION_CLIENTE', 'DEVOLUCION_CLIENTE_AVERIADO'},
+}
+
+
+class TestElLibroDiceCuantoCambio:
+
+    def test_todo_escritor_declara_su_saldo(self):
+        hallados = sin_saldo(_fuentes_app_y_flota())
+        assert hallados == set(SIN_SALDO_DECLARADOS), hallados
+
+    def test_piso(self):
+        assert len(_constructores_de_movimiento(_fuentes_app())) >= 20
+
+    def test_el_escaner_ve_el_que_no_declara_y_no_el_sano(self):
+        falso = {'x.py': (
+            'def a():\n    """MovimientoInventario(tipo=1)"""\n'
+            '    db.session.add(MovimientoInventario(tipo="SALIDA", cantidad=-3))\n'
+            'def b():\n    db.session.add(M.MovimientoInventario(tipo="ENTRADA", cantidad=3,\n'
+            '        saldo_antes=1, saldo_despues=4))\n'
+            'def c():\n    def d():\n        MovimientoInventario(tipo="SALIDA")\n    return d\n')}
+        assert sin_saldo(falso) == {'x.py::a', 'x.py::d'}
+
+
+class TestTodoTipoTieneOrigenDeclarado:
+
+    def _tabla(self):
+        from app.services.conteo_service import ConteoService
+        return ConteoService.ORIGEN_DE_MOVIMIENTO
+
+    def test_los_literales_estan_en_la_tabla(self, app):
+        literales, dinamicos = tipos_literales(_fuentes_app_y_flota())
+        assert literales - set(self._tabla()) == set(), literales - set(self._tabla())
+        assert dinamicos == set(TIPO_DINAMICO), dinamicos
+        for clave, valores in TIPO_DINAMICO.items():
+            assert valores <= set(self._tabla()), clave
+
+    def test_los_tipos_que_viajan_por_parametro_estan_en_la_tabla(self, app):
+        """`_entrar(..., tipo='X')`, `aplicar_ajuste_al_wms(..., tipo='X')`,
+        `llevar_wms_a_lo_contado(..., tipo='X')`: el literal de la llamada."""
+        vistos = set()
+        for texto in _fuentes_app().values():
+            for c in ast.walk(ast.parse(texto)):
+                if isinstance(c, ast.Call) and getattr(c.func, 'attr', None) in (
+                        '_entrar', 'aplicar_ajuste_al_wms', 'llevar_wms_a_lo_contado'):
+                    for kw in c.keywords:
+                        if kw.arg == 'tipo' and isinstance(kw.value, ast.Constant):
+                            vistos.add(kw.value.value)
+        assert vistos and vistos <= set(self._tabla()), vistos
+
+    def test_la_sincronizacion_no_es_fisica(self, app):
+        t = self._tabla()
+        assert t['CARGA_INICIAL_SIESA'] == 'SINCRONIZACION'
+        assert {t['AJUSTE_CONTEO'], t['CUADRE_CONTEO']} == {'CONTEO'}
+        assert set(t.values()) == {'FISICO', 'SINCRONIZACION', 'CONTEO', 'MANUAL'}
+
+    def test_el_escaner_ve_un_tipo_nuevo(self):
+        falso = {'x.py': ('def a():\n    MovimientoInventario(tipo="NUEVO_TIPO", saldo_antes=0, saldo_despues=1)\n'
+                          'def b(t):\n    MovimientoInventario(tipo=t, saldo_antes=0, saldo_despues=1)\n'
+                          'def c(x):\n    MovimientoInventario(tipo="A" if x else "B", saldo_antes=0, saldo_despues=1)\n')}
+        literales, dinamicos = tipos_literales(falso)
+        assert literales == {'NUEVO_TIPO', 'A', 'B'} and dinamicos == {'x.py::b'}
+
+    def test_movido_despues_suma_solo_fisicos_con_saldo(self):
+        texto = (APP / 'services' / 'conteo_service.py').read_text(encoding='utf-8')
+        fn = next(f for f in _funciones(ast.parse(texto)) if f.name == 'movido_despues_del_conteo')
+        attrs = {a.attr for a in ast.walk(fn) if isinstance(a, ast.Attribute)}
+        assert {'saldo_antes', 'saldo_despues', 'ORIGEN_DE_MOVIMIENTO'} <= attrs
+        assert 'cantidad' not in attrs, 'una cantidad sin saldo no dice cuánto cambió el WMS'
+
+
+class TestLaSincronizacionNoEsMovimientoFisico:
+
+    def test_la_carga_de_siesa_despues_del_conteo_no_cuenta(self, m):
+        """Entre el conteo y la aprobación corre la carga de las 7:00 y deja el
+        WMS en otro número: no es mercancía que se movió en la bodega."""
+        from app.models.inventario import MovimientoInventario, UbicacionProducto
+        p = m.producto(lugares={'PIK-1': 50}, costo=90000)
+        sid = m.manual(m.sofi, p)
+        m.cc1_cc2(sid, m.ana, m.beto, 46)
+        fila = UbicacionProducto.query.filter_by(producto_id=p.id).one()
+        m.db.session.add(MovimientoInventario(
+            producto_id=p.id, ubicacion_id=fila.ubicacion_id, almacen_id=m.nb1.id,
+            tipo='CARGA_INICIAL_SIESA', cantidad=0, saldo_antes=50, saldo_despues=58,
+            motivo='carga de Siesa', numero_documento='CARGA-SIESA'))
+        fila.cantidad = 58
+        m.db.session.commit()
+        st, r = m.put(m.adri, f'/api/conteo/{sid}/ajustar')
+        assert st == 202, r
+        m.ejecutar_ajustes()
+        assert m.wms(p) == 46

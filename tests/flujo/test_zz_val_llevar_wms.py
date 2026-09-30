@@ -2,6 +2,9 @@
 Validación crítica de `ConteoService.llevar_wms_a_lo_contado` (qa 44c892f0),
 con escenarios propios: movimientos concurrentes REALES entre el conteo y la
 ejecución del ajuste, idempotencia, ensayo y la guarda de empacado.
+
+VAL-E1/E2/E3 nacieron xfail estricto (val-e2e-conteo @ 35b4875f); cerrados el
+2026-09-29: el libro con saldo, solo movimientos físicos, y el total vendible.
 """
 import json
 
@@ -42,10 +45,6 @@ class TestMovimientosDespuesDelConteo:
         m.ejecutar_ajustes()
         assert m.wms(p) == 35, m.por_lugar(p)
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'VAL-E1: SHORT_PICK escribe cantidad POSITIVA sin saldo, y el WMS baja. '
-        'movido_despues_del_conteo la suma como entrada: el WMS termina +2×encontrado '
-        '(48 en vez de 42).'))
     def test_short_pick_entre_el_conteo_y_el_job(self, m):
         from app.services.picking_service import PickingService
         p, sid, _ = _faltante_encolado(m, {'PIK-1': 50}, 45)
@@ -59,9 +58,6 @@ class TestMovimientosDespuesDelConteo:
         m.ejecutar_ajustes()
         assert m.wms(p) == 42, m.por_lugar(p)          # 45 contadas − 3 que salieron
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'VAL-E2: REPOSICION (RESERVA→PICKING) no cambia el total, pero escribe un solo '
-        'movimiento +unidades sin saldo: el WMS termina con esas unidades de más.'))
     def test_reposicion_entre_el_conteo_y_el_job(self, m):
         from app.models.inventario import MovimientoInventario, UbicacionProducto
         p, sid, _ = _faltante_encolado(m, {'PIK-1': 20, 'RES-1': 30}, 45)
@@ -79,10 +75,6 @@ class TestMovimientosDespuesDelConteo:
 
 class TestAveriasEnElAlmacen:
 
-    @pytest.mark.xfail(strict=True, reason=(
-        'VAL-E3: existencia_wms_del_sku suma la zona AVERIAS (que Siesa ya pasó a AV1). '
-        'Un MATCH del estante (100 = Siesa NB1) "cuadra" el WMS a 100 incluyendo las 5 '
-        'averiadas: descuenta 5 del stock vendible.'))
     def test_match_no_descuenta_lo_averiado_del_vendible(self, m):
         m.ub(m.nb1, 'AVE-1', 'AVERIAS')
         p = m.producto(lugares={'SIESA-GENERAL': 100, 'AVE-1': 5}, existencia=100)

@@ -925,9 +925,11 @@ class ConteoService:
                    .first())
         if general is not None:
             return general.id
+        from app.services.picking_service import filtro_ubicacion_vendible
         fila = (UbicacionProducto.query
                 .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
-                .filter(Ubicacion.almacen_id == almacen_id,
+                .filter(filtro_ubicacion_vendible(),
+                        Ubicacion.almacen_id == almacen_id,
                         UbicacionProducto.producto_id == producto_id)
                 .order_by(UbicacionProducto.cantidad.desc(), UbicacionProducto.ubicacion_id)
                 .first())
@@ -961,15 +963,20 @@ class ConteoService:
 
     @staticmethod
     def existencia_wms_del_sku(producto_id: int, almacen_id: int) -> int:
-        """Lo que el WMS tiene de este SKU en el almacén, sumado sobre todos
-        sus huecos. Es lo comparable con la foto de Siesa (ítem × bodega); la
-        cantidad de UN hueco no lo es."""
+        """Lo que el WMS tiene de este SKU en el almacén, sumado sobre sus
+        lugares **vendibles**. Es lo comparable con la foto de Siesa (ítem ×
+        bodega); la cantidad de UN hueco no lo es. Sin la zona de averías ni la
+        de devoluciones (`filtro_ubicacion_vendible`, el mismo del sync): lo
+        averiado Siesa ya lo pasó a AV1, y un MATCH que las contara
+        descontaría del vendible (VAL-E3, 2026-09-29)."""
         from app.models.inventario import UbicacionProducto
         from app.models.ubicacion import Ubicacion
+        from app.services.picking_service import filtro_ubicacion_vendible
         total = (db.session.query(db.func.coalesce(db.func.sum(UbicacionProducto.cantidad), 0))
                  .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
                  .filter(Ubicacion.almacen_id == almacen_id,
-                         UbicacionProducto.producto_id == producto_id)
+                         UbicacionProducto.producto_id == producto_id,
+                         filtro_ubicacion_vendible())
                  .scalar())
         return int(total or 0)
 
@@ -1046,10 +1053,14 @@ class ConteoService:
         """
         from app.models.inventario import MovimientoInventario, UbicacionProducto
         from app.models.ubicacion import Ubicacion
+        from app.services.picking_service import filtro_ubicacion_vendible
+        # Solo lugares vendibles (VAL-E3): la zona de averías y la de
+        # devoluciones no son lo que Siesa cuenta en la bodega.
         filas = (UbicacionProducto.query
                  .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
                  .filter(Ubicacion.almacen_id == sesion.almacen_id,
-                         UbicacionProducto.producto_id == sesion.producto_id)
+                         UbicacionProducto.producto_id == sesion.producto_id,
+                         filtro_ubicacion_vendible())
                  .with_for_update()
                  .all())
         movimientos = []
@@ -1069,6 +1080,12 @@ class ConteoService:
 
         if motivo_codigo != 'AJ-SAL':
             fila = next((f for f in filas if f.ubicacion_id == sesion.ubicacion_id), None)
+            ub_sesion = db.session.get(Ubicacion, sesion.ubicacion_id)
+            if fila is None and ub_sesion is not None and \
+                    ub_sesion.tipo_zona in ConteoService._zonas_no_vendibles():
+                # La cadena cuelga de un hueco no vendible (una sesión vieja):
+                # lo que sobra entra al lugar vendible con más unidades.
+                fila = max(filas, key=lambda f: (f.cantidad or 0, -f.ubicacion_id), default=None)
             if fila is None:
                 fila = UbicacionProducto(ubicacion_id=sesion.ubicacion_id,
                                          producto_id=sesion.producto_id,
@@ -1108,39 +1125,76 @@ class ConteoService:
                 'la carga de existencias.', sesion.codigo, cantidad, pendiente)
         return {'movimientos': movimientos, 'sin_descontar': pendiente}
 
+    @staticmethod
+    def _zonas_no_vendibles():
+        from app.services.picking_service import ZONAS_NO_VENDIBLES
+        return ZONAS_NO_VENDIBLES
+
     #: Movimientos que escribe `llevar_wms_a_lo_contado` (el ajuste aceptado
-    #: por Siesa y el cuadre de un MATCH). Los de la MISMA sesión no cuentan
-    #: como «lo que pasó después del conteo»: así una segunda llamada (la
-    #: recuperación de una sesión atascada en AJUSTANDO) no mueve nada.
+    #: por Siesa y el cuadre de un MATCH).
     TIPOS_MOVIMIENTO_DEL_CONTEO = ('AJUSTE_CONTEO', 'CUADRE_CONTEO')
+
+    #: **La tabla cerrada de tipos de `MovimientoInventario` → origen**
+    #: (2026-09-29, VAL-E1/E2). `movido_despues_del_conteo` suma SOLO los
+    #: `FISICO`: operaciones que mueven mercancía en la bodega (picking,
+    #: recepción, traslado, devolución, reposición, avería, layout). No suma
+    #: `SINCRONIZACION` (la carga de Siesa de las 7:00 y su cero: reflejan a
+    #: Siesa, no a la bodega), `CONTEO` (los del propio conteo) ni `MANUAL`
+    #: (una corrección escrita a mano del stock del WMS: el conteo la
+    #: reemplaza). Un tipo que no está acá no se suma y se cuenta aparte; el
+    #: trinquete (`tests/test_conteo_cuatro_defectos_e2e.py`) exige que todo
+    #: tipo que escribe `app/` esté declarado.
+    ORIGEN_DE_MOVIMIENTO = {
+        'SALIDA': 'FISICO', 'SHORT_PICK': 'FISICO', 'ENTRADA': 'FISICO',
+        'SALIDA_TRASLADO': 'FISICO', 'REVERSA_TRASLADO': 'FISICO',
+        'DEVOLUCION': 'FISICO', 'DEVOLUCION_AVERIADO': 'FISICO',
+        'DEVOLUCION_CLIENTE': 'FISICO', 'DEVOLUCION_CLIENTE_AVERIADO': 'FISICO',
+        'LIBERACION_DEVOLUCION': 'FISICO', 'REINGRESO_REAPERTURA': 'FISICO',
+        'REPOSICION': 'FISICO', 'AJUSTE_AUDITORIA': 'FISICO',
+        'ASIGNACION_LAYOUT': 'FISICO', 'REMODULACION_CUERPO': 'FISICO',
+        'CARGA_INICIAL_SIESA': 'SINCRONIZACION',
+        'AJUSTE_CONTEO': 'CONTEO', 'CUADRE_CONTEO': 'CONTEO',
+        'AJUSTE': 'MANUAL',
+    }
 
     @staticmethod
     def movido_despues_del_conteo(sesion: SesionConteo) -> dict:
-        """Cuánto cambió el WMS del SKU en el almacén DESPUÉS del instante del
-        conteo (`foto_siesa_at`), sumando sus `MovimientoInventario` (un
-        picking confirmado, una recepción, un traslado). Sin los de esta
-        misma sesión. El signo sale del saldo antes → después cuando la fila
-        lo trae (el libro tiene dos convenciones: el picking escribe la salida
-        en positivo); sin saldo, la cantidad tal cual, contado aparte.
-        Sin instante del conteo: 0 y `sin_instante` (declarado)."""
+        """Cuánto movieron las operaciones FÍSICAS el WMS del SKU en el almacén
+        DESPUÉS del instante del conteo (`foto_siesa_at`).
+
+        Solo movimientos de origen `FISICO` (`ORIGEN_DE_MOVIMIENTO`) y **solo
+        con saldo** (delta = saldo después − saldo antes): una cantidad sin
+        saldo no dice el cambio del WMS (el SHORT_PICK la escribía positiva en
+        una salida; la reposición, una sola pata). Lo que no entra se cuenta:
+        `sin_saldo`, `no_fisicos`, `sin_clasificar`. Solo lugares vendibles
+        (`filtro_ubicacion_vendible`), como el total del SKU. Sin instante
+        del conteo: 0 y `sin_instante`."""
         from app.models.inventario import MovimientoInventario as M
-        if sesion.foto_siesa_at is None:
-            return {'delta': 0, 'movimientos': 0, 'sin_saldo': 0, 'sin_instante': True}
-        q = M.query.filter(M.producto_id == sesion.producto_id,
-                           M.almacen_id == sesion.almacen_id,
-                           M.fecha > sesion.foto_siesa_at)
-        delta = n = sin_saldo = 0
+        from app.models.ubicacion import Ubicacion
+        from app.services.picking_service import filtro_ubicacion_vendible
+        out = {'delta': 0, 'movimientos': 0, 'sin_saldo': 0, 'no_fisicos': 0,
+               'sin_clasificar': 0, 'sin_instante': sesion.foto_siesa_at is None}
+        if out['sin_instante']:
+            return out
+        q = (M.query.join(Ubicacion, Ubicacion.id == M.ubicacion_id)
+             .filter(M.producto_id == sesion.producto_id,
+                     M.almacen_id == sesion.almacen_id,
+                     M.fecha > sesion.foto_siesa_at,
+                     filtro_ubicacion_vendible()))
         for m in q.all():
-            if (m.tipo in ConteoService.TIPOS_MOVIMIENTO_DEL_CONTEO
-                    and (m.numero_documento or '') == (sesion.codigo or '')[:50]):
+            origen = ConteoService.ORIGEN_DE_MOVIMIENTO.get(m.tipo)
+            if origen is None:
+                out['sin_clasificar'] += 1
                 continue
-            n += 1
-            if m.saldo_antes is not None and m.saldo_despues is not None:
-                delta += m.saldo_despues - m.saldo_antes
-            else:
-                delta += m.cantidad or 0
-                sin_saldo += 1
-        return {'delta': delta, 'movimientos': n, 'sin_saldo': sin_saldo, 'sin_instante': False}
+            if origen != 'FISICO':
+                out['no_fisicos'] += 1
+                continue
+            if m.saldo_antes is None or m.saldo_despues is None:
+                out['sin_saldo'] += 1
+                continue
+            out['movimientos'] += 1
+            out['delta'] += m.saldo_despues - m.saldo_antes
+        return out
 
     @staticmethod
     def llevar_wms_a_lo_contado(sesion: SesionConteo, *, tipo: str = 'AJUSTE_CONTEO',

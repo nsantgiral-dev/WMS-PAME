@@ -415,6 +415,7 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
         producto_id=tarea.producto_id,
     ).with_for_update().first()
 
+    picking_antes = inv_picking.cantidad if inv_picking else 0
     if inv_picking:
         inv_picking.cantidad += unidades
     else:
@@ -432,16 +433,33 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
         ubicacion_id=tarea.ubicacion_reserva_id,
         producto_id=tarea.producto_id,
     ).with_for_update().first()
+    reserva_antes = inv_reserva.cantidad if inv_reserva else None
     if inv_reserva:
         inv_reserva.cantidad = max(0, inv_reserva.cantidad - unidades)
 
-    # d) Movimiento inventario
+    # d) Movimiento inventario — un traslado interno tiene DOS patas (VAL-E2,
+    # 2026-09-29): sale de RESERVA y entra a PICKING, cada una con su saldo.
+    # Antes había una sola (+unidades, sin saldo) y quien suma el libro veía
+    # una entrada donde el total del SKU no cambió.
+    if inv_reserva is not None:
+        db.session.add(MovimientoInventario(
+            producto_id=tarea.producto_id,
+            ubicacion_id=tarea.ubicacion_reserva_id,
+            almacen_id=tarea.almacen_id,
+            tipo='REPOSICION',
+            cantidad=-(reserva_antes - inv_reserva.cantidad),
+            saldo_antes=reserva_antes, saldo_despues=inv_reserva.cantidad,
+            motivo=f'Reposición {tarea.codigo} — LPN {lpn.codigo} sale de RESERVA',
+            usuario_id=abastecedor_id,
+            idempotency_key=f'REP-{tarea.id}-{lpn.id}-SAL',
+        ))
     db.session.add(MovimientoInventario(
         producto_id=tarea.producto_id,
         ubicacion_id=tarea.ubicacion_picking_id,
         almacen_id=tarea.almacen_id,
         tipo='REPOSICION',
         cantidad=unidades,
+        saldo_antes=picking_antes, saldo_despues=picking_antes + unidades,
         motivo=f'Reposición {tarea.codigo} — LPN {lpn.codigo} roto hacia {tarea.ubicacion_picking.codigo}',
         usuario_id=abastecedor_id,
         idempotency_key=f'REP-{tarea.id}-{lpn.id}',
