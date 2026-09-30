@@ -10,8 +10,9 @@ por definición: pedirlo es su señal (`presencia.registrar_senal`).
 
 **Push solo como excepción, y con vencimiento.** Cuando un líder (o el
 sistema, para el 2º conteo) le pone dueño a una tarea, la persona tiene que
-poder hacerla **y** estar disponible ahora. Si deja de estarlo —ausencia
-declarada, o dos horas sin señal— lo que tenía asignado y no había empezado
+poder hacerla **y** estar disponible ahora (el conteo no exige señal:
+`TIPOS_SIN_SENAL`). Si deja de estarlo —ausencia declarada, o dos horas sin
+señal en lo que sí la exige— lo que tenía asignado y no había empezado
 vuelve a la cola sola (`barrer`, cada 15 min; `devolver_trabajo_de`, al
 declarar la ausencia). Una asignación no es una propiedad: es una reserva que
 vence.
@@ -167,23 +168,40 @@ def motivo_no_elegible(usuario, tipo: str, *, almacen_id=None, bodega=None):
 # La política: puesto + presencia
 # ─────────────────────────────────────────────────────────────────────────────
 
-def motivo_no_asignable(usuario, tipo: str, *, ahora=None, exige_senal: bool = True, **ctx):
+#: Trabajos que NO exigen señal (decisión del dueño, 2026-09-30): el conteo
+#: pasa del 1º al 2º en el momento, sin esperar a que el otro operario haya
+#: abierto la aplicación. Para estos, «sin señal» no bloquea ninguna
+#: asignación ni el barrido suelta nada por ella; una ausencia declarada y un
+#: usuario inactivo siguen bloqueando.
+TIPOS_SIN_SENAL = (CONTEO, CONTEO_DEFINITIVO)
+
+
+def _presencia_bloquea(p: dict, tipo: str, exige_senal=None) -> bool:
+    """¿La presencia `p` impide asignarle `tipo`? Una sola regla para la
+    política, el desplegable y el reparto."""
+    if p['disponible']:
+        return False
+    if exige_senal is None:
+        exige_senal = tipo not in TIPOS_SIN_SENAL
+    return not (not exige_senal and p['codigo'] == presencia.SIN_SENAL)
+
+
+def motivo_no_asignable(usuario, tipo: str, *, ahora=None, exige_senal=None, **ctx):
     """¿Por qué no se le puede asignar `tipo` a `usuario` ahora? Texto o `None`.
 
-    `exige_senal=False` (el conteo manual que un líder le da a alguien en
-    particular, decisión del dueño 2026-09-29): «sin señal» no bloquea —el
-    líder sabe quién vino aunque todavía no haya abierto la aplicación—; una
-    ausencia declarada y un usuario inactivo siguen bloqueando."""
+    «Sin señal» no bloquea los trabajos de `TIPOS_SIN_SENAL` (el conteo);
+    `exige_senal` lo fija a mano para los demás. Una ausencia declarada y un
+    usuario inactivo bloquean siempre."""
     m = motivo_no_elegible(usuario, tipo, **ctx)
     if m:
         return m
     p = presencia.estado(usuario, ahora=ahora)
-    if not p['disponible'] and not (not exige_senal and p['codigo'] == presencia.SIN_SENAL):
+    if _presencia_bloquea(p, tipo, exige_senal):
         return f'{usuario.nombre} {p["texto"]}: no se le asigna trabajo'
     return None
 
 
-def exigir_asignable(usuario_id, tipo: str, *, exige_senal: bool = True, **ctx):
+def exigir_asignable(usuario_id, tipo: str, *, exige_senal=None, **ctx):
     """La persona, si se le puede asignar `tipo` ahora; si no, `NoAsignable`.
     Para las acciones de un líder: el motivo vuelve a la pantalla."""
     from app.models.usuario import Usuario
@@ -260,7 +278,7 @@ def candidatos(tipo: str, *, almacen_id=None, bodega=None, ahora=None) -> dict:
         p = pres[u.id]
         fila = {'id': u.id, 'nombre': u.nombre, 'rol': u.rol,
                 'presencia': p['codigo'], 'presencia_texto': p['texto']}
-        if p['disponible']:
+        if not _presencia_bloquea(p, tipo):
             if tipo == CONTEO:
                 fila['cupo'] = cupo_conteo(u, ahora=ahora)
             disp.append(fila)
@@ -546,7 +564,7 @@ def devolver_trabajo_de(usuario_id: int, *, motivo: str, en_curso_desde=None,
              MOTIVO_INACTIVO: 'Su dueño está inactivo'}.get(motivo, motivo)
     origen = origen or ('barrido de asignaciones' if por_id is None else None)
     out = {'conteos': 0, 'picking': 0, 'reposicion': 0, 'conservados_en_curso': 0,
-           'conservados_manuales': 0, 'requieren_decision': []}
+           'conteos_conservados_sin_senal': 0, 'requieren_decision': []}
 
     def _bloqueadas(q):
         return q.with_for_update(skip_locked=True).populate_existing().all()
@@ -555,11 +573,10 @@ def devolver_trabajo_de(usuario_id: int, *, motivo: str, en_curso_desde=None,
         [EstadoConteo.EN_PROCESO] if en_curso_desde is not None else [])
     for s in _bloqueadas(SesionConteo.query.filter(SesionConteo.operario_id == usuario_id,
                                                    SesionConteo.estado.in_(estados_conteo))):
-        if motivo == MOTIVO_SIN_SENAL and s.tipo == 'MANUAL':
-            # Un conteo manual lo dio un líder a esta persona a sabiendas de que
-            # no tenía señal (`exige_senal=False`): «sin señal» no se lo quita.
-            # La ausencia declarada y el usuario inactivo sí.
-            out['conservados_manuales'] += 1
+        if motivo == MOTIVO_SIN_SENAL:
+            # El conteo no exige señal (`TIPOS_SIN_SENAL`): «sin señal» no le
+            # quita ningún conteo. La ausencia declarada y el inactivo sí.
+            out['conteos_conservados_sin_senal'] += 1
             continue
         if s.estado == EstadoConteo.EN_PROCESO and not en_curso_abandonado(
                 s.ultima_actividad_at or s.fecha_inicio, en_curso_desde):
