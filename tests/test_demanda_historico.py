@@ -428,7 +428,10 @@ class TestElHistorico:
 
     def test_el_periodo_en_curso_no_se_registra_ni_se_lee(self, app, db):
         from app.services import demanda_fuentes as dfu
-        hoy = _hoy()
+        # El 15 del mes pasado: siempre hay un período en curso (trimestre o
+        # mes). Con «hoy» real, el día 1 de un período no hay ninguno en curso
+        # —ayer cerró el anterior— y el test se ponía rojo solo (2026-10-01).
+        hoy = (_hoy().replace(day=1) - timedelta(days=1)).replace(day=15)
         vs = dfu.ventanas_historicas(hoy)
         assert vs[0]['en_curso'] and not any(v['en_curso'] for v in vs[1:])
         gw = SiesaVentas({})
