@@ -667,9 +667,14 @@ HARNESS = r"""
 const fs = require('fs'); const vm = require('vm');
 const [UTIL, CONTEO, APP, GUION] = process.argv.slice(2);
 const guion = JSON.parse(fs.readFileSync(GUION, 'utf-8'));
-function el(id) { return { id, innerHTML: '', textContent: '', value: '', style: {}, disabled: false,
+// Cada elemento tiene SUS hijos: `contenedor.querySelector('#x')` no es
+// `document.getElementById('x')`. Con un único mapa global de ids, dos HUD en
+// la página (el del CC1 que quedó pintado y el del definitivo) eran el mismo
+// objeto, y el arnés no podía ver que «＋ Sumar» leía la casilla del otro.
+function el(id) { const hijos = {}; return { id, innerHTML: '', textContent: '', value: '', style: {}, disabled: false,
   blur() {}, focus() {}, remove() {}, appendChild() {}, addEventListener() {},
-  querySelector() { return null; }, querySelectorAll() { return []; } }; }
+  querySelector(sel) { const k = String(sel).replace(/^#/, ''); return hijos[k] || (hijos[k] = el(k)); },
+  querySelectorAll() { return []; } }; }
 const els = {};
 const envios = []; const alertas = [];
 let fallarUna = guion.fallarRed || 0;
@@ -705,11 +710,17 @@ vm.runInContext(fs.readFileSync(CONTEO, 'utf-8'), ctx);
 vm.runInContext(`TAREA_ACTUAL = ${JSON.stringify(guion.tarea)};`, ctx);
 (async () => {
   ctx.__t = guion.tarea;
-  vm.runInContext("conteoHudAbrir(__t, 'OPERARIO', 'contenido-tarea')", ctx);
-  const html = els['contenido-tarea'].innerHTML;
+  const contenedor = guion.contenedor || 'contenido-tarea';
+  if (guion.hudViejo) {
+    // Un HUD anterior quedó pintado en `contenido-tarea` con su casilla vacía.
+    els['contenido-tarea'] = el('contenido-tarea');
+    els['chud-cant'] = el('chud-cant');
+  }
+  vm.runInContext(`conteoHudAbrir(__t, ${JSON.stringify(guion.modo || 'OPERARIO')}, ${JSON.stringify(contenedor)})`, ctx);
+  const html = els[contenedor].innerHTML;
   for (const paso of guion.pasos) {
     if (paso.scan) await vm.runInContext(`conteoHudScan(${JSON.stringify(paso.scan)})`, ctx);
-    if (paso.teclear) { els['chud-cant'] = els['chud-cant'] || el('chud-cant'); els['chud-cant'].value = paso.teclear;
+    if (paso.teclear) { els[contenedor].querySelector('#chud-cant').value = paso.teclear;
                         await vm.runInContext('conteoHudSumarTecleado()', ctx); }
     if (paso.deshacer) await vm.runInContext('conteoHudDeshacer()', ctx);
     if (paso.confirmar) await vm.runInContext('conteoHudConfirmar()', ctx);
@@ -776,6 +787,26 @@ class TestElHudEjecutado:
                    [e for e in r['envios'] if e[0] == '/api/mobile/conteo/total']]
         assert totales == [401, 1]
         assert r['total'] == 1
+
+    def test_el_definitivo_suma_su_casilla_aunque_quede_otro_hud(self, tmp_path):
+        """Producción 2026-10-01 (P197_006): el supervisor contó un CC1 y después
+        abrió el definitivo sin recargar. El HUD del CC1 seguía en la página con
+        su casilla vacía y «＋ Sumar» del definitivo leía ESA: «Escriba cuántas
+        unidades tiene la pila» con 21 escrito."""
+        r = _correr_hud(tmp_path, {'hudViejo': True, 'modo': 'DEFINITIVO',
+                                   'contenedor': 'def-modal-contenido',
+                                   'pasos': [{'teclear': '21'}]})
+        assert [a for a in r['alertas'] if a[1] == 'error'] == []
+        assert [b['total_acumulado'] for u, b in
+                [e for e in r['envios'] if e[0] == '/api/mobile/conteo/total']] == [21]
+        assert r['total'] == 21
+
+    def test_la_camara_lleva_el_contenedor_en_su_id(self, tmp_path):
+        """El mismo choque de ids, del lado de `abrirCamara`."""
+        import re as _re
+        assert 'lector-qr-conteo-${' in (PWA / 'conteo.js').read_text(encoding='utf-8')
+        assert not _re.search(r"""['"]lector-qr-conteo['"]""",
+                              (PWA / 'conteo.js').read_text(encoding='utf-8'))
 
     def test_un_codigo_de_barras_en_la_caja_de_cantidad_no_se_suma(self, tmp_path):
         r = _correr_hud(tmp_path, {'pasos': [{'teclear': UNIDAD}]})
