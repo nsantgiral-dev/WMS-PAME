@@ -1771,6 +1771,7 @@ function _conteoHudLugarHtml(t) {
 /** El HTML del HUD. Todo dato va con esc(). */
 function conteoHudHtml(h) {
   const t = h.tarea;
+  const camara = _chudCamaraIds(h);
   const def = h.modo === 'DEFINITIVO';
   const factor = Number(t.factor_conversion) > 1 ? Number(t.factor_conversion) : 1;
   const unidadEmp = t.unidad_empaque || 'EMPAQUE';
@@ -1826,9 +1827,9 @@ function conteoHudHtml(h) {
       <button onclick="conteoHudCamara(this)" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid var(--brd);border-radius:12px;cursor:pointer;margin-bottom:10px;">
         📷 Escanear con cámara
       </button>
-      <div id="chud-camara-box" style="display:none;margin-bottom:10px;">
-        <div id="lector-qr-conteo" style="border-radius:12px;overflow:hidden;"></div>
-        <button onclick="cerrarCamara('chud-camara-box')" style="width:100%;padding:10px;margin-top:6px;font-size:var(--fs-md);background:var(--bg-s2);color:var(--tx);border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
+      <div id="${esc(camara.caja)}" style="display:none;margin-bottom:10px;">
+        <div id="${esc(camara.lector)}" style="border-radius:12px;overflow:hidden;"></div>
+        <button onclick="cerrarCamara('${esc(camara.caja)}')" style="width:100%;padding:10px;margin-top:6px;font-size:var(--fs-md);background:var(--bg-s2);color:var(--tx);border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
       </div>` : ''}
 
       <button id="chud-btn-ok" onclick="conteoHudConfirmar()"
@@ -1858,19 +1859,41 @@ function conteoHudHtml(h) {
     </div>`;
 }
 
+/**
+ * Una pieza del HUD, buscada DENTRO de su contenedor — nunca en todo el documento.
+ *
+ * El HUD se pinta en `contenido-tarea` (operario) o en `def-modal-contenido`
+ * (Conteo Definitivo), y el primero no se borra al terminar: quien contó un CC1
+ * y después abre un definitivo tiene DOS HUD en la página con los mismos ids.
+ * `getElementById` devuelve el primero —el viejo, vacío—: «＋ Sumar» leía esa
+ * casilla y respondía «Escriba cuántas unidades… (1 o más)» con 21 escrito en
+ * la otra (producción, 2026-10-01, P197_006).
+ */
+function _chud(id) {
+  const h = CONTEO_HUD;
+  const cont = h ? document.getElementById(h.contenedor) : null;
+  return cont ? cont.querySelector('#' + id) : null;
+}
+
+/** Los ids de la cámara llevan el contenedor: dos cajas con el mismo id son el
+ *  mismo defecto que `_chud` cierra, del lado de `abrirCamara`. */
+function _chudCamaraIds(h) {
+  return { lector: `lector-qr-conteo-${h.contenedor}`, caja: `chud-camara-box-${h.contenedor}` };
+}
+
 /** Refresca solo lo que cambia al contar — repintar todo cerraría la cámara. */
 function _conteoHudActualizar() {
   const h = CONTEO_HUD;
   if (!h) return;
-  const total = document.getElementById('chud-total');
+  const total = _chud('chud-total');
   if (total) total.textContent = h.total;
-  const ultimo = document.getElementById('chud-ultimo');
+  const ultimo = _chud('chud-ultimo');
   if (ultimo) ultimo.textContent = h.ultimo;
-  const ok = document.getElementById('chud-btn-ok');
+  const ok = _chud('chud-btn-ok');
   if (ok && !h.ocupado) ok.textContent = `✓ Ya revisé todo — contar ${h.total}`;
-  const desh = document.getElementById('chud-deshacer');
+  const desh = _chud('chud-deshacer');
   if (desh) desh.style.display = h.pasos.length ? 'block' : 'none';
-  const deshTxt = document.getElementById('chud-deshacer-txt');
+  const deshTxt = _chud('chud-deshacer-txt');
   if (deshTxt) deshTxt.textContent = h.pasos.length ? h.pasos[h.pasos.length - 1].etiqueta : '';
 }
 
@@ -1889,7 +1912,10 @@ function _conteoHudEncolar(h, fn) {
 
 /** Abre la cámara con su propia caja; cada lectura entra por conteoHudScan. */
 async function conteoHudCamara(btnEl = null) {
-  await abrirCamara('lector-qr-conteo', 'chud-camara-box', conteoHudScan, btnEl);
+  const h = CONTEO_HUD;
+  if (!h) return;
+  const camara = _chudCamaraIds(h);
+  await abrirCamara(camara.lector, camara.caja, conteoHudScan, btnEl);
 }
 
 /** Un código escaneado (lector láser por procesarScan, o la cámara). */
@@ -1974,7 +2000,7 @@ function _conteoHudElegirEmpaque(codigo, empaques) {
 function conteoHudSumarTecleado() {
   const h = CONTEO_HUD;
   if (!h) return;
-  const inp = document.getElementById('chud-cant');
+  const inp = _chud('chud-cant');
   const texto = inp ? String(inp.value).trim() : '';
   const n = /^\d+$/.test(texto) ? parseInt(texto, 10) : NaN;
   if (!Number.isInteger(n) || n < 1) {
@@ -2046,7 +2072,7 @@ async function conteoHudConfirmar() {
     ceroConfirmado = true;
   }
   h.ocupado = true;
-  const btn = document.getElementById('chud-btn-ok');
+  const btn = _chud('chud-btn-ok');
   if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
   const payload = { tarea_id: h.tarea.id, tipo: 'CONTEO', items_escaneados: [], total_contado: total };
   if (ceroConfirmado) payload.cero_confirmado = true;
