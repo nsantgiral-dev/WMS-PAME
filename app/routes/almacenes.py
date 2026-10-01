@@ -13,6 +13,24 @@ from app.routes._auth_helpers import (_solo_admin, _es_personal_almacen,
                                        _es_admin_o_jefe, _es_control_flota,
                                        _lee_flota, _puede_organizar_layout)
 
+
+def _faltan_campos_cuerpo(data: dict, campos: tuple):
+    """
+    Los campos de un cuerpo que faltan. 'fila' es obligatoria como CLAVE pero
+    puede venir en null: es el «sin fila» (pasillo de un solo lado). El resto,
+    con valor.
+    """
+    faltan = [c for c in campos if c != 'fila' and not data.get(c)]
+    if 'fila' in campos and 'fila' not in data:
+        faltan.append('fila')
+    return faltan
+
+
+def _fila_del_payload(data: dict):
+    """1, 2 o None (sin fila). Un valor ilegible levanta ValueError (400)."""
+    fila = data.get('fila')
+    return None if fila is None else int(fila)
+
 @almacenes_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_almacenes():
@@ -155,6 +173,7 @@ def crear_cuerpo(id):
     bloque. Un Cuerpo es 100% de una sola Zona (tipo_zona) — PICKING, RESERVA e
     IMPORTADOS se arman como Cuerpos separados, no mezclados por Nivel dentro del mismo Cuerpo.
     Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, tipo_zona, huecos_por_nivel?, tipo_mueble? }
+    fila: 1, 2 o null (sin fila — pasillo de un solo lado); la clave es obligatoria.
     tipo_zona debe ser PICKING, RESERVA, AVERIAS o IMPORTADOS. huecos_por_nivel es una lista de N
     enteros (uno por entrepaño, N=cantidad_entrepanos, en orden de Nivel 1..N);
     si no viene, cada entrepaño nace con 1 hueco.
@@ -171,7 +190,7 @@ def crear_cuerpo(id):
     Almacen.query.get_or_404(id)
     data = request.get_json() or {}
     campos = ('pasillo', 'fila', 'cuerpo', 'cantidad_entrepanos', 'tipo_zona')
-    if not all(data.get(c) for c in campos):
+    if _faltan_campos_cuerpo(data, campos):
         return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
     try:
         huecos_por_nivel = data.get('huecos_por_nivel')
@@ -180,7 +199,7 @@ def crear_cuerpo(id):
         creadas = layout_service.crear_cuerpo(
             almacen_id=id,
             pasillo=data['pasillo'],
-            fila=int(data['fila']),
+            fila=_fila_del_payload(data),
             cuerpo=int(data['cuerpo']),
             cantidad_entrepanos=int(data['cantidad_entrepanos']),
             tipo_zona=data['tipo_zona'],
@@ -210,7 +229,7 @@ def editar_cuerpo(id):
     Almacen.query.get_or_404(id)
     data = request.get_json() or {}
     campos = ('pasillo', 'fila', 'cuerpo', 'cantidad_entrepanos')
-    if not all(data.get(c) for c in campos):
+    if _faltan_campos_cuerpo(data, campos):
         return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
     try:
         huecos_por_nivel = data.get('huecos_por_nivel')
@@ -219,7 +238,7 @@ def editar_cuerpo(id):
         creadas = layout_service.editar_cuerpo(
             almacen_id=id,
             pasillo=data['pasillo'],
-            fila=int(data['fila']),
+            fila=_fila_del_payload(data),
             cuerpo=int(data['cuerpo']),
             cantidad_entrepanos=int(data['cantidad_entrepanos']),
             huecos_por_nivel=huecos_por_nivel,
@@ -246,7 +265,7 @@ def reclasificar_cuerpo(id):
     Almacen.query.get_or_404(id)
     data = request.get_json() or {}
     campos = ('pasillo', 'fila', 'cuerpo')
-    if not all(data.get(c) for c in campos):
+    if _faltan_campos_cuerpo(data, campos):
         return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
     if data.get('tipo_zona') is None and data.get('activo') is None:
         return jsonify({'error': 'Indique al menos un campo a cambiar: tipo_zona o activo'}), 400
@@ -254,7 +273,7 @@ def reclasificar_cuerpo(id):
         resultado = layout_service.reclasificar_cuerpo(
             almacen_id=id,
             pasillo=data['pasillo'],
-            fila=int(data['fila']),
+            fila=_fila_del_payload(data),
             cuerpo=int(data['cuerpo']),
             tipo_zona=data.get('tipo_zona'),
             activo=data.get('activo'),
@@ -283,7 +302,7 @@ def eliminar_cuerpo(id):
     Almacen.query.get_or_404(id)
     data = request.get_json() or {}
     campos = ('pasillo', 'fila', 'cuerpo')
-    if not all(data.get(c) for c in campos):
+    if _faltan_campos_cuerpo(data, campos):
         return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
     forzar = bool(data.get('forzar', False))
     if forzar and not _solo_admin():
@@ -292,7 +311,7 @@ def eliminar_cuerpo(id):
         resultado = layout_service.eliminar_cuerpo(
             almacen_id=id,
             pasillo=data['pasillo'],
-            fila=int(data['fila']),
+            fila=_fila_del_payload(data),
             cuerpo=int(data['cuerpo']),
             forzar=forzar,
             usuario_id=usuario.id,

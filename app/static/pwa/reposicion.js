@@ -183,7 +183,8 @@ function repRenderUbicaciones() {
   const grupos = [];
   const cuerposPorClave = new Map();
   ubs.forEach(u => {
-    if (u.pasillo != null && u.fila != null && u.cuerpo != null) {
+    // fila puede ser null: pasillo sin fila (un solo lado de estantería).
+    if (u.pasillo != null && u.cuerpo != null) {
       const clave = `${u.pasillo}|${u.fila}|${u.cuerpo}`;
       let g = cuerposPorClave.get(clave);
       if (!g) {
