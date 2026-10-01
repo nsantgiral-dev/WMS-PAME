@@ -32,6 +32,11 @@ function _layoutCodigoCuerpo(codigo) {
   return codigo.split('-').slice(0, 3).join('-');
 }
 
+/** Pasillo + fila como en el código: 'A1', 'A2', o 'A' si el pasillo no tiene fila (fila null). */
+function _layoutEjePasilloFila(pasillo, fila) {
+  return fila == null ? `${pasillo}` : `${pasillo}${fila}`;
+}
+
 /** Color de zona con el mismo fallback en todo el módulo. */
 function _layoutColorZona(zona) {
   return _ZONA_COLOR[zona] || '#888';
@@ -224,7 +229,8 @@ function layoutRenderUbicaciones() {
         grupos.push(g);
       }
       g.items.push(u);
-    } else if (u.pasillo && u.fila != null && u.cuerpo != null && (u.tipo || 'estanteria') === 'estanteria') {
+    } else if (u.pasillo && u.cuerpo != null && (u.tipo || 'estanteria') === 'estanteria') {
+      // fila puede ser null: pasillo sin fila (un solo lado de estantería).
       const clave = `${u.pasillo}|${u.fila}|${u.cuerpo}`;
       let g = cuerposPorClave.get(clave);
       if (!g) {
@@ -346,6 +352,10 @@ function layoutCuerpoSetTipoMueble(tipo) {
   const esMuebleSuelto = tipo !== 'estanteria';
   const wrapEntrepanos = document.getElementById('layout-cuerpo-entrepanos-wrap');
   if (wrapEntrepanos) wrapEntrepanos.style.display = esMuebleSuelto ? 'none' : 'block';
+  // Vitrina y estiba son una sola posición: nunca llevan fila (el servidor
+  // también la ignora). La fila y su «Sin fila» solo existen para estantería.
+  const wrapFila = document.getElementById('layout-cuerpo-fila-wrap');
+  if (wrapFila) wrapFila.style.display = esMuebleSuelto ? 'none' : 'block';
   const btnSiguiente = document.getElementById('layout-cuerpo-btn-siguiente');
   if (btnSiguiente) btnSiguiente.textContent = esMuebleSuelto ? 'Crear' : 'Siguiente';
   const hint = document.getElementById('layout-cuerpo-zona-hint');
@@ -356,13 +366,55 @@ function layoutCuerpoSetTipoMueble(tipo) {
   }
 }
 
+// ── «Sin fila» ──────────────────────────────────────────────────────────────
+// Por defecto el pasillo tiene 2 filas (un lado y el otro). Una estantería
+// pegada a la pared tiene un solo lado: «Sin fila» deshabilita el selector y
+// manda fila = null. El servidor no deja mezclar los dos en un mismo pasillo.
+
+/** Fila elegida en el wizard: null si es vitrina/estiba o «Sin fila» está marcado, si no 1 o 2. */
+function _layoutFilaElegida() {
+  if (_layoutCuerpoTipoMueble !== 'estanteria') return null;
+  if (document.getElementById('layout-cuerpo-sin-fila')?.checked) return null;
+  return parseInt(document.getElementById('layout-cuerpo-fila').value);
+}
+
+/** Marca/desmarca «Sin fila» y habilita o deshabilita el selector de fila. */
+function _layoutSetSinFila(sinFila) {
+  const chk = document.getElementById('layout-cuerpo-sin-fila');
+  if (chk) chk.checked = !!sinFila;
+  layoutCuerpoToggleSinFila();
+}
+
+/** onchange del checkbox «Sin fila»: deshabilita las filas mientras esté marcado. */
+function layoutCuerpoToggleSinFila() {
+  const sinFila = !!document.getElementById('layout-cuerpo-sin-fila')?.checked;
+  const sel = document.getElementById('layout-cuerpo-fila');
+  if (!sel) return;
+  sel.disabled = sinFila;
+  sel.style.opacity = sinFila ? '0.45' : '1';
+}
+
+/**
+ * onchange del pasillo: si el pasillo ya existe, el wizard toma su forma
+ * (con fila o sin fila) para que la persona no choque con la regla del servidor.
+ * Un pasillo nuevo no cambia lo que está marcado.
+ */
+function layoutCuerpoPasilloCambio() {
+  const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
+  // Solo las estanterías dicen si el pasillo tiene filas: vitrinas y estibas no llevan.
+  const cuerpos = (_layoutUbicacionesCache || []).filter(u =>
+    u.pasillo === pasillo && u.cuerpo != null && (u.tipo || 'estanteria') === 'estanteria');
+  if (!cuerpos.length) return;
+  _layoutSetSinFila(cuerpos.every(u => u.fila == null));
+}
+
 /** Submit a single-position mueble suelto (vitrina/estiba) directly, skipping the entrepaños/huecos step. */
 async function layoutCuerpoCrearMuebleSuelto() {
   const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
-  const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
+  const fila = _layoutFilaElegida();
   const cuerpo = parseInt(document.getElementById('layout-cuerpo-numero').value);
 
-  if (!pasillo || isNaN(fila) || isNaN(cuerpo)) {
+  if (!pasillo || (fila !== null && isNaN(fila)) || isNaN(cuerpo)) {
     alerta('Complete pasillo, fila y número', 'error');
     return;
   }
@@ -374,7 +426,7 @@ async function layoutCuerpoCrearMuebleSuelto() {
     };
     await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, payload);
     const label = _TIPO_MUEBLE_LABEL[_layoutCuerpoTipoMueble];
-    alerta(`${label} ${pasillo}${fila}-${String(cuerpo).padStart(2, '0')} (${_layoutCuerpoZona}) creada`, 'ok');
+    alerta(`${label} ${_layoutEjePasilloFila(pasillo, fila)}-${String(cuerpo).padStart(2, '0')} (${_layoutCuerpoZona}) creada`, 'ok');
     layoutCerrarModalCuerpo();
     layoutCargarUbicaciones();
   } catch (e) {
@@ -422,8 +474,11 @@ async function layoutAbrirModalCuerpo(zona) {
   html += `<optgroup label="Pasillos nuevos">` +
     disponibles.map(p => `<option value="${p}">${p} (nuevo)</option>`).join('') + `</optgroup>`;
   sel.innerHTML = html;
+  sel.onchange = layoutCuerpoPasilloCambio;
 
   document.getElementById('layout-cuerpo-fila').value = '1';
+  _layoutSetSinFila(false);
+  layoutCuerpoPasilloCambio();
   document.getElementById('layout-cuerpo-numero').value = '';
   document.getElementById('layout-cuerpo-entrepanos').value = '';
   document.getElementById('layout-cuerpo-huecos-container').innerHTML = '';
@@ -448,7 +503,8 @@ function layoutCerrarModalCuerpo() {
 function layoutRepetirCuerpoAnterior() {
   if (!_layoutUltimoCuerpo) return;
   document.getElementById('layout-cuerpo-pasillo').value = _layoutUltimoCuerpo.pasillo;
-  document.getElementById('layout-cuerpo-fila').value = _layoutUltimoCuerpo.fila;
+  if (_layoutUltimoCuerpo.fila != null) document.getElementById('layout-cuerpo-fila').value = _layoutUltimoCuerpo.fila;
+  _layoutSetSinFila(_layoutUltimoCuerpo.fila == null);
   document.getElementById('layout-cuerpo-numero').value = _layoutUltimoCuerpo.cuerpo + 1;
   document.getElementById('layout-cuerpo-entrepanos').value = _layoutUltimoCuerpo.entrepanos;
   _layoutCuerpoHuecosPrevios = _layoutUltimoCuerpo.huecosPorNivel;
@@ -457,17 +513,17 @@ function layoutRepetirCuerpoAnterior() {
 /** Validate step 1 inputs and advance to step 2 (huecos per entrepano). */
 function layoutCuerpoIrAPaso2() {
   const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
-  const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
+  const fila = _layoutFilaElegida();
   const cuerpo = parseInt(document.getElementById('layout-cuerpo-numero').value);
   const cantidad_entrepanos = parseInt(document.getElementById('layout-cuerpo-entrepanos').value);
 
-  if (!pasillo || isNaN(fila) || isNaN(cuerpo) || isNaN(cantidad_entrepanos) || cantidad_entrepanos < 1) {
+  if (!pasillo || (fila !== null && isNaN(fila)) || isNaN(cuerpo) || isNaN(cantidad_entrepanos) || cantidad_entrepanos < 1) {
     alerta('Complete pasillo, fila, cuerpo y cantidad de entrepaños', 'error');
     return;
   }
 
   document.getElementById('layout-cuerpo-paso2-titulo').textContent =
-    `Cuerpo ${pasillo}${fila}-${String(cuerpo).padStart(2, '0')} — huecos por entrepaño`;
+    `Cuerpo ${_layoutEjePasilloFila(pasillo, fila)}-${String(cuerpo).padStart(2, '0')} — huecos por entrepaño`;
 
   const cont = document.getElementById('layout-cuerpo-huecos-container');
   let html = '';
@@ -495,7 +551,7 @@ function layoutCuerpoVolverAPaso1() {
 /** Submit the cuerpo creation with all entrepanos and huecos to the API. */
 async function layoutGuardarCuerpo() {
   const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
-  const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
+  const fila = _layoutFilaElegida();
   const cuerpo = parseInt(document.getElementById('layout-cuerpo-numero').value);
   const cantidad_entrepanos = parseInt(document.getElementById('layout-cuerpo-entrepanos').value);
 
@@ -510,7 +566,7 @@ async function layoutGuardarCuerpo() {
     await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, payload);
     _layoutUltimoCuerpo = { pasillo, fila, cuerpo, zona: _layoutCuerpoZona, entrepanos: cantidad_entrepanos, huecosPorNivel: huecos_por_nivel };
     const totalHuecos = huecos_por_nivel.reduce((a, b) => a + b, 0);
-    alerta(`Cuerpo ${pasillo}${fila}-${String(cuerpo).padStart(2,'0')} (${_layoutCuerpoZona}) creado — ${cantidad_entrepanos} entrepaño(s), ${totalHuecos} hueco(s)`, 'ok');
+    alerta(`Cuerpo ${_layoutEjePasilloFila(pasillo, fila)}-${String(cuerpo).padStart(2,'0')} (${_layoutCuerpoZona}) creado — ${cantidad_entrepanos} entrepaño(s), ${totalHuecos} hueco(s)`, 'ok');
     layoutCerrarModalCuerpo();
     layoutCargarUbicaciones();
   } catch (e) {
@@ -531,7 +587,7 @@ function layoutAbrirModalEditarCuerpo(pasillo, fila, cuerpo, cantidadActual) {
   const m = document.getElementById('modal-layout-editar-cuerpo');
   if (!m) return;
   _layoutCuerpoEditando = { pasillo, fila, cuerpo };
-  const codigoCuerpo = `${pasillo}${fila}-C${String(cuerpo).padStart(2, '0')}`;
+  const codigoCuerpo = `${_layoutEjePasilloFila(pasillo, fila)}-C${String(cuerpo).padStart(2, '0')}`;
   document.getElementById('layout-editar-cuerpo-titulo').textContent = `Editar ${codigoCuerpo}`;
   document.getElementById('layout-editar-cuerpo-entrepanos').value = cantidadActual;
   document.getElementById('layout-editar-cuerpo-huecos-container').innerHTML = '';
@@ -607,7 +663,7 @@ async function layoutGuardarEditarCuerpo() {
  * if any hueco has stock or real operational history.
  */
 async function layoutEliminarCuerpo(pasillo, fila, cuerpo, forzar) {
-  const codigoCuerpo = `${pasillo}${fila}-C${String(cuerpo).padStart(2, '0')}`;
+  const codigoCuerpo = `${_layoutEjePasilloFila(pasillo, fila)}-C${String(cuerpo).padStart(2, '0')}`;
   const msg = forzar
     ? `⚠ FORZAR eliminación de TODO el cuerpo ${codigoCuerpo} — esto borra también el historial real de picking/reposición de cada hueco, PARA SIEMPRE. ¿Continuar?`
     : `¿Eliminar TODO el cuerpo ${codigoCuerpo} (todos sus entrepaños y huecos)? Esta acción no se puede deshacer. Se bloquea completo si algún hueco tiene stock o historial real — use "Reclasificar > Desactivar cuerpo" en ese caso.`;
@@ -644,7 +700,7 @@ function layoutAbrirModalReclasificarCuerpo(pasillo, fila, cuerpo, zonaActual) {
   const m = document.getElementById('modal-layout-reclasificar-cuerpo');
   if (!m) return;
   _layoutCuerpoReclasificando = { pasillo, fila, cuerpo };
-  const codigoCuerpo = `${pasillo}${fila}-C${String(cuerpo).padStart(2, '0')}`;
+  const codigoCuerpo = `${_layoutEjePasilloFila(pasillo, fila)}-C${String(cuerpo).padStart(2, '0')}`;
   document.getElementById('layout-reclasificar-cuerpo-codigo').textContent = codigoCuerpo;
   document.getElementById('layout-reclasificar-cuerpo-zona').value = zonaActual;
   document.getElementById('layout-reclasificar-cuerpo-desactivar').checked = false;

@@ -5,7 +5,8 @@ Independiente de Reposición: este servicio es el cimiento (crear, clasificar y
 poblar ubicaciones); Reposición, Picking, Recepción, Averías y Compras son
 consumidores de ese cimiento, no dueños de la lógica de ubicaciones.
 
-Dirección física de 5 ejes: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo
+Dirección física de 5 ejes: Pasillo -> Fila (1/2, lado del pasillo; o sin
+fila si el pasillo tiene un solo lado) -> Cuerpo
 (bahía) -> Nivel (entrepaño, 1 = piso) -> Hueco (espacio dentro del entrepaño).
 
 Piezas:
@@ -131,10 +132,49 @@ _ZONAS_SLOT_UNICO = ('PICKING', 'IMPORTADOS')
 _TIPOS_MUEBLE = ('estanteria', 'vitrina', 'estiba')
 _SUFIJO_MUEBLE = {'vitrina': 'VIT', 'estiba': 'EST'}
 
+# Fila del pasillo: 1 o 2 (un lado y el otro), o None = «sin fila» — el pasillo
+# tiene un solo lado de estantería (pegado a la pared). Sin fila el código lleva
+# solo el pasillo (PIK-A-C03-...), así que no choca con PIK-A1/PIK-A2.
+FILAS_VALIDAS = (1, 2, None)
 
-def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
+
+def eje_pasillo_fila(pasillo: str, fila) -> str:
+    """El tramo pasillo+fila del código: 'A1', 'A2', o 'A' si el pasillo no tiene fila."""
+    return f'{pasillo}{fila}' if fila is not None else pasillo
+
+
+def _exigir_pasillo_coherente(almacen_id: int, pasillo: str, fila) -> None:
+    """
+    Un pasillo es entero «con filas» o entero «sin fila»: mezclar los dos en el
+    mismo pasillo deja dos formas de leer la misma estantería y desordena el
+    recorrido de picking (orden_ruta_fisica ordena por fila). Solo se mira el
+    esquema de 5 ejes (cuerpo no nulo) y solo entre ESTANTERÍAS: vitrina y
+    estiba son una sola posición, nunca llevan fila y conviven con cualquier
+    pasillo. Las filas legadas ('estante') no cuentan.
+    """
+    base = Ubicacion.query.filter(
+        Ubicacion.almacen_id == almacen_id,
+        Ubicacion.pasillo == pasillo,
+        Ubicacion.cuerpo.isnot(None),
+        db.or_(Ubicacion.tipo == 'estanteria', Ubicacion.tipo.is_(None)),
+    )
+    if fila is None:
+        choque = base.filter(Ubicacion.fila.isnot(None)).first()
+        if choque:
+            raise ValueError(
+                f'El pasillo {pasillo} ya tiene ubicaciones con fila (ej. {choque.codigo}): '
+                f'no se puede crear una sin fila en el mismo pasillo')
+    else:
+        choque = base.filter(Ubicacion.fila.is_(None)).first()
+        if choque:
+            raise ValueError(
+                f'El pasillo {pasillo} es sin fila (ej. {choque.codigo}): '
+                f'marque «Sin fila» o use otro pasillo')
+
+
+def crear_cuerpo(almacen_id: int, pasillo: str, fila, cuerpo: int,
                  cantidad_entrepanos: int, tipo_zona: str, huecos_por_nivel: list = None,
-                 tipo_mueble: str = 'estanteria'):
+                 tipo_mueble: str = 'estanteria', conservar_fila: bool = False):
     """
     Crea un Cuerpo completo de una vez: sus N Entrepaños (Nivel 1 = piso, subiendo)
     y, dentro de cada Entrepaño, sus Huecos. huecos_por_nivel es una lista de N
@@ -163,23 +203,30 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     — para que no se lea como una bahía de estantería con niveles que no
     existen.
 
-    Dirección física: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo (bahía)
-    -> Nivel (entrepaño) -> Hueco.
+    Dirección física: Pasillo -> Fila (1/2, lado del pasillo; None = el pasillo
+    no tiene fila) -> Cuerpo (bahía) -> Nivel (entrepaño) -> Hueco. Un pasillo
+    no mezcla cuerpos con fila y sin fila (_exigir_pasillo_coherente).
     Código generado (estanteria): {PREFIJO}-{PASILLO}{FILA}-C{CUERPO:02d}-E{NIVEL:02d}-H{HUECO:02d}
+    (sin fila: {PREFIJO}-{PASILLO}-C{CUERPO:02d}-..., ej. PIK-A-C03-E02-H01)
     ej. PIK-A1-C03-E02-H01 — la letra por eje (C/E/H = Cuerpo/Entrepaño/Hueco)
     evita confundir Cuerpo con Nivel al leer el código (antes eran dos dígitos
     seguidos, indistinguibles sin memorizar la posición).
-    Código generado (vitrina/estiba): {PREFIJO}-{PASILLO}{FILA}-{VIT|EST}{CUERPO:02d}
-    ej. PIK-A1-VIT03.
+    Código generado (vitrina/estiba, siempre sin fila): {PREFIJO}-{PASILLO}-{VIT|EST}{CUERPO:02d}
+    ej. PIK-A-VIT03 (las creadas antes de 2026-10-01 conservan su fila: PIK-A1-VIT03).
     """
     if tipo_mueble not in _TIPOS_MUEBLE:
         raise ValueError(f'tipo_mueble debe ser una de {_TIPOS_MUEBLE}')
     if tipo_mueble != 'estanteria':
         cantidad_entrepanos = 1
         huecos_por_nivel = [1]
+        # Vitrina y estiba son una sola posición: nunca llevan fila, venga lo
+        # que venga. Solo la remodulación (conservar_fila) respeta la fila de
+        # una vitrina creada antes de esta regla, para no cambiarle el código.
+        if not conservar_fila:
+            fila = None
 
-    if fila not in (1, 2):
-        raise ValueError('fila debe ser 1 o 2 — cada pasillo tiene exactamente 2 filas')
+    if fila not in FILAS_VALIDAS:
+        raise ValueError('fila debe ser 1, 2 o sin fila')
     if cuerpo < 1:
         raise ValueError('cuerpo debe ser mayor a 0')
     if cantidad_entrepanos < 1:
@@ -197,15 +244,18 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     pasillo = pasillo.strip().upper()
     if not re.fullmatch(r'[A-Z]{1,2}', pasillo):
         raise ValueError('pasillo debe ser una letra o combinación A-Z / AA-ZZ')
+    if tipo_mueble == 'estanteria':
+        _exigir_pasillo_coherente(almacen_id, pasillo, fila)
 
     prefijo = _PREFIJO_ZONA[tipo_zona]
+    eje = eje_pasillo_fila(pasillo, fila)
     creadas = []
     for nivel in range(1, cantidad_entrepanos + 1):
         for hueco in range(1, huecos_por_nivel[nivel - 1] + 1):
             if tipo_mueble == 'estanteria':
-                codigo = f'{prefijo}-{pasillo}{fila}-C{cuerpo:02d}-E{nivel:02d}-H{hueco:02d}'
+                codigo = f'{prefijo}-{eje}-C{cuerpo:02d}-E{nivel:02d}-H{hueco:02d}'
             else:
-                codigo = f'{prefijo}-{pasillo}{fila}-{_SUFIJO_MUEBLE[tipo_mueble]}{cuerpo:02d}'
+                codigo = f'{prefijo}-{eje}-{_SUFIJO_MUEBLE[tipo_mueble]}{cuerpo:02d}'
             if Ubicacion.query.filter_by(codigo=codigo).first():
                 raise ValueError(f'La ubicación {codigo} ya existe')
 
@@ -278,7 +328,7 @@ def _ubicaciones_de_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int
         almacen_id=almacen_id, pasillo=pasillo, fila=fila, cuerpo=cuerpo,
     ).order_by(Ubicacion.nivel, Ubicacion.hueco).all()
     if not ubicaciones:
-        raise ValueError(f'No existe el cuerpo {pasillo}{fila}-C{cuerpo:02d} en este almacén')
+        raise ValueError(f'No existe el cuerpo {eje_pasillo_fila(pasillo, fila)}-C{cuerpo:02d} en este almacén')
     return ubicaciones
 
 
@@ -895,7 +945,7 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     # Borrar huecos actuales (ya sin stock ni historial — limpio)
     for ub in ubicaciones:
         _borrar_ubicacion(ub, usuario_id=usuario_id,
-                          motivo=f'Remodulación del cuerpo {pasillo}-{fila}-{cuerpo}')
+                          motivo=f'Remodulación del cuerpo {eje_pasillo_fila(pasillo, fila)}-C{cuerpo:02d}')
     db.session.flush()
 
     # Reconstruir desde cero con la nueva numeración (misma zona, mismo tipo de mueble) — commitea al final
@@ -903,6 +953,7 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
         almacen_id=almacen_id, pasillo=pasillo, fila=fila, cuerpo=cuerpo,
         cantidad_entrepanos=cantidad_entrepanos, tipo_zona=tipo_zona,
         huecos_por_nivel=huecos_por_nivel, tipo_mueble=tipo_mueble,
+        conservar_fila=True,
     )
 
 

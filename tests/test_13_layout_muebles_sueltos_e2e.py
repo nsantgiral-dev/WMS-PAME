@@ -49,7 +49,7 @@ def test_e2e_crear_vitrina_por_http_aparece_en_layout_con_su_tipo(client, jwt_to
     assert resp.status_code == 201, resp.get_json()
     ubs = resp.get_json()['ubicaciones']
     assert len(ubs) == 1
-    assert ubs[0]['codigo'] == 'PIK-A1-VIT01'
+    assert ubs[0]['codigo'] == 'PIK-A-VIT01'
     assert ubs[0]['tipo'] == 'vitrina'
 
     layout_resp = client.get(
@@ -57,7 +57,7 @@ def test_e2e_crear_vitrina_por_http_aparece_en_layout_con_su_tipo(client, jwt_to
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert layout_resp.status_code == 200
-    encontrada = next(u for u in layout_resp.get_json()['ubicaciones'] if u['codigo'] == 'PIK-A1-VIT01')
+    encontrada = next(u for u in layout_resp.get_json()['ubicaciones'] if u['codigo'] == 'PIK-A-VIT01')
     assert encontrada['tipo'] == 'vitrina'
     assert encontrada['tipo_zona'] == 'PICKING'
     assert encontrada['stock_actual'] == 0
@@ -88,7 +88,7 @@ def test_e2e_asignar_sku_a_vitrina_exige_capacidad_como_cualquier_hueco_picking(
         f'/api/almacenes/{almacen.id}/layout',
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
-    encontrada = next(u for u in layout_resp.get_json()['ubicaciones'] if u['codigo'] == 'PIK-A1-VIT01')
+    encontrada = next(u for u in layout_resp.get_json()['ubicaciones'] if u['codigo'] == 'PIK-A-VIT01')
     assert encontrada['producto_asignado_codigo'] == producto.codigo
     assert encontrada['stock_actual'] == 20
 
@@ -122,7 +122,7 @@ def test_e2e_estiba_en_reserva_permite_varios_skus_sin_capacidad(client, jwt_tok
     )
     assert resp.status_code == 201
     ub = resp.get_json()['ubicaciones'][0]
-    assert ub['codigo'] == 'RES-C1-EST01'
+    assert ub['codigo'] == 'RES-C-EST01'
 
     r1 = client.post(
         f'/api/almacenes/ubicaciones/{ub["id"]}/asignar',
@@ -140,7 +140,7 @@ def test_e2e_estiba_en_reserva_permite_varios_skus_sin_capacidad(client, jwt_tok
         f'/api/almacenes/{almacen.id}/layout',
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
-    encontrada = next(u for u in layout_resp.get_json()['ubicaciones'] if u['codigo'] == 'RES-C1-EST01')
+    encontrada = next(u for u in layout_resp.get_json()['ubicaciones'] if u['codigo'] == 'RES-C-EST01')
     assert encontrada['stock_actual'] == 140  # los dos SKU comparten el mismo hueco de piso
 
 
@@ -201,7 +201,8 @@ def test_e2e_editar_cuerpo_sobre_vitrina_conserva_codigo_y_tipo_por_http(client,
 
     resp = client.put(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 5, 'huecos_por_nivel': [3, 3, 3, 3, 3]},
+        # La vitrina vive sin fila (una sola posición): se la nombra con fila null.
+        json={'pasillo': 'A', 'fila': None, 'cuerpo': 1, 'cantidad_entrepanos': 5, 'huecos_por_nivel': [3, 3, 3, 3, 3]},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert resp.status_code == 200, resp.get_json()
@@ -209,7 +210,7 @@ def test_e2e_editar_cuerpo_sobre_vitrina_conserva_codigo_y_tipo_por_http(client,
     # A pesar de pedir 5 entrepaños x 3 huecos, la vitrina se remodula 1x1 — el
     # tipo se conserva desde el registro existente, editar_cuerpo() no lo pierde.
     assert len(ubs) == 1
-    assert ubs[0]['codigo'] == 'PIK-A1-VIT01'
+    assert ubs[0]['codigo'] == 'PIK-A-VIT01'
     assert ubs[0]['tipo'] == 'vitrina'
 
 
@@ -236,7 +237,7 @@ def test_e2e_crear_averias_por_http_exige_pasillo_como_cualquier_zona(client, jw
     )
     assert resp.status_code == 201, resp.get_json()
     ub = resp.get_json()['ubicaciones'][0]
-    assert ub['codigo'] == 'AVE-D1-EST01'
+    assert ub['codigo'] == 'AVE-D-EST01'
     assert ub['tipo_zona'] == 'AVERIAS'
     assert ub['pasillo'] == 'D'
 
@@ -244,7 +245,7 @@ def test_e2e_crear_averias_por_http_exige_pasillo_como_cualquier_zona(client, jw
         f'/api/almacenes/{almacen.id}/layout',
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
-    encontrada = next(u for u in layout_resp.get_json()['ubicaciones'] if u['codigo'] == 'AVE-D1-EST01')
+    encontrada = next(u for u in layout_resp.get_json()['ubicaciones'] if u['codigo'] == 'AVE-D-EST01')
     assert encontrada['pasillo'] == 'D'  # trazable: se sabe exactamente dónde quedó lo averiado
 
 

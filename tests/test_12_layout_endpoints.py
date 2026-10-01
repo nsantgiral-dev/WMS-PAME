@@ -125,7 +125,7 @@ def test_crear_cuerpo_endpoint_averias_exige_ubicacion_real(client, jwt_token_ad
     assert resp.status_code == 201
     ubs = resp.get_json()['ubicaciones']
     assert len(ubs) == 1
-    assert ubs[0]['codigo'] == 'AVE-A1-EST01'
+    assert ubs[0]['codigo'] == 'AVE-A-EST01'
     assert ubs[0]['tipo_zona'] == 'AVERIAS'
     assert ubs[0]['pasillo'] == 'A'
 

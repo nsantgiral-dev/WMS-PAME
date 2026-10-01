@@ -116,7 +116,7 @@ def test_crear_cuerpo_rechaza_huecos_por_nivel_con_cero(db, almacen):
 
 
 def test_crear_cuerpo_rechaza_fila_invalida(db, almacen):
-    with pytest.raises(ValueError, match='fila debe ser 1 o 2'):
+    with pytest.raises(ValueError, match='fila debe ser 1, 2 o sin fila'):
         svc.crear_cuerpo(almacen.id, 'A', 3, 1, 2, 'PICKING')
 
 
@@ -144,15 +144,16 @@ def test_crear_cuerpo_vitrina_es_una_sola_posicion_con_codigo_propio(db, almacen
     # UI) y el backend no puede confiar en que el cliente los mandó en 1.
     assert len(creadas) == 1
     ub = creadas[0]
-    assert ub.codigo == 'PIK-A1-VIT01'
+    assert ub.codigo == 'PIK-A-VIT01'
     assert ub.tipo == 'vitrina'
     assert ub.tipo_zona == 'PICKING'
-    assert ub.fila == 1 and ub.cuerpo == 1 and ub.nivel == 1 and ub.hueco == 1
+    # vitrina = una sola posición: nunca lleva fila, aunque llegue fila=1.
+    assert ub.fila is None and ub.cuerpo == 1 and ub.nivel == 1 and ub.hueco == 1
 
 
 def test_crear_cuerpo_estiba_en_reserva_codigo_propio(db, almacen):
     ub = svc.crear_cuerpo(almacen.id, 'B', 2, 5, 1, 'RESERVA', tipo_mueble='estiba')[0]
-    assert ub.codigo == 'RES-B2-EST05'
+    assert ub.codigo == 'RES-B-EST05'
     assert ub.tipo == 'estiba'
     assert ub.tipo_zona == 'RESERVA'
 
@@ -168,9 +169,9 @@ def test_editar_cuerpo_conserva_tipo_mueble_al_remodular(db, almacen):
     # aunque el caller pida más entrepaños/huecos, editar_cuerpo delega en
     # crear_cuerpo() con el tipo_mueble original, que fuerza 1x1 igual que
     # en la creación.
-    creadas = svc.editar_cuerpo(almacen.id, 'A', 1, 1, cantidad_entrepanos=3, huecos_por_nivel=[2, 2, 2])
+    creadas = svc.editar_cuerpo(almacen.id, 'A', None, 1, cantidad_entrepanos=3, huecos_por_nivel=[2, 2, 2])
     assert len(creadas) == 1
-    assert creadas[0].codigo == 'PIK-A1-VIT01'
+    assert creadas[0].codigo == 'PIK-A-VIT01'
     assert creadas[0].tipo == 'vitrina'
 
 
@@ -180,10 +181,10 @@ def test_crear_cuerpo_averias_estiba_tiene_ubicacion_real(db, almacen):
     # devuelve — necesita dirección física real, igual que cualquier otra
     # zona, no un simple contador.
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'AVERIAS', tipo_mueble='estiba')[0]
-    assert ub.codigo == 'AVE-A1-EST01'
+    assert ub.codigo == 'AVE-A-EST01'
     assert ub.tipo_zona == 'AVERIAS'
     assert ub.tipo == 'estiba'
-    assert ub.pasillo == 'A' and ub.fila == 1
+    assert ub.pasillo == 'A' and ub.fila is None
     assert ub.origen == 'MANUAL'
 
 

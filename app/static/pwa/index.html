@@ -3514,12 +3514,21 @@
           style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-md);box-sizing:border-box;margin-bottom:12px;">
         </select>
 
-        <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:4px;">Fila</label>
+        <div id="layout-cuerpo-fila-wrap">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <label for="layout-cuerpo-fila" style="font-size:var(--fs-xs);color:var(--tx3);">Fila</label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:var(--fs-xs);color:var(--tx2);cursor:pointer;">
+            <input id="layout-cuerpo-sin-fila" type="checkbox" onchange="layoutCuerpoToggleSinFila()"
+              style="width:18px;height:18px;cursor:pointer;">
+            Sin fila
+          </label>
+        </div>
         <select id="layout-cuerpo-fila"
           style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:var(--fs-md);box-sizing:border-box;margin-bottom:12px;">
           <option value="1">Fila 1</option>
           <option value="2">Fila 2</option>
         </select>
+        </div>
 
         <label style="font-size:var(--fs-xs);color:var(--tx3);display:block;margin-bottom:4px;">Cuerpo (número)</label>
         <input id="layout-cuerpo-numero" type="number" inputmode="numeric" min="1" placeholder="ej. 3"
