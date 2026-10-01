@@ -42,7 +42,10 @@ from datetime import datetime, timedelta
 
 import pytest
 
-_T0 = datetime(2026, 9, 1, 5, 0, 0)
+# Relativo a hoy, no una fecha fija: los campos miran «los últimos 30 días», y
+# con 2026-09-01 escrito a mano la suite se puso roja sola el 2026-10-01.
+# 20 días atrás deja margen para las lecturas que el test corre 13 días adelante.
+_T0 = (datetime.utcnow() - timedelta(days=20)).replace(hour=5, minute=0, second=0, microsecond=0)
 
 
 @pytest.fixture
