@@ -272,6 +272,40 @@ class TestLaColaDeDecisiones:
         assert con['costo_unitario'] == 2000.0
         assert ap['valor_total'] == 4000.0
 
+    def test_entrada_en_bodega_en_cero_no_se_valoriza_con_la_foto(self, db, siesa, tienda):
+        """Producción 2026-10-01 (P197_006, NB1): Siesa en 0 con promedio $4.314
+        en la fila, 21 contadas. La tarjeta decía «$4.314/und · $90.597» y al
+        aprobar sugería $4.251: con existencia 0 Siesa no aplica su promedio y
+        el costo lo elige quien aprueba. La tarjeta no puede valorizar con un
+        costo que no viaja."""
+        a, b, sup = tienda['a'], tienda['b'], tienda['supervisor']
+        _poner(siesa, 0, costo=4314)
+        s = _nuevo_cc1(tienda, _hueco(db, tienda, 201))
+        r = _abrir_y_contar_cc1(s, a, 21)
+        r = _abrir_y_contar(r['segundo_conteo_id'], b, 20)
+        r3 = _abrir_y_contar(r['tercer_conteo_id'], sup, 21)
+        assert r3['resultado'] == 'DESCUADRE' and not r3['ajuste_bloqueado'], r3
+        ap = _tablero(tienda)['decisiones']['ajustes']['aprobables']
+        (f,) = [f for f in ap['filas'] if f['id'] == s]
+        assert f['direccion'] == 'ENTRADA' and f['unidades'] == 21
+        assert f['costo_al_aprobar'] is True
+        assert f['costo_unitario'] is None and f['valor'] is None
+        assert ap['sin_costo'] == 1 and ap['valor_total'] == 0
+
+    def test_entrada_con_existencia_usa_el_promedio_de_la_foto(self, db, siesa, tienda):
+        """El otro lado: con existencia > 0 y promedio, Siesa valoriza con el
+        suyo y la tarjeta lo muestra."""
+        a, b, sup = tienda['a'], tienda['b'], tienda['supervisor']
+        _poner(siesa, 10, costo=2000)
+        s = _nuevo_cc1(tienda, _hueco(db, tienda, 202))
+        r = _abrir_y_contar_cc1(s, a, 9)
+        r = _abrir_y_contar(r['segundo_conteo_id'], b, 8)
+        r3 = _abrir_y_contar(r['tercer_conteo_id'], sup, 12)
+        assert r3['resultado'] == 'DESCUADRE' and not r3['ajuste_bloqueado'], r3
+        (f,) = _tablero(tienda)['decisiones']['ajustes']['aprobables']['filas']
+        assert f['costo_al_aprobar'] is False
+        assert f['costo_unitario'] == 2000.0 and f['valor'] == 4000.0
+
     def test_ajustes_bloqueados_con_motivo_resumido_y_accion(self, mundo, tienda):
         bl = _tablero(tienda)['decisiones']['ajustes']['bloqueados']
         assert bl['total'] == 1 and bl['por_motivo'] == {'SALIDAS_NO_POS': 1}

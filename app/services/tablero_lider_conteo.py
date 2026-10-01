@@ -291,7 +291,15 @@ def _ajustes(almacen_id, rol: str = None, usuario_id: int = None) -> dict:
             bloqueados.append(fila)
             continue
         dif = s.diferencia
-        costo = float(s.costo_prom_uni_siesa) if s.costo_prom_uni_siesa is not None else None
+        # Una ENTRADA sobre una bodega sin promedio —o en existencia 0, donde
+        # Siesa no lo aplica— sale con el costo que decide quien aprueba
+        # (`necesita_costo_explicito`), no con el de la foto. Mostrar el de la
+        # foto valorizaba el ajuste con un costo que no viaja: P197_006 en NB1
+        # (2026-10-01) decía «$4.314/und» y al aprobar sugería $4.251.
+        costo_al_aprobar = (ConteoService._motivo_ajuste_de(s) == 'AJ-ENT'
+                            and ConteoService.necesita_costo_explicito(s))
+        costo = (None if costo_al_aprobar or s.costo_prom_uni_siesa is None
+                 else float(s.costo_prom_uni_siesa))
         valor = None
         if dif is not None and costo is not None and costo > 0:
             valor = round(abs(dif) * costo, 2)
@@ -310,6 +318,7 @@ def _ajustes(almacen_id, rol: str = None, usuario_id: int = None) -> dict:
             direccion=(None if dif is None else ('ENTRADA' if dif > 0 else 'SALIDA')),
             unidades=abs(dif) if dif is not None else None,
             costo_unitario=costo,
+            costo_al_aprobar=costo_al_aprobar,
             valor=valor,
             sin_fila_en_siesa=bool(s.sin_fila_en_siesa),
             dia_conteo=(dia_operativo_de(s.foto_siesa_at).isoformat()

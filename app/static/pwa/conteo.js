@@ -2810,7 +2810,7 @@ function _lAjustes(a, p) {
       `<div style="font-size:var(--fs-xs);font-weight:700;color:${f.direccion === 'ENTRADA' ? 'var(--green)' : 'var(--red)'};">${f.direccion === 'ENTRADA' ? '📦 Sobran' : '📤 Faltan'} ${_lNum(f.unidades)} und · ${_lPlata(f.valor)}</div>`,
       _lProducto(f) + cifras
         + (f.decidio ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(f.decidio)}</div>` : '')
-        + `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">Contado el ${esc(f.dia_conteo || '—')}${f.costo_unitario !== null && f.costo_unitario !== undefined ? ` · costo de la foto $${_lNum(f.costo_unitario)}/und` : ''}</div>`,
+        + `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">Contado el ${esc(f.dia_conteo || '—')}${f.costo_unitario !== null && f.costo_unitario !== undefined ? ` · costo de la foto $${_lNum(f.costo_unitario)}/und` : ''}${f.costo_al_aprobar ? ' · el costo se elige al aprobar (Siesa no tenía con qué valorizar la entrada)' : ''}</div>`,
       botones);
   });
   const filasBl = (bl.filas || []).map(f => {
