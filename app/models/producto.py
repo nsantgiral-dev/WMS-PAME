@@ -19,6 +19,11 @@ class Producto(db.Model):
     punto_pedido = db.Column(db.Integer, default=0)
     clasificacion_abc = db.Column(db.String(1))
     codigo_siesa = db.Column(db.String(50), index=True)
+    #: `f120_id` de Siesa: el NÚMERO del ítem (0017173). La referencia
+    #: (`codigo_siesa`) se renombra en Siesa; el número no. Sin él, un
+    #: renombre dejaba el producto viejo huérfano y el sync creaba otro
+    #: (PAPELSP8985 → P197_006, 2026-10-01). m052itemsiesa; lo llena el sync.
+    id_item_siesa = db.Column(db.Integer, index=True)
     codigo_barras = db.Column(db.String(100))      # EAN/UPC de la unidad suelta
     codigo_barras_empaque = db.Column(db.String(100))  # EAN de la caja/paca/paquete
     unidad_empaque = db.Column(db.String(20))     # ej. 'CJA', 'PAC', 'PQT'

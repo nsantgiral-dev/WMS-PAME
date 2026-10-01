@@ -174,6 +174,30 @@ def _mapas_de_productos(codigos):
     return por_siesa, por_codigo
 
 
+def _mapa_por_item(ids):
+    """Los productos de la página por `id_item_siesa` (`f120_id`), con el mismo
+    desempate que `_mapas_de_productos`: gana el más antiguo."""
+    unicos = [i for i in dict.fromkeys(ids) if i is not None]
+    por_item = {}
+    for i in range(0, len(unicos), _TAM_LOTE_IN):
+        lote = unicos[i:i + _TAM_LOTE_IN]
+        for p in (Producto.query.filter(Producto.id_item_siesa.in_(lote))
+                  .order_by(Producto.id).all()):
+            por_item.setdefault(p.id_item_siesa, p)
+    return por_item
+
+
+def _item_de(row):
+    """`f120_id` como entero, o `None` si no vino o no es un número. Igual que
+    `_referencia_de`: tolerante, nunca levanta."""
+    try:
+        crudo = row.get('f120_id')
+        texto = str(crudo).strip() if crudo is not None else ''
+        return int(texto) if texto else None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def _referencia_de(row):
     """La referencia de una fila, tolerante a basura — solo para la precarga.
 
@@ -209,6 +233,12 @@ def _run_sync(app):
         # `activo` más abajo: sin este número, «la fuente no trae el estado»
         # sería una creencia del docstring en vez de un hecho por corrida.
         sin_estado_en_origen = 0
+        # Ítems cuya referencia cambió en Siesa y se siguieron sobre el MISMO
+        # producto (por `f120_id`), y los que no se pudieron seguir porque ya
+        # había otro producto con la referencia nueva: ese par lo resuelve una
+        # persona (unificar stock, empaques y conteos), no el sync.
+        renombradas = []
+        conflictos_referencia = []
         paginas_leidas = 0
         # ¿Se barrió el catálogo entero? **Sin este campo el resultado no
         # distingue «se leyó todo» de «se leyó lo que dio el tiempo»**, y
@@ -296,6 +326,7 @@ def _run_sync(app):
                 # Precarga de la página: dos SELECT en vez de dos por ítem.
                 por_siesa, por_codigo = _mapas_de_productos(
                     [_referencia_de(r) for r in rows])
+                por_item = _mapa_por_item([_item_de(r) for r in rows])
 
                 for row in rows:
                     try:
@@ -382,12 +413,57 @@ def _run_sync(app):
                         if not trae_estado:
                             sin_estado_en_origen += 1
 
+                        # **El número del ítem manda sobre la referencia**
+                        # (2026-10-01): Siesa renombró 0017173 de PAPELSP8985 a
+                        # P197_006, este `or` no encontró la nueva y creó otro
+                        # producto; el viejo —con las ubicaciones y los
+                        # conteos— quedó apuntando a una referencia que ya no
+                        # existe y sus conteos no podían ajustar nunca.
+                        id_item = _item_de(row)
+                        prod_item = por_item.get(id_item) if id_item is not None else None
                         # Mismo `or` de antes, mismo orden, sin la consulta:
                         # `por_siesa` primero, `por_codigo` después.
-                        prod = por_siesa.get(codigo_siesa) or por_codigo.get(codigo_siesa)
+                        prod_ref = por_siesa.get(codigo_siesa) or por_codigo.get(codigo_siesa)
+                        if (prod_ref is not None and id_item is not None
+                                and prod_ref.id_item_siesa is not None
+                                and prod_ref.id_item_siesa != id_item):
+                            # La referencia es de OTRO ítem de Siesa (se la
+                            # quitaron a uno y se la dieron a éste): escribir
+                            # encima mezclaría dos productos.
+                            prod_ref = None
+                        prod = prod_item or prod_ref
+                        if (prod_item is not None and prod_ref is not None
+                                and prod_ref.id != prod_item.id):
+                            # Dos productos del WMS para el mismo ítem: el que
+                            # ya traía el número y otro con la referencia nueva.
+                            # Se sigue escribiendo sobre el de la referencia
+                            # (como antes) y se reporta el par.
+                            prod = prod_ref
+                            conflictos_referencia.append({
+                                'item': id_item, 'referencia': codigo_siesa,
+                                'producto_con_item': prod_item.id,
+                                'producto_con_referencia': prod_ref.id})
+                            logger.warning(
+                                '[SYNC] Ítem %s: el producto %s lo tenía como %s y el %s '
+                                'ya es %s — dos productos para un ítem; se unifican a mano',
+                                id_item, prod_item.id, prod_item.codigo_siesa,
+                                prod_ref.id, codigo_siesa)
+                        elif (prod_item is not None and prod_item.codigo_siesa
+                                and prod_item.codigo_siesa != codigo_siesa):
+                            renombradas.append({'item': id_item, 'producto': prod_item.id,
+                                                'antes': prod_item.codigo_siesa,
+                                                'ahora': codigo_siesa})
+                            logger.warning(
+                                '[SYNC] Ítem %s renombrado en Siesa: %s → %s (producto %s)',
+                                id_item, prod_item.codigo_siesa, codigo_siesa, prod_item.id)
 
                         if prod:
                             changed = False
+                            if (id_item is not None and prod.id_item_siesa is None
+                                    and (prod_item is None or prod_item.id == prod.id)):
+                                prod.id_item_siesa = id_item
+                                por_item.setdefault(id_item, prod)
+                                changed = True
                             if nombre and prod.nombre != nombre:
                                 prod.nombre = nombre
                                 changed = True
@@ -425,8 +501,16 @@ def _run_sync(app):
                             if changed:
                                 actualizados += 1
                         else:
+                            # `codigo` es UNIQUE y no se renombra: la referencia
+                            # que un ítem renombrado dejó libre puede seguir
+                            # siendo el `codigo` de su producto. `por_codigo` ya
+                            # trae todo `codigo` de las referencias de la página
+                            # (y lo creado en ella): sin consulta por fila.
+                            _codigo_nuevo = (f'{codigo_siesa}-{id_item}'
+                                             if codigo_siesa in por_codigo else codigo_siesa)
                             prod = Producto(
-                                codigo=codigo_siesa,
+                                codigo=_codigo_nuevo,
+                                id_item_siesa=id_item,
                                 nombre=nombre or f'Producto {codigo_siesa}',
                                 codigo_siesa=codigo_siesa,
                                 # Un alta no tiene decisión previa que respetar:
@@ -453,6 +537,8 @@ def _run_sync(app):
                             # productos perdidos por una referencia repetida.
                             por_siesa[codigo_siesa] = prod
                             por_codigo.setdefault(codigo_siesa, prod)
+                            if id_item is not None:
+                                por_item.setdefault(id_item, prod)
 
                     except Exception as e:
                         logger.warning(f'[SYNC] Item inválido: {e}')
@@ -542,6 +628,12 @@ def _run_sync(app):
             # el día que deje de serlo, este número lo dice sin que nadie tenga
             # que acordarse de revisar el DOCX.
             'sin_estado_en_origen': sin_estado_en_origen,
+            # Renombres seguidos por `f120_id`, y los pares que no se pudieron
+            # unificar solos (los primeros 50; el total va aparte).
+            'renombradas': len(renombradas),
+            'renombradas_detalle': renombradas[:50],
+            'conflictos_referencia': len(conflictos_referencia),
+            'conflictos_referencia_detalle': conflictos_referencia[:50],
             'paginas_leidas': paginas_leidas,
             # **El denominador.** `total_procesados: 22.000` sobre un catálogo de
             # 28.000 se leía como el catálogo entero: un conteo sin su base no
