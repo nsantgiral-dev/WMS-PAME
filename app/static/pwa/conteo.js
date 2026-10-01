@@ -1872,7 +1872,7 @@ function conteoHudHtml(h) {
 function _chud(id) {
   const h = CONTEO_HUD;
   const cont = h ? document.getElementById(h.contenedor) : null;
-  return cont ? cont.querySelector('#' + id) : null;
+  return cont ? cont.querySelector(`#${id}`) : null;
 }
 
 /** Los ids de la cámara llevan el contenedor: dos cajas con el mismo id son el
