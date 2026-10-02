@@ -80,10 +80,13 @@ class TestSnapshot:
     def test_snapshot_refleja_el_estado(self):
         cb = ConnektaCircuitBreaker(failure_threshold=5, window_seconds=300, probe_interval=60)
         s = cb.snapshot()
-        assert s == {
+        # 2026-10-02: además, lo que de verdad pasó con Siesa en este proceso
+        # (cerrado es el estado por defecto, no «conectado»).
+        assert {k: s[k] for k in ('state', 'failures_recent', 'failure_threshold', 'opened_at')} == {
             'state': 'CLOSED', 'failures_recent': 0,
             'failure_threshold': 5, 'opened_at': None,
         }
+        assert (s['ultimo_exito'], s['ultimo_fallo'], s['contacto_reciente']) == (None, None, False)
         cb.record_failure()
         assert cb.snapshot()['failures_recent'] == 1
 

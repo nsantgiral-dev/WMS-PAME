@@ -27,6 +27,13 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 _TZ_BOGOTA = ZoneInfo('America/Bogota')
 
+#: Minutos desde la última respuesta de Siesa para decir «respondió» en verde
+#: (2026-10-02). CLOSED es el estado por defecto del breaker: sin esto el
+#: tablero decía «Conectado» aunque este proceso no le hubiera hablado a Siesa
+#: en horas. **El breaker es por proceso**: la web y el worker tienen cada uno
+#: el suyo, y lo que dice es el contacto del servicio que contesta.
+CONTACTO_RECIENTE_MIN = 15
+
 
 class ConnektaCircuitBreaker:
 
@@ -41,6 +48,11 @@ class ConnektaCircuitBreaker:
         self.failure_threshold = failure_threshold
         self.window_seconds = window_seconds
         self.probe_interval = probe_interval
+        # Tiempo de PARED (UTC), no monotonic: es lo que se le muestra a una
+        # persona («respondió hace 4 min») y lo que sobrevive a comparar entre
+        # llamadas de distintos hilos.
+        self.ultimo_exito = None
+        self.ultimo_fallo = None
 
     def record_failure(self, on_trip=None):
         """Registra un fallo. Si alcanza el threshold, trip a OPEN.
@@ -51,6 +63,7 @@ class ConnektaCircuitBreaker:
         """
         now = time.monotonic()
         with self.lock:
+            self.ultimo_fallo = datetime.utcnow()
             self.failures.append(now)
             # Limpiar fallos fuera de la ventana
             cutoff = now - self.window_seconds
@@ -84,6 +97,7 @@ class ConnektaCircuitBreaker:
     def record_success(self):
         """Registra un éxito. Si estamos en HALF_OPEN, cierra el circuit."""
         with self.lock:
+            self.ultimo_exito = datetime.utcnow()
             if self.state == 'HALF_OPEN':
                 self.state = 'CLOSED'
                 self.failures.clear()
@@ -157,11 +171,27 @@ class ConnektaCircuitBreaker:
             now = time.monotonic()
             cutoff = now - self.window_seconds
             recent = len([t for t in self.failures if t > cutoff])
+            ahora = datetime.utcnow()
+
+            def _iso(t):
+                return t.isoformat() + 'Z' if t else None
+
+            def _min(t):
+                return max(0, int((ahora - t).total_seconds() // 60)) if t else None
             return {
                 'state': self.state,
                 'failures_recent': recent,
                 'failure_threshold': self.failure_threshold,
                 'opened_at': self.opened_at,
+                # Lo que de verdad pasó con Siesa en ESTE proceso.
+                'ultimo_exito': _iso(self.ultimo_exito),
+                'ultimo_fallo': _iso(self.ultimo_fallo),
+                'minutos_desde_exito': _min(self.ultimo_exito),
+                'minutos_desde_fallo': _min(self.ultimo_fallo),
+                'contacto_reciente_min': CONTACTO_RECIENTE_MIN,
+                'contacto_reciente': (self.ultimo_exito is not None
+                                      and _min(self.ultimo_exito) <= CONTACTO_RECIENTE_MIN),
+                'alcance': 'este_servicio',
             }
 
 
