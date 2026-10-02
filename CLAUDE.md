@@ -8544,3 +8544,60 @@ que no cuadra ya se rechazó antes.
   combinación.
 - **«Paquetes por completar»** solo lista: completarlos es en Siesa (la unidad
   de empaque del ítem y su factor); el WMS los lee en el sync de las 02:30.
+
+### La revisión del mismo día, y «un mensaje solo afirma lo que un dato prueba» (2026-10-02)
+
+La revisión de 5cbc13c3..fd01da38 encontró diez defectos; se cerraron con el
+pedido del dueño de ver el nombre del producto y de dónde se pidió, y tres
+pantallas que afirmaban algo que ningún dato probaba. Trinquete:
+`tests/test_traslado_nombre_origen_actividad.py`.
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **Lo que va a Siesa** (GRAVE) | `_resolver_empaque` pasó a `empaque_de`, que incluye los paquetes **sin código** del sync: más productos salían a Siesa como PQ fraccionado — y al dueño se le había dicho que eso no cambiaba | `empaque_producto.unidad_para_siesa`: la regla de ANTES, idéntica (Producto con factor > 1; si no, la fila de menor factor **con código de barras**). Única diferencia deliberada: una paca `WMS_LPN` no cuenta. **No es `empaque_de`**: una dice cómo se ve y se pide, la otra en qué unidad viaja el documento |
+| **STS y ETS** | El ETS resolvía la unidad de nuevo: si el sync de las 02:30 cambiaba el paquete entre el despacho y la recepción, salida y entrada viajaban en unidades distintas | `traslado_service._unidades_del_sts`: la recepción reusa la unidad del payload del job `DESPACHO_TRASLADO` completado (cierre de packing). **Sin job** (el despacho manual llama a Siesa en línea y no guarda payload) se resuelve con la misma regla. El reintento manual del ETS (`routes/traslados.py`) sigue mandando unidades sin paquete, como antes: no se tocó |
+| **Escaneo** | `descomponer_en_empaques` tomaba el mayor factor SIESA_GS1, ahora incluidos los sin código: «cada scan = 144 und» sobre LPNs de 12 | Solo paquetes con código de barras |
+| **Unidad base** | El sync desactivaba el código de una unidad que no es `UND` y no está en q35 — también el EAN de la unidad **base** del ítem (RES, PAR…), que dejaba de escanearse | La unidad base (`Producto.unidad_medida`) vale 1 aunque q35 no la liste; solo una unidad **distinta** a la base sin factor se descarta |
+| **Paquete que Siesa quitó** | La fila sin código quedaba activa para siempre | Se apaga si q35 ya no la reporta, **solo con la lectura de q35 completa** (`FactoresQ35.completa`: hasta la página vacía, sin saltarse ninguna). Parcial: no se apaga nada y el resultado lo dice (`q35_completa`, `paquetes_sin_codigo_retirados`) |
+| **Lista de compras** | `declarado_sin_factor` miraba solo `producto_empaques` | Usa `empaques_de` (la misma política): lo que ya se pide por paquete no se reporta |
+| **N+1** | `SolicitudTraslado.to_dict` hacía 1–3 consultas por solicitud en cada lista | `SolicitudTraslado.lista_a_dict`: paquetes, tareas de picking y de packing una vez para toda la lista (las cuatro listas de `routes/traslados.py`) |
+| **Pedir de la tienda** | `empaques_por_id` cargaba ~4.000 `Producto` ORM por apertura | Lee solo `id, unidad_empaque, factor_conversion` |
+| **Enteros** | `_entero` copiaba `MobileService._entero_no_negativo`; `descomponer()` sin caller | `app/utils/entero_json.entero_no_negativo`, la única; `descomponer` se borró |
+| **Aprobar sin disponible** | `disponible_siesa` nulo → «no alcanza un paquete completo» | «sin dato de disponible» (desconocido ≠ insuficiente, Regla 0); arranca en paquetes |
+
+**Nombre y origen (pedido del dueño):** en Mis pedidos de la tienda, la
+tarjeta del admin, la del operario, los dos modales de aprobar, Recibir
+traslado y la tarjeta de Requisiciones, cada línea dice el **nombre** del
+producto (la referencia, pequeña y gris al lado) y la tarjeta dice de dónde se
+pidió («Pedido a Bodega Principal (NB1)»; en el admin «Bodega Principal (NB1) →
+Pitalito Centro (PC1)»). Una función por pregunta en `util.js`:
+`nombreBodega`, `destinoTraslado`, `rutaTraslado`, `lineaNombre`, `lineaRef`.
+El mapa de nombres (`BODEGA_NOMBRES`) salió de `traslados.js` — los de
+`tienda.js` y `app.js` siguen (cosméticos, ver «Las tres listas de bodegas»).
+
+**«Pickeando» y «empacando» con datos** — `app/services/traslado_actividad.py`:
+la tarjeta de Requisiciones decía «🔍 Operario pickeando...» solo porque el
+estado era `EN_PICKING`. Ahora `picking_de`/`actividad_picking` leen las
+`TareaPicking` (`SIN_TAREAS` · `SIN_TOMAR` · `SIN_ACTIVIDAD` · `ACTIVO` ·
+`COMPLETO`, con operarios, líneas y minutos) y `packing_de` la tarea de
+empaque (`SIN_ASIGNAR` · `SIN_ACTIVIDAD` · `ACTIVO` · `TERMINADO`): nunca
+«empacando» si nadie empezó. **`UMBRAL_SIN_ACTIVIDAD_MIN = 30`**, una
+constante del servidor; la pantalla no juzga. **Sin sello por escaneo**:
+`TareaPicking` guarda cuándo se tomó y cuándo se terminó una línea, no cada
+escaneo — la pantalla dice «tomó/terminó una línea hace N min», no «último
+escaneo», y un picker escaneando una línea larga sin terminarla aparece «sin
+actividad» (el lado conservador). La misma regla la usa el empacador:
+`_picking_listo_batch` (`routes/packing.py`) devuelve `picking_actividad` y
+`textoEsperaPicking` (util.js) separa «Nadie ha tomado el picking», «X está
+pickeando» y «Asignado a X, sin actividad hace N h» (antes: «El operario aún
+está pickeando» también con un picking PENDIENTE sin dueño).
+
+**El semáforo de Siesa** decía «Conectado» porque el circuito estaba
+`CLOSED`, su estado por defecto aunque nadie le hubiera hablado a Siesa en
+horas. `ConnektaCircuitBreaker` guarda `ultimo_exito` y `ultimo_fallo`
+(tiempo de pared UTC) y `snapshot()` los publica con
+`contacto_reciente` (`CONTACTO_RECIENTE_MIN = 15`). Verde «Respondió hace N
+min (este servicio)» solo con éxito reciente; si no, gris «Sin contacto
+reciente con Siesa». **El breaker es por proceso**: la web y el worker tienen
+cada uno el suyo, y el tablero (servido por la web) dice el contacto de la web
+— que puede no haberle hablado a Siesa aunque el worker sí.
