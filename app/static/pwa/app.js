@@ -1118,7 +1118,11 @@ async function cargarDashboard() {
     } else if (siesa.modo_ensayo) {
       _semaforo('sem-siesa', 'amarillo', 'Ensayo');
     } else {
-      _semaforo('sem-siesa', 'verde', 'Conectado');
+      // «Cerrado» es el estado por defecto del circuito aunque nadie le haya
+      // hablado a Siesa en horas: verde solo con una respuesta reciente, y es
+      // la de ESTE servicio (la web y el worker tienen cada uno su circuito).
+      const s = textoContactoSiesa(cb);
+      _semaforo('sem-siesa', s.color, s.texto);
     }
 
     // ── Gráfica tendencia 7 días ───────────────────────────────────

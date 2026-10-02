@@ -236,7 +236,9 @@ async function empIniciarHUD(packingId) {
 
     // Bloquear si el picking aún no está completo
     if (t.picking_listo === false && t.estado === 'PENDIENTE') {
-      alerta('El operario aún está pickeando — espere a que termine', 'advertencia');
+      // Solo afirma lo que el dato prueba: `picking_listo === false` también
+      // es un picking que nadie tomó (2026-10-02).
+      alerta(textoEsperaPicking(t.picking_actividad), 'advertencia');
       return;
     }
 

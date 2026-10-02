@@ -89,10 +89,6 @@ async function pickingYaVolvi() {
 }
 
 /**
- * Renderiza la tarea activa en el HUD del operario.
- * @param {{tipo: string, producto_codigo: string, producto_nombre: string, cantidad_requerida: number, cantidad_escaneada: number, ubicacion: string, referencia: string, lote: string, factor_conversion: number, unidad_empaque: string, empaques_escaneados: number, conteo_intercalado: Object|null}} t
- */
-/**
  * «+5 und · de 2 PQ + 5 und»: lo recogido (paquetes en grande, las sueltas
  * acá) contra lo pedido, en paquetes completos más sueltas. Texto plano.
  */
@@ -103,6 +99,10 @@ function _pickingTextoPaquetes(pkgs, sueltas, req, factor, unidad) {
   return `${tengo}de ${reqP} ${unidad}${reqS > 0 ? ` + ${reqS} und` : ''}`;
 }
 
+/**
+ * Renderiza la tarea activa en el HUD del operario.
+ * @param {{tipo: string, producto_codigo: string, producto_nombre: string, cantidad_requerida: number, cantidad_escaneada: number, ubicacion: string, referencia: string, lote: string, factor_conversion: number, unidad_empaque: string, empaques_escaneados: number, conteo_intercalado: Object|null}} t
+ */
 function renderTarea(t) {
   // El conteo tiene su propio HUD (conteo.js), compartido con el Conteo
   // Definitivo: producto en grande, cantidad tecleable, cierres explícitos.

@@ -195,7 +195,10 @@ function empaqueDeLinea(item, unidades) {
 function empaqueInicial(emp, disponible, inicial) {
   if (inicial) return { paquetes: inicial.paquetes || 0, sueltas: inicial.sueltas || 0 };
   const f = empaqueFactor(emp);
-  if (f && Number(disponible) >= f) return { paquetes: 1, sueltas: 0 };
+  const sinDato = disponible === null || disponible === undefined || disponible === '';
+  // Sin dato de disponible arranca igual en paquetes (lo que decidió el
+  // dueño para un producto que viene en paquete); el servidor valida.
+  if (f && (sinDato || Number(disponible) >= f)) return { paquetes: 1, sueltas: 0 };
   return { paquetes: 0, sueltas: 1 };
 }
 
@@ -212,7 +215,11 @@ function empaqueCasillasHtml(id, emp, disponible, inicial, minimo) {
   if (!f) {
     return `<input type="number" min="${min}" value="${esc(ini.sueltas)}" id="${seguro}-und" aria-label="Unidades" style="${caja}">`;
   }
-  const alcanza = Number(disponible) >= f;
+  // Desconocido no es insuficiente (Regla 0): sin dato de disponible no se
+  // afirma que no alcance un paquete — se dice que no hay dato.
+  const sinDato = disponible === null || disponible === undefined || disponible === '';
+  const alcanza = !sinDato && Number(disponible) >= f;
+  const aviso = sinDato ? ' · sin dato de disponible' : (alcanza ? '' : ' · no alcanza un paquete completo');
   return `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;">
     <div style="display:flex;align-items:center;gap:4px;">
       <input type="number" min="0" value="${esc(ini.paquetes)}" id="${seguro}-pq" aria-label="Paquetes"
@@ -223,7 +230,7 @@ function empaqueCasillasHtml(id, emp, disponible, inicial, minimo) {
         oninput="empaqueActualizarTotal('${seguro}', ${f})" style="${caja}">
       <span style="font-size:var(--fs-xs);color:var(--tx2);">und</span>
     </div>
-    <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(empaqueEtiqueta(emp))}${alcanza ? '' : ' · no alcanza un paquete completo'}</div>
+    <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(empaqueEtiqueta(emp))}${esc(aviso)}</div>
     <div id="${seguro}-total" style="font-size:var(--fs-xs);font-weight:700;color:var(--ok-tx);">= ${esc(_empNum(ini.paquetes * f + ini.sueltas))} und</div>
   </div>`;
 }
@@ -253,4 +260,99 @@ function empaqueActualizarTotal(id, factor) {
   };
   const el = document.getElementById(`${seguro}-total`);
   if (el) el.textContent = `= ${_empNum(v('pq') * f + v('und'))} und`;
+}
+
+
+/* ── Bodegas y líneas de un traslado (2026-10-02) ────────────────────────────
+ *
+ * El dueño pidió que todo pedido de traslado diga DE DÓNDE se pidió y el
+ * NOMBRE del producto, no la referencia. Una función por pregunta, la misma en
+ * tienda, admin, operario y recepción. Texto plano: quien lo pinta lo escapa.
+ */
+
+/** Nombres de las bodegas operadas — el maestro de CLAUDE.md («Bodegas y
+ *  Centros de Operación»). Antes vivía en traslados.js (`_REQ_BODEGA_NOMBRES`). */
+const BODEGA_NOMBRES = {
+  'NB1': 'Bodega Principal', 'NC1': 'Neiva Centro', 'NS1': 'Neiva Sur Principal',
+  'NS2': 'Neiva Sur Fundación (parqueo licitaciones)',
+  'FC1': 'Florencia Centro', 'PC1': 'Pitalito Centro',
+  'PT1': 'Pitalito Terminal', 'FF1': 'Feria Florencia', 'FN1': 'Santa Lucía Plaza', 'FP1': 'Feria Pitalito',
+};
+
+/** «Bodega Principal (NB1)»; un código que no está en el maestro, tal cual. */
+function nombreBodega(id) {
+  if (!id) return '—';
+  return BODEGA_NOMBRES[id] ? `${BODEGA_NOMBRES[id]} (${id})` : String(id);
+}
+
+/** El destino de un traslado: el maestro si lo conoce, si no el nombre del
+ *  punto de venta que guardó la solicitud. */
+function destinoTraslado(s) {
+  const d = s && s.bodega_destino_siesa;
+  if (d && BODEGA_NOMBRES[d]) return nombreBodega(d);
+  if (s && s.nombre_punto_venta) return d ? `${s.nombre_punto_venta} (${d})` : String(s.nombre_punto_venta);
+  return nombreBodega(d);
+}
+
+/** «Bodega Principal (NB1) → Pitalito Centro (PC1)». */
+function rutaTraslado(s) {
+  return `${nombreBodega(s && s.bodega_origen_siesa)} → ${destinoTraslado(s)}`;
+}
+
+/** El nombre del producto de una línea; la referencia solo si no hay nombre. */
+function lineaNombre(i) {
+  return (i && (i.producto_nombre || i.producto_codigo_siesa || i.producto_codigo)) || '—';
+}
+
+/** La referencia de una línea (para bodega, pequeña y gris), o '' si ya es
+ *  lo que se mostró como nombre. */
+function lineaRef(i) {
+  const ref = (i && (i.producto_codigo_siesa || i.producto_codigo)) || '';
+  return ref && ref !== lineaNombre(i) ? ref : '';
+}
+
+/** «12 min», «3 h», «2 días»: cuánto hace, desde minutos que manda el
+ *  servidor (él mide con su reloj; el del teléfono puede estar corrido). */
+function haceTexto(minutos) {
+  const m = Math.max(0, Math.trunc(Number(minutos) || 0));
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} h`;
+  return `${Math.floor(h / 24)} días`;
+}
+
+/** Qué pasa con el picking que el empacador espera (`picking_actividad`,
+ *  de `traslado_actividad.actividad_picking`). Nunca dice «está pickeando» si
+ *  nadie tomó el picking ni si nada se movió en el umbral. Texto plano. */
+function textoEsperaPicking(a) {
+  if (!a) return 'El picking de este pedido todavía no está completo';
+  const quien = (a.operarios || []).join(', ');
+  const hace = a.minutos != null ? haceTexto(a.minutos) : '—';
+  switch (a.actividad) {
+    case 'SIN_TOMAR':
+      return a.completadas > 0
+        ? `Nadie ha tomado las líneas que faltan del picking (${a.completadas} de ${a.total} recogidas)`
+        : 'Nadie ha tomado el picking de este pedido todavía';
+    case 'ACTIVO':
+      return `${quien} está pickeando (${a.ultima_actividad === 'TERMINADA' ? 'terminó una línea' : 'tomó una línea'} hace ${hace})`;
+    case 'SIN_ACTIVIDAD':
+      return `Asignado a ${quien}, sin actividad hace ${hace}`;
+    default:
+      return 'El picking de este pedido todavía no está completo';
+  }
+}
+
+/** El semáforo de Siesa con lo que pasó de verdad: `cb` es el
+ *  `circuit_breaker` del servidor (`ConnektaCircuitBreaker.snapshot`).
+ *  Verde solo si este servicio tuvo una respuesta de Siesa hace poco
+ *  (`contacto_reciente`, umbral del servidor); si no, gris. Texto plano. */
+function textoContactoSiesa(cb) {
+  const c = cb || {};
+  if (c.contacto_reciente && c.minutos_desde_exito != null) {
+    return { color: 'verde', texto: `Respondió hace ${haceTexto(c.minutos_desde_exito)} (este servicio)` };
+  }
+  if (c.minutos_desde_exito != null) {
+    return { color: 'gris', texto: `Sin contacto reciente con Siesa: la última respuesta a este servicio fue hace ${haceTexto(c.minutos_desde_exito)}` };
+  }
+  return { color: 'gris', texto: 'Sin contacto reciente con Siesa (este servicio no le ha hablado desde que arrancó)' };
 }

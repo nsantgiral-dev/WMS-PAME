@@ -141,7 +141,7 @@ function _renderTrasladoCard(s) {
       ? ` <span style="color:var(--warn-tx);">(aprobado: ${esc(empaqueTexto(i.cantidad_aprobada, i.empaque))})</span>` : '';
     const enviado = i.cantidad_enviada > 0
       ? ` <span style="color:var(--ok-tx);">→ enviado: ${esc(empaqueTexto(i.cantidad_enviada, i.empaque))}</span>` : '';
-    return `<div style="font-size:var(--fs-md);color:var(--tx3);">${esc(i.producto_codigo || i.producto_nombre)} · ${esc(empaqueDeLinea(i))}${aprobado}${enviado}</div>`;
+    return `<div style="font-size:var(--fs-md);color:var(--tx3);"><span style="color:var(--tx2);">${esc(lineaNombre(i))}</span>${lineaRef(i) ? `<span style="font-size:var(--fs-xs);"> · ${esc(lineaRef(i))}</span>` : ''} · ${esc(empaqueDeLinea(i))}${aprobado}${enviado}</div>`;
   }).join('');
 
   // Barra de progreso picking
@@ -153,7 +153,7 @@ function _renderTrasladoCard(s) {
     pickingInfo = `
       <div style="margin:8px 0 4px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <span style="font-size:var(--fs-sm);color:var(--tx2);">Picking: ${esc(pp.completadas)}/${esc(pp.total)} tareas</span>
+          <span style="font-size:var(--fs-sm);color:${esc(_reqActividadPicking(pp).color)};">${esc(_reqActividadPicking(pp).texto)}</span>
           <span style="font-size:var(--fs-sm);color:${barColor};font-weight:700;">${pct}%</span>
         </div>
         <div style="height:4px;background:var(--bg-s2);border-radius:4px;overflow:hidden;">
@@ -319,7 +319,7 @@ function _renderTrasladoCard(s) {
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
       <div>
         <div style="font-size:17px;font-weight:700;">${esc(s.codigo)}</div>
-        <div style="font-size:var(--fs-md);color:var(--tx3);margin-top:2px;">${esc(s.nombre_punto_venta || s.bodega_destino_siesa)} · ${fecha} ${alertaAntiguedad}</div>
+        <div style="font-size:var(--fs-md);color:var(--tx3);margin-top:2px;">${esc(rutaTraslado(s))} · ${fecha} ${alertaAntiguedad}</div>
       </div>
       <span style="background:${col};color:#fff;font-size:19px;font-weight:700;padding:3px 8px;border-radius:8px;white-space:nowrap;">${s.estado.replace(/_/g, ' ')}</span>
     </div>
@@ -662,13 +662,13 @@ async function cargarTrasladosOperario() {
 function _renderTrasladoOperario(t) {
   const itemsHtml = (t.items || []).map(i => {
     const cant = i.cantidad_aprobada || i.cantidad_solicitada;
-    return `<div style="font-size:var(--fs-xs);color:var(--tx2);">${esc(i.producto_codigo)} — <b style="color:var(--tx);">${esc(empaqueDeLinea(i, cant))}</b></div>`;
+    return `<div style="font-size:var(--fs-xs);color:var(--tx2);">${esc(lineaNombre(i))}${lineaRef(i) ? `<span style="color:var(--tx3);"> · ${esc(lineaRef(i))}</span>` : ''} — <b style="color:var(--tx);">${esc(empaqueDeLinea(i, cant))}</b></div>`;
   }).join('');
   return `
     <div style="background:var(--lila-bg);border:1px solid var(--lila-brd);border-radius:12px;padding:14px;margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <div style="font-size:var(--fs-sm);font-weight:700;">${esc(t.codigo)}</div>
-        <span style="font-size:var(--fs-xs);color:var(--lila-tx);">${esc(t.nombre_punto_venta || t.bodega_destino_siesa)}</span>
+        <span style="font-size:var(--fs-xs);color:var(--lila-tx);">${esc(rutaTraslado(t))}</span>
       </div>
       <div style="margin-bottom:10px;">${itemsHtml}</div>
       <button onclick="trasConfirmarRecogida(${esc(t.id)})"
@@ -765,10 +765,6 @@ async function trasReasignarOperario(id) {
 }
 
 /**
- * Open the approval modal to approve quantities and assign an operario.
- * @param {number} id - Traslado solicitud ID.
- */
-/**
  * Casillas para ajustar lo aprobado de una línea (paquetes + sueltas si el
  * producto viene en paquete). Arranca en lo pedido: como lo pidió la persona
  * si el factor sigue igual, si no la cantidad descompuesta.
@@ -792,6 +788,10 @@ function _trasLeerAprobado(i, prefijo) {
     : { cantidad_aprobada: total };
 }
 
+/**
+ * Open the approval modal to approve quantities and assign an operario.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasAprobar(id) {
   // Carga solicitud y operarios en paralelo
   let solicitud, operariosData;
@@ -808,7 +808,8 @@ async function trasAprobar(id) {
   const filasItems = items.map(i => `
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
       <div style="flex:1;font-size:var(--fs-xs);">
-        <div style="font-weight:600;">${esc(i.producto_codigo)}</div>
+        <div style="font-weight:600;">${esc(lineaNombre(i))}</div>
+        ${lineaRef(i) ? `<div style="color:var(--tx3);font-size:var(--fs-xs);">${esc(lineaRef(i))}</div>` : ''}
         <div style="color:var(--tx3);font-size:var(--fs-xs);">Solicitado: ${esc(empaqueDeLinea(i))} · Disp. Siesa: ${esc(i.disponible_siesa != null ? empaqueTexto(i.disponible_siesa, i.empaque) : '—')}</div>
       </div>
       <div style="display:flex;align-items:center;gap:4px;">
@@ -825,7 +826,7 @@ async function trasAprobar(id) {
     <div style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
       <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:440px;border:1px solid #166534;max-height:85vh;overflow-y:auto;">
         <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Aprobar y asignar traslado</div>
-        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">${esc(solicitud.nombre_punto_venta || solicitud.bodega_destino_siesa)}</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">${esc(rutaTraslado(solicitud))}</div>
 
         <div style="font-size:var(--fs-xs);font-weight:600;margin-bottom:8px;color:var(--tx2);">CANTIDADES A ENVIAR</div>
         ${filasItems}
@@ -1201,18 +1202,59 @@ async function reqIrPagina(p) {
   document.getElementById('req-lista')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-const _REQ_BODEGA_NOMBRES = {
-  'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal',
-  'NS2':'Neiva Sur Fundación (parqueo licitaciones)',
-  'FC1':'Florencia Centro','PC1':'Pitalito Centro',
-  'PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Santa Lucía Plaza','FP1':'Feria Pitalito',
-};
-/**
- * @param {number} id - Warehouse ID.
- * @returns {string} Display name for the warehouse.
+/* ── ¿Alguien está de verdad pickeando o empacando? (2026-10-02) ───────────
+ *
+ * La tarjeta decía «🔍 Operario pickeando...» solo porque la solicitud estaba
+ * en EN_PICKING. El servidor (`traslado_actividad`) mira las tareas reales y
+ * manda `actividad` + `minutos`; acá solo se pone en palabras. El umbral
+ * (`UMBRAL_SIN_ACTIVIDAD_MIN`, 30 min) vive en el servidor, no se repite acá.
  */
-function _reqNombreBodega(id) {
-  return id ? (_REQ_BODEGA_NOMBRES[id] ? `${_REQ_BODEGA_NOMBRES[id]} (${id})` : id) : '—';
+
+/** `{texto, color}` del picking de una solicitud. Texto plano. */
+function _reqActividadPicking(pp) {
+  if (!pp) return { texto: 'Sin datos de picking', color: 'var(--tx3)' };
+  const lineas = `${pp.completadas} de ${pp.total} línea${pp.total === 1 ? '' : 's'}`;
+  const hace = pp.minutos != null ? haceTexto(pp.minutos) : null;
+  const quien = (pp.operarios || []).join(', ');
+  switch (pp.actividad) {
+    case 'SIN_TAREAS':
+      return { texto: '⚠ Sin tareas de picking: revisar', color: 'var(--err-tx)' };
+    case 'SIN_TOMAR': {
+      const antes = (pp.operarios_anteriores || []).length ? ` · la trabajó ${pp.operarios_anteriores.join(', ')}` : '';
+      return pp.completadas > 0
+        ? { texto: `Nadie tiene las líneas que faltan · ${lineas} · esperando picker${antes}`, color: 'var(--warn-tx)' }
+        : { texto: `Nadie la ha tomado · esperando picker${hace ? ` desde hace ${hace}` : ''}${antes}`, color: 'var(--warn-tx)' };
+    }
+    case 'SIN_ACTIVIDAD':
+      return { texto: `Asignada a ${quien} · sin actividad hace ${hace || '—'} · ${lineas}`, color: 'var(--warn-tx)' };
+    case 'ACTIVO': {
+      const que = pp.ultima_actividad === 'TERMINADA' ? 'terminó una línea' : 'tomó una línea';
+      return { texto: `${quien} pickeando · ${lineas} · ${que} hace ${hace}`, color: 'var(--info-tx)' };
+    }
+    case 'COMPLETO':
+      return { texto: `Picking completo · ${lineas}`, color: 'var(--ok-tx)' };
+    default:
+      return { texto: `Picking · ${lineas}`, color: 'var(--tx2)' };
+  }
+}
+
+/** `{texto, color}` del empaque de una solicitud. Nunca dice «empacando» si
+ *  nadie empezó. Texto plano. */
+function _reqActividadPacking(pk, origen) {
+  if (!pk) return { texto: '📦 Sin tarea de empaque: revisar', color: 'var(--err-tx)' };
+  const hace = pk.minutos != null ? haceTexto(pk.minutos) : null;
+  switch (pk.actividad) {
+    case 'SIN_ASIGNAR':
+      return { texto: `📦 Empaque sin asignar · esperando empacador${hace ? ` desde hace ${hace}` : ''}`, color: 'var(--warn-tx)' };
+    case 'SIN_ACTIVIDAD':
+      return { texto: `📦 Asignado a ${pk.empacador || '—'} · sin actividad hace ${hace || '—'}`, color: 'var(--warn-tx)' };
+    case 'ACTIVO':
+      return { texto: `📦 ${pk.empacador} empacando en ${nombreBodega(origen)} · empezó hace ${hace}`, color: 'var(--orange)' };
+    case 'TERMINADO':
+      return { texto: '📦 Empaque terminado', color: 'var(--ok-tx)' };
+    default:
+      return { texto: `📦 Empaque ${pk.estado || ''}`.trim(), color: 'var(--tx2)' };
+  }
 }
 
 /**
@@ -1235,14 +1277,16 @@ function _renderRequisicionCard(r) {
 
   const itemsHtml = items.slice(0, 4).map(i =>
     `<div style="display:flex;justify-content:space-between;font-size:var(--fs-xs);color:var(--tx3);padding:2px 0;">
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">${esc(i.producto_nombre || i.producto_codigo_siesa || '—')}</span>
-      <span style="font-weight:600;color:var(--tx2);">${esc(i.cantidad_solicitada)}</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;">${esc(lineaNombre(i))}${lineaRef(i) ? `<span style="color:var(--tx3);opacity:.8;"> · ${esc(lineaRef(i))}</span>` : ''}</span>
+      <span style="font-weight:600;color:var(--tx2);text-align:right;">${esc(empaqueDeLinea(i))}</span>
     </div>`
   ).join('');
   const masItems = items.length > 4
     ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">+${items.length - 4} más</div>`
     : '';
 
+  const actPick = _reqActividadPicking(r.picking_progreso);
+  const actPack = _reqActividadPacking(r.packing_info, r.bodega_origen_siesa);
   const accionBtn =
     r.estado === 'ENVIADA'
       ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -1263,11 +1307,11 @@ function _renderRequisicionCard(r) {
            </button>
          </div>`
     : r.estado === 'EN_PICKING'
-      ? `<span style="font-size:var(--fs-xs);color:var(--info-tx);font-weight:600;">🔍 Operario pickeando...</span>`
+      ? `<span style="font-size:var(--fs-xs);color:${esc(actPick.color)};font-weight:600;">🔍 ${esc(actPick.texto)}</span>`
     : r.estado === 'EN_PACKING'
       ? `<div style="text-align:right;">
-           <span style="font-size:var(--fs-xs);color:var(--orange);font-weight:600;">📦 Empacando en ${_reqNombreBodega(r.bodega_origen_siesa)}...</span>
-           ${r.packing_info ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(r.packing_info.codigo)} · ${esc(r.packing_info.empacador || 'sin asignar')}</div>` : ''}
+           <span style="font-size:var(--fs-xs);color:${esc(actPack.color)};font-weight:600;">${esc(actPack.texto)}</span>
+           ${r.packing_info ? `<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(r.packing_info.codigo)}</div>` : ''}
          </div>`
     : r.estado === 'PREPARADO'
       ? `<button onclick="despacharRequisicion(${esc(r.id)})"
@@ -1276,7 +1320,7 @@ function _renderRequisicionCard(r) {
            🚚 Despachar
          </button>`
     : r.estado === 'EN_TRANSITO'
-      ? `<span style="font-size:var(--fs-xs);color:var(--info-tx);font-weight:600;">🚚 En camino a ${_reqNombreBodega(r.bodega_destino_siesa)}</span>`
+      ? `<span style="font-size:var(--fs-xs);color:var(--info-tx);font-weight:600;">🚚 En camino a ${esc(destinoTraslado(r))}</span>`
     : r.estado === 'ENTREGADA'
       ? `<span style="font-size:var(--fs-xs);color:var(--ok-tx);font-weight:600;">✓ Recibido${r.fecha_entrega ? ' · ' + new Date(r.fecha_entrega).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : ''}</span>`
     : '';
@@ -1288,11 +1332,11 @@ function _renderRequisicionCard(r) {
           <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx1);">${esc(r.codigo)}</div>
           <div style="display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap;">
             <span style="font-size:var(--fs-xs);font-weight:600;padding:2px 7px;border-radius:4px;background:#1e3a5f;color:var(--info-tx);">
-              📦 ${_reqNombreBodega(r.bodega_origen_siesa)}
+              📦 ${esc(nombreBodega(r.bodega_origen_siesa))}
             </span>
             <span style="font-size:var(--fs-xs);color:var(--tx3);">→</span>
             <span style="font-size:var(--fs-xs);font-weight:600;padding:2px 7px;border-radius:4px;background:var(--warn-bg);color:var(--orange);">
-              🏪 ${r.nombre_punto_venta ? `${esc(r.nombre_punto_venta)} (${esc(r.bodega_destino_siesa || '')})` : _reqNombreBodega(r.bodega_destino_siesa)}
+              🏪 ${esc(destinoTraslado(r))}
             </span>
           </div>
           <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:3px;">
@@ -1383,7 +1427,8 @@ async function reqEditarAprobar(id) {
   const filasItems = items.map(i => `
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
       <div style="flex:1;font-size:var(--fs-xs);">
-        <div style="font-weight:600;">${esc(i.producto_nombre || i.producto_codigo)}</div>
+        <div style="font-weight:600;">${esc(lineaNombre(i))}</div>
+        ${lineaRef(i) ? `<div style="color:var(--tx3);font-size:var(--fs-xs);">${esc(lineaRef(i))}</div>` : ''}
         <div style="color:var(--tx3);font-size:var(--fs-xs);">Solicitado: ${esc(empaqueDeLinea(i))} · Disp. Siesa: ${esc(i.disponible_siesa != null ? empaqueTexto(i.disponible_siesa, i.empaque) : '—')}</div>
       </div>
       <div style="display:flex;align-items:center;gap:4px;">
@@ -1400,7 +1445,7 @@ async function reqEditarAprobar(id) {
     <div style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
       <div style="background:var(--bg-s);border-radius:16px;padding:24px;width:100%;max-width:440px;border:1px solid #166534;max-height:85vh;overflow-y:auto;">
         <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Editar y aprobar requisición</div>
-        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">${esc(solicitud.nombre_punto_venta || solicitud.bodega_destino_siesa || '—')}</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:16px;">${esc(rutaTraslado(solicitud))}</div>
 
         <div style="font-size:var(--fs-xs);font-weight:600;margin-bottom:8px;color:var(--tx2);">CANTIDADES A ENVIAR</div>
         ${filasItems}

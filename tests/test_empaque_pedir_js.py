@@ -169,10 +169,11 @@ class TestAprobarYCards:
 
     def test_la_tarjeta_del_admin_dice_como_se_pidio(self):
         h = correr(f"""return _renderTrasladoCard({{ estado: 'ENVIADA', items: [
-            {{ producto_codigo: 'DORI07', cantidad_solicitada: 29, cantidad_enviada: 0,
+            {{ producto_codigo: 'DORI07', producto_nombre: 'BOLIGRAFO DORICOLOR 07', cantidad_solicitada: 29, cantidad_enviada: 0,
                empaque: {json.dumps(PQ12)}, pedido_como: {{paquetes: 2, sueltas: 5, factor: 12, unidad: 'PQ'}} }}] }});""",
                    ('util.js', 'traslados.js'))
-        assert 'DORI07 · 2 PQ + 5 und = 29 und' in h
+        assert 'BOLIGRAFO DORICOLOR 07</span>' in h and '· DORI07</span>' in h
+        assert '2 PQ + 5 und = 29 und' in h
 
 
 class TestElHudDePicking:

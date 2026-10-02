@@ -1090,14 +1090,14 @@ async function recepCargarTraslados(silencioso = false) {
       <div style="background:${_fondo};border:1px solid ${_borde};border-radius:12px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
           <div style="font-size:var(--fs-md);font-weight:800;">${_ave ? '⚠ ' : ''}${esc(s.codigo)}</div>
-          <div style="font-size:var(--fs-xs);color:${_acento};font-weight:600;">Desde ${esc(s.bodega_origen_siesa || '—')}</div>
+          <div style="font-size:var(--fs-xs);color:${_acento};font-weight:600;">Desde ${esc(nombreBodega(s.bodega_origen_siesa))}</div>
         </div>
         ${_ave ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);font-weight:700;margin-bottom:6px;">MERCANCÍA AVERIADA — cuente lo que llegó; si estaba rota lo decide el administrador después</div>` : ''}
         ${_ave && s.averia_evidencia ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-bottom:8px;border-left:2px solid var(--warn-brd);padding-left:8px;">Lo que revisó el punto: ${esc(s.averia_evidencia)}</div>` : ''}
         <div style="font-size:var(--fs-xs);color:${_acento};margin-bottom:8px;">📦 ${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsp} und esperadas</div>
         ${(s.items || []).slice(0, 3).map(i => `
           <div style="font-size:var(--fs-xs);color:var(--tx2);padding:2px 0;">
-            ${esc(i.producto_nombre || i.producto_codigo)} · ${esc(empaqueTexto(i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0, i.empaque))}
+            ${esc(lineaNombre(i))} · ${esc(empaqueTexto(i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0, i.empaque))}
             ${i.motivo_averia ? `<div style="color:var(--warn-tx);padding-left:8px;">${esc(i.motivo_averia)}</div>` : ''}
           </div>`).join('')}
         ${(s.items || []).length > 3 ? `<div style="font-size:var(--fs-xs);color:var(--tx3);padding:2px 0;">+ ${s.items.length - 3} más...</div>` : ''}
@@ -1222,7 +1222,7 @@ function _recepRenderItemsTraslado(items) {
         style="background:${completo ? 'var(--ok-bg)' : 'var(--bg-s)'};border:1px solid ${completo ? '#166534' : 'var(--brd)'};border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="min-width:0;flex:1;">
-            <div style="font-size:var(--fs-sm);font-weight:600;color:${completo ? 'var(--ok-tx)' : 'var(--tx)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${i.producto_nombre || i.producto_codigo}</div>
+            <div style="font-size:var(--fs-sm);font-weight:600;color:${completo ? 'var(--ok-tx)' : 'var(--tx)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(lineaNombre(i))}</div>
             <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(i.producto_codigo_siesa || i.producto_codigo)}</div>
             ${empaqueFactor(i.empaque) ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px;">Llegan ${esc(empaqueTexto(esperado, i.empaque))}</div>` : ''}
             ${i.motivo_averia ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:3px;">⚠ ${esc(i.motivo_averia)}</div>` : ''}

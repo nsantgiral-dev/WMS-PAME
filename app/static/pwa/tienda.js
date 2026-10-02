@@ -116,8 +116,9 @@ async function tiendaCargarSolicitudes() {
           <div style="font-size:var(--fs-sm);font-weight:700;">${esc(s.codigo)}</div>
           <span style="background:${col};color:#fff;font-size:var(--fs-xs);font-weight:700;padding:3px 8px;border-radius:8px;">${esc(s.estado)}</span>
         </div>
+        <div style="font-size:var(--fs-xs);color:var(--tx2);font-weight:600;">${esc(s.es_averia ? rutaTraslado(s) : `Pedido a ${nombreBodega(s.bodega_origen_siesa)}`)}</div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${s.fecha_creacion ? new Date(s.fecha_creacion).toLocaleDateString('es-CO') : ''}</div>
-        ${(s.items || []).map(i => `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px;">${esc(i.producto_codigo_siesa || i.producto_codigo)} — ${esc(empaqueDeLinea(i))}</div>`).join('')}
+        ${(s.items || []).map(i => `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px;">${esc(lineaNombre(i))}${lineaRef(i) ? `<span style="color:var(--tx3);"> · ${esc(lineaRef(i))}</span>` : ''} — ${esc(empaqueDeLinea(i))}</div>`).join('')}
         ${s.motivo_rechazo ? `<div style="font-size:var(--fs-xs);color:var(--err-tx);margin-top:4px;">Motivo: ${esc(s.motivo_rechazo)}</div>` : ''}
         ${s.es_averia ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">⚠ Avería · hacia ${esc(s.bodega_destino_siesa)}</div>` : ''}
         ${s.estado === 'BORRADOR' ? `
@@ -636,12 +637,12 @@ async function tiendaCargarRecibir() {
       <div style="background:var(--ok-bg);border:1px solid var(--ok-brd);border-radius:12px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
           <div style="font-size:var(--fs-sm);font-weight:700;">${esc(s.codigo)}</div>
-          <div style="font-size:var(--fs-xs);color:var(--ok-tx);font-weight:600;">${esc(s.bodega_origen_siesa || '')}</div>
+          <div style="font-size:var(--fs-xs);color:var(--ok-tx);font-weight:600;">Desde ${esc(nombreBodega(s.bodega_origen_siesa))}</div>
         </div>
         <div style="font-size:var(--fs-xs);color:var(--ok-tx);margin-bottom:8px;">📦 ${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsperado} und esperadas</div>
         ${(s.items || []).slice(0, 3).map(i => `
           <div style="font-size:var(--fs-xs);color:var(--tx2);padding:2px 0;">
-            ${esc(i.producto_nombre || i.producto_codigo)} · ${esc(i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada)} und
+            ${esc(lineaNombre(i))} · ${esc(empaqueTexto(i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0, i.empaque))}
           </div>
         `).join('')}
         ${(s.items || []).length > 3 ? `<div style="font-size:var(--fs-xs);color:var(--tx3);padding:2px 0;">+ ${s.items.length - 3} más...</div>` : ''}
@@ -707,7 +708,7 @@ function _tiendaRenderPickingTraslado() {
         </button>
         <div style="min-width:0;">
           <div style="font-size:var(--fs-md);font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.codigo)}</div>
-          <div style="font-size:var(--fs-xs);color:var(--tx3);">Desde ${esc(s.bodega_origen_siesa || '—')} → ${esc(s.bodega_destino_siesa || '—')}</div>
+          <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(rutaTraslado(s))}</div>
         </div>
       </div>
 
