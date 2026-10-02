@@ -75,16 +75,52 @@ def traslado_usa_rit() -> bool:
 def _resolver_empaque(prod):
     """`(unidad_empaque, factor)` para el payload del STS/ETS, o `('', 1)`.
 
-    Delegada en `empaque_producto.empaque_de` — la única que decide el paquete
-    de un producto (2026-10-02). Antes tenía su propia política, distinta de la
-    del HUD de picking. El STS y el ETS de un traslado la llaman las dos, así
-    que salida y entrada viajan en la misma unidad.
+    `empaque_producto.unidad_para_siesa`: la regla de unidad del documento,
+    que NO es la de cómo se ve y se pide (`empaque_de`). Ver su docstring.
     """
-    from app.services.empaque_producto import empaque_de
-    emp = empaque_de(prod)
-    if emp:
-        return emp.unidad, emp.factor
-    return '', 1
+    from app.services.empaque_producto import unidad_para_siesa
+    return unidad_para_siesa(prod)
+
+
+def _unidades_del_sts(solicitud) -> dict:
+    """`{codigo_siesa: (unidad_empaque, factor)}` con que salió el STS de este
+    traslado, leído del payload del job `DESPACHO_TRASLADO` completado del
+    cierre de packing. `{}` si el STS no salió por ese job (el despacho manual
+    llama a Siesa en línea y no deja payload): ahí el ETS resuelve la unidad de
+    nuevo, con la misma regla.
+    """
+    import json
+    from app.models.packing import TareaPacking
+    from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+    tareas = [t.id for t in TareaPacking.query.filter_by(solicitud_id=solicitud.id)
+              .with_entities(TareaPacking.id).all()]
+    if not tareas:
+        return {}
+    job = (SiesaJob.query
+           .filter(SiesaJob.tipo == 'DESPACHO_TRASLADO',
+                   SiesaJob.referencia_tipo == 'TareaPacking',
+                   SiesaJob.referencia_id.in_(tareas),
+                   SiesaJob.estado == EstadoSiesaJob.COMPLETADO)
+           .order_by(SiesaJob.id.desc())
+           .first())
+    if not job:
+        return {}
+    try:
+        items = json.loads(job.payload or '{}').get('items') or []
+    except (ValueError, TypeError):
+        return {}
+    unidades = {}
+    for it in items:
+        codigo = it.get('codigo_siesa')
+        if not codigo or 'factor_empaque' not in it:
+            continue
+        try:
+            factor = int(it.get('factor_empaque') or 1)
+        except (ValueError, TypeError):
+            continue
+        unidades[codigo] = ((it.get('unidad_empaque') or '') if factor > 1 else '',
+                            factor if factor > 1 else 1)
+    return unidades
 
 
 # ── Faltante de recepción (2026-09-26) ─────────────────────────────────────
@@ -1784,9 +1820,15 @@ class TrasladoService:
             _prod_ids = [i.producto_id for i in s.items if i.producto_id]
             _prods = {p.id: p for p in Producto.query.filter(Producto.id.in_(_prod_ids)).all()} if _prod_ids else {}
             items_payload = []
+            # La entrada viaja en la MISMA unidad que la salida: si el STS salió
+            # por el job del cierre de packing, su payload dice en qué unidad
+            # fue cada ítem. Volver a resolverla acá podía dar otra si el sync
+            # de las 02:30 cambió el paquete entre el despacho y la recepción.
+            _unidad_sts = _unidades_del_sts(s)
             for item in s.items:
                 _p = _prods.get(item.producto_id)
-                _uom_emp, _factor_emp = _resolver_empaque(_p)
+                _uom_emp, _factor_emp = (_unidad_sts.get(item.producto_codigo_siesa)
+                                         or _resolver_empaque(_p))
                 # Lo CONTADO, y nada más: con `or` un cero contado caía a la
                 # enviada y el ETS entraba lo que no llegó (2026-09-26). Un
                 # ítem en cero no va en la entrada: sigue en la bodega puente

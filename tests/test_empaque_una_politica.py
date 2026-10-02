@@ -95,7 +95,9 @@ class TestLaPolitica:
         assert lote == {pid: e for pid, e in ((x.id, ep.empaque_de(x)) for x in (a, b, c)) if e}
         assert ep.empaques_por_id([a.id, b.id, c.id]) == lote
 
-    def test_el_traslado_le_pregunta_a_la_misma(self, app, db):
+    def test_el_traslado_a_siesa_usa_su_propia_regla(self, app, db):
+        """Lo que va a Siesa NO es `empaque_de` (2026-10-02, revisión): una
+        fila sin código de barras (Paso E del sync) no cambia el payload."""
         from app.services.traslado_service import _resolver_empaque
         p = _producto('TR1')
         _paquete(p, 'PQ', 12, codigo='7700000000501')
@@ -103,6 +105,18 @@ class TestLaPolitica:
         q = _producto('TR2')
         _paquete(q, 'PACA', 5, codigo='LPN-0002', origen='WMS_LPN')
         assert _resolver_empaque(q) == ('', 1)
+        r = _producto('TR3')
+        _paquete(r, 'PQ', 12, codigo=None)
+        assert ep.empaque_de(r).factor == 12, 'para pedir sí viene en paquete'
+        assert _resolver_empaque(r) == ('', 1), 'a Siesa sigue en unidades'
+
+    def test_a_siesa_el_dato_del_producto_manda_primero(self, app, db):
+        """La regla de antes, idéntica: Producto con factor > 1 antes que
+        producto_empaques."""
+        p = _producto('TR4', unidad_empaque='CAJ', factor_conversion=24)
+        _paquete(p, 'PQ', 12, codigo='7700000000502')
+        assert ep.unidad_para_siesa(p) == ('CAJ', 24)
+        assert ep.empaque_de(p).unidad == 'PQ'
 
     def test_el_hud_de_picking_le_pregunta_a_la_misma(self, app, db):
         from app.services.mobile_service import MobileService
@@ -139,12 +153,6 @@ class TestUnidadesDeLinea:
     def test_basura_se_rechaza(self, malo):
         with pytest.raises(ValueError):
             ep.unidades_de_linea({'paquetes': malo, 'sueltas': 0}, self.PQ12, 'c')
-
-    def test_descomponer(self):
-        assert ep.descomponer(1368, 12) == (114, 0)
-        assert ep.descomponer(29, 12) == (2, 5)
-        assert ep.descomponer(5, 12) == (0, 5)
-        assert ep.descomponer(7, 1) == (0, 7)
 
 
 # ── Pedir: el servidor recalcula ──────────────────────────────────────────────
@@ -250,7 +258,7 @@ class TestPaquetesSinCodigo:
         por_siesa, por_codigo = self._prods(p)
         r = _sincronizar_paquetes_sin_codigo({('Q35A', 'PQ'): 12, ('Q35A', 'UND'): 1},
                                              por_siesa, por_codigo, set())
-        assert r == {'insertados': 1, 'desactivados': 0}
+        assert (r['insertados'], r['desactivados']) == (1, 0)
         e = ProductoEmpaque.query.filter_by(producto_id=p.id).one()
         assert e.codigo_barras is None and (e.unidad_medida, e.factor_conversion) == ('PQ', 12)
         assert ep.empaque_de(p).factor == 12
@@ -262,7 +270,7 @@ class TestPaquetesSinCodigo:
         _paquete(p, 'PQ', 12, codigo='7700000001301')
         por_siesa, por_codigo = self._prods(p)
         r = _sincronizar_paquetes_sin_codigo({('Q35B', 'PQ'): 12}, por_siesa, por_codigo, set())
-        assert r == {'insertados': 0, 'desactivados': 1}
+        assert (r['insertados'], r['desactivados']) == (0, 1)
         assert ProductoEmpaque.query.filter_by(producto_id=p.id, activo=True).count() == 1
 
     def test_un_codigo_vacio_nunca_se_escanea(self, app, db):

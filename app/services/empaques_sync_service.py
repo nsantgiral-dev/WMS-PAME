@@ -52,20 +52,34 @@ _sync_estado = {
 }
 
 
+class FactoresQ35(dict):
+    """`{(referencia, unidad): factor}` de q35, más si la lectura fue COMPLETA.
+
+    `completa` es True solo si se leyó hasta la página vacía sin saltarse
+    ninguna. Con una lectura parcial, «q35 no reporta este paquete» no
+    significa que Siesa lo quitó: puede estar en la página que no se leyó.
+    """
+    completa = False
+
+
 def _cargar_factores_q35():
     """
     Carga TODA la data de query 35 en memoria.
-    Retorna dict: {(referencia_strip, unidad_strip): factor_int}
+    Retorna `FactoresQ35`: {(referencia_strip, unidad_strip): factor_int}, con
+    `.completa`.
     """
-    factores = {}
+    factores = FactoresQ35()
     total_filas = 0
     _errores_q35 = 0
+    _saltadas = 0
+    _fin_limpio = False
     for pag in range(1, 2001):
         try:
             resp = connekta.get_items_unidades_medida(pag)
             _errores_q35 = 0
         except Exception as _e:
             _errores_q35 += 1
+            _saltadas += 1
             logger.warning(f'[EMPAQUES SYNC] Error q35 pág {pag}: {_e} (consecutivos: {_errores_q35})')
             if _errores_q35 >= 3:
                 logger.error('[EMPAQUES SYNC] 3 errores consecutivos en q35 — abortando')
@@ -73,6 +87,7 @@ def _cargar_factores_q35():
             continue
         rows = resp.get('detalle', {}).get('Table', [])
         if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+            _fin_limpio = True
             break
 
         for row in rows:
@@ -92,12 +107,14 @@ def _cargar_factores_q35():
 
         logger.info(f'[EMPAQUES SYNC] q35 pág {pag}: acumulados={total_filas}')
 
-    logger.info(f'[EMPAQUES SYNC] q35 completo: {len(factores)} combinaciones (ref, unidad)')
+    factores.completa = _fin_limpio and _saltadas == 0
+    logger.info(f'[EMPAQUES SYNC] q35: {len(factores)} combinaciones (ref, unidad), '
+                f'completa={factores.completa} páginas saltadas={_saltadas}')
     return factores
 
 
 def _sincronizar_paquetes_sin_codigo(factores_q35, prods_por_siesa, prods_por_codigo,
-                                     unidades_con_codigo):
+                                     unidades_con_codigo, q35_completa=False):
     """Paquetes de q35 (unidad ≠ UND, factor > 1) sin código de barras propio.
 
     · Si el producto ya tiene ese paquete CON código (`unidades_con_codigo`, de
@@ -105,11 +122,16 @@ def _sincronizar_paquetes_sin_codigo(factores_q35, prods_por_siesa, prods_por_co
       vieja sin código de esa unidad se apaga: el paquete ya está, con código.
     · Si no, se crea o se actualiza una fila con `codigo_barras` NULL.
 
+    · Una fila sin código cuyo paquete q35 ya no reporta se apaga — solo si
+      `q35_completa`: con una lectura parcial, no estar en lo leído no prueba
+      que Siesa lo quitó, y no se apaga nada (se declara en el resultado).
+
     `factores_q35` es la única entrada: una corrida que no pudo leer q35 ya
     abortó antes de llegar acá (Paso C).
     """
     insertados = 0
     desactivados = 0
+    retirados = 0
     filas = (ProductoEmpaque.query
              .filter(ProductoEmpaque.activo.is_(True),
                      ProductoEmpaque.origen != 'WMS_LPN',
@@ -129,6 +151,7 @@ def _sincronizar_paquetes_sin_codigo(factores_q35, prods_por_siesa, prods_por_co
             e.activo = False
             desactivados += 1
 
+    vigentes = set()
     for (referencia, unidad), factor in factores_q35.items():
         unidad = (unidad or '').strip().upper()
         if not unidad or unidad == 'UND' or not factor or factor <= 1:
@@ -137,6 +160,7 @@ def _sincronizar_paquetes_sin_codigo(factores_q35, prods_por_siesa, prods_por_co
         if not prod:
             continue
         clave = (prod.id, unidad)
+        vigentes.add(clave)
         if clave in con_codigo:
             continue
         existente = sin_codigo.get(clave)
@@ -151,7 +175,15 @@ def _sincronizar_paquetes_sin_codigo(factores_q35, prods_por_siesa, prods_por_co
         ))
         sin_codigo[clave] = True
         insertados += 1
-    return {'insertados': insertados, 'desactivados': desactivados}
+
+    if q35_completa:
+        for clave, e in sin_codigo.items():
+            if (e is not True and e.activo and clave not in vigentes
+                    and clave not in con_codigo):
+                e.activo = False
+                retirados += 1
+    return {'insertados': insertados, 'desactivados': desactivados,
+            'retirados_de_siesa': retirados, 'q35_completa': bool(q35_completa)}
 
 
 def _run_sync(app):
@@ -185,13 +217,14 @@ def _run_sync(app):
         try:
             # ── Paso A: cargar productos en memoria ────────────────────────────
             # Capturar solo los campos necesarios (evita expire_on_commit N+1 tras commit en paso C)
-            _ProdData = __import__('collections', fromlist=['namedtuple']).namedtuple('PD', ['id', 'codigo_siesa', 'codigo'])
+            _ProdData = __import__('collections', fromlist=['namedtuple']).namedtuple('PD', ['id', 'codigo_siesa', 'codigo', 'unidad_medida'])
             prods_por_siesa = {}
             prods_por_codigo = {}
             for p in Producto.query.filter_by(activo=True).with_entities(
-                Producto.id, Producto.codigo_siesa, Producto.codigo
+                Producto.id, Producto.codigo_siesa, Producto.codigo, Producto.unidad_medida
             ).all():
-                _pd = _ProdData(id=p.id, codigo_siesa=p.codigo_siesa, codigo=p.codigo)
+                _pd = _ProdData(id=p.id, codigo_siesa=p.codigo_siesa, codigo=p.codigo,
+                                unidad_medida=p.unidad_medida)
                 if _pd.codigo_siesa:
                     prods_por_siesa[_pd.codigo_siesa.strip()] = _pd
                 if _pd.codigo:
@@ -261,8 +294,13 @@ def _run_sync(app):
                             sin_producto += 1
                             continue
 
-                        # JOIN con q35: obtener factor para esta unidad
-                        if unidad_raw == 'UND':
+                        # JOIN con q35: obtener factor para esta unidad.
+                        # La unidad BASE del ítem (la de inventario: UND, o
+                        # RES, PAR… si el ítem se maneja así) vale 1 por
+                        # definición aunque q35 no la liste: su EAN es el de
+                        # la unidad suelta y tiene que seguir escaneándose.
+                        _base = (getattr(prod, 'unidad_medida', None) or 'UND').strip().upper()
+                        if unidad_raw.upper() in ('UND', _base):
                             factor = 1
                         else:
                             factor = factores_q35.get((referencia, unidad_raw))
@@ -346,7 +384,8 @@ def _run_sync(app):
             # guardan con `codigo_barras` NULL: sirven para mostrar y pedir por
             # paquete, nunca para escanear.
             sin_codigo = _sincronizar_paquetes_sin_codigo(
-                factores_q35, prods_por_siesa, prods_por_codigo, unidades_con_codigo)
+                factores_q35, prods_por_siesa, prods_por_codigo, unidades_con_codigo,
+                q35_completa=getattr(factores_q35, 'completa', False))
             sin_codigo_insertados = sin_codigo['insertados']
             sin_codigo_desactivados = sin_codigo['desactivados']
             db.session.commit()
@@ -360,6 +399,10 @@ def _run_sync(app):
                 'desactivados_sin_factor': desactivados_sin_factor,
                 'paquetes_sin_codigo_insertados': sin_codigo_insertados,
                 'paquetes_sin_codigo_desactivados': sin_codigo_desactivados,
+                # Paquetes sin código que Siesa ya no declara. Con q35 parcial
+                # no se apaga ninguno y `q35_completa` lo dice.
+                'paquetes_sin_codigo_retirados': sin_codigo.get('retirados_de_siesa', 0),
+                'q35_completa': sin_codigo.get('q35_completa', False),
                 'errores': errores,
                 'factores_q35_cargados': len(factores_q35),
                 'timestamp': datetime.utcnow().isoformat(),

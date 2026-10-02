@@ -36,6 +36,8 @@ Cambiarles la fuente cambiaría lo que cuenta un escaneo. Están declarados en
 """
 from dataclasses import dataclass
 
+from app.utils.entero_json import entero_no_negativo as _entero
+
 #: `producto_empaques.origen` de las pacas que crea el WMS en recepción.
 ORIGEN_LPN = 'WMS_LPN'
 
@@ -108,14 +110,19 @@ def empaques_de(productos) -> dict:
 
 
 def empaques_por_id(producto_ids) -> dict:
-    """Como `empaques_de`, partiendo de ids (lee los productos)."""
+    """Como `empaques_de`, partiendo de ids.
+
+    Lee del producto **solo** las tres columnas que la política usa (`id`,
+    `unidad_empaque`, `factor_conversion`), no la fila ORM completa: la lista
+    de Pedir de una tienda trae ~4.000 productos en cada apertura."""
     from app.extensions import db
     from app.models.producto import Producto
 
     ids = sorted({int(i) for i in producto_ids if i})
     prods = []
     for i in range(0, len(ids), _LOTE_IN):
-        prods.extend(db.session.query(Producto)
+        prods.extend(db.session.query(Producto.id, Producto.unidad_empaque,
+                                      Producto.factor_conversion)
                      .filter(Producto.id.in_(ids[i:i + _LOTE_IN])).all())
     return empaques_de(prods)
 
@@ -127,24 +134,46 @@ def empaque_de(producto):
     return empaques_de([producto]).get(producto.id)
 
 
-def descomponer(unidades: int, factor: int):
-    """`(paquetes completos, sueltas)` de una cantidad en unidades."""
-    unidades = int(unidades or 0)
-    if not factor or factor <= 1 or unidades <= 0:
-        return 0, max(unidades, 0)
-    return unidades // factor, unidades % factor
+def unidad_para_siesa(producto):
+    """`(unidad, factor)` con que el STS/ETS mueve este producto en Siesa, o
+    `('', 1)` (en unidades).
 
+    **No es `empaque_de`, a propósito.** `empaque_de` contesta cómo se ve y
+    cómo se pide; esta, en qué unidad viaja el documento. Al unificarlas el
+    2026-10-02, los paquetes sin código de barras que el sync empezó a guardar
+    (Paso E) pasaron también al payload: más productos salían como PQ
+    fraccionado (29 und → PQ 2,4167) sin haberse probado nunca contra Siesa, y
+    al dueño se le había dicho que lo que va a Siesa no cambiaba. Esta es la
+    regla de antes, idéntica:
 
-def _entero(valor, campo: str) -> int:
-    if isinstance(valor, bool) or valor is None:
-        raise ValueError(f'{campo} debe ser un número entero')
-    if isinstance(valor, float) and valor.is_integer():
-        valor = int(valor)
-    if isinstance(valor, str) and valor.strip().isdigit():
-        valor = int(valor.strip())
-    if not isinstance(valor, int) or valor < 0:
-        raise ValueError(f'{campo} debe ser un número entero mayor o igual a 0')
-    return valor
+    1. `Producto.unidad_empaque` con `factor_conversion` > 1;
+    2. si no, la fila activa de `producto_empaques` de menor factor > 1 **con
+       código de barras** (las sin código no existían antes del 2026-10-02).
+
+    Única diferencia deliberada con la de antes: una paca del WMS (`WMS_LPN`)
+    no cuenta — su unidad (PACA) es un bulto de recepción, no una unidad que el
+    ítem tenga en Siesa.
+
+    Las cantidades no cambian por la unidad: el payload divide por el factor y
+    Siesa multiplica. Lo que sigue sin probar en vivo es el redondeo de la
+    fracción (5 und de un PQ × 12 → 0,4167): prueba pendiente del dueño.
+    """
+    if producto is None:
+        return '', 1
+    if producto.unidad_empaque and (producto.factor_conversion or 1) > 1:
+        return producto.unidad_empaque, producto.factor_conversion
+    from app.models.producto_empaque import ProductoEmpaque
+    emp = (ProductoEmpaque.query
+           .filter(ProductoEmpaque.producto_id == producto.id,
+                   ProductoEmpaque.factor_conversion > 1,
+                   ProductoEmpaque.activo.is_(True),
+                   ProductoEmpaque.codigo_barras.isnot(None),
+                   ProductoEmpaque.origen != ORIGEN_LPN)
+           .order_by(ProductoEmpaque.factor_conversion, ProductoEmpaque.id)
+           .first())
+    if emp:
+        return emp.unidad_medida, emp.factor_conversion
+    return '', 1
 
 
 def unidades_de_linea(datos: dict, empaque, campo_cantidad: str, nombre: str = ''):
@@ -201,18 +230,19 @@ def paquetes_por_revisar(limite: int = 500) -> dict:
     from app.models.producto_empaque import ProductoEmpaque
     from app.services import empaques_sync_service
 
-    con_paquete = (db.session.query(ProductoEmpaque.producto_id)
-                   .filter(ProductoEmpaque.activo.is_(True),
-                           ProductoEmpaque.factor_conversion > 1,
-                           ProductoEmpaque.origen != ORIGEN_LPN))
-    declarados = (Producto.query
+    # La misma política que `empaque_de`: un producto que ella ya resuelve
+    # (por su fila de producto_empaques o por el dato del producto) se puede
+    # pedir por paquete y no se manda a compras a completarlo.
+    candidatos = (Producto.query
                   .filter(Producto.activo.is_(True),
                           Producto.unidad_empaque.isnot(None),
                           db.func.upper(db.func.trim(Producto.unidad_empaque)) != 'UND',
-                          db.func.trim(Producto.unidad_empaque) != '',
-                          Producto.id.notin_(con_paquete))
-                  .order_by(Producto.codigo))
-    total_declarados = declarados.count()
+                          db.func.trim(Producto.unidad_empaque) != '')
+                  .order_by(Producto.codigo)
+                  .all())
+    resueltos = empaques_de(candidatos)
+    declarados = [p for p in candidatos if p.id not in resueltos]
+    total_declarados = len(declarados)
     sin_codigo = (db.session.query(ProductoEmpaque, Producto)
                   .join(Producto, Producto.id == ProductoEmpaque.producto_id)
                   .filter(ProductoEmpaque.activo.is_(True),
@@ -226,7 +256,7 @@ def paquetes_por_revisar(limite: int = 500) -> dict:
             'total': total_declarados,
             'productos': [{'codigo': p.codigo, 'codigo_siesa': p.codigo_siesa,
                            'nombre': p.nombre, 'unidad_empaque': p.unidad_empaque}
-                          for p in declarados.limit(limite)],
+                          for p in declarados[:limite]],
         },
         'paquete_sin_codigo': {
             'total': total_sin_codigo,

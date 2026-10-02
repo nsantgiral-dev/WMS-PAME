@@ -118,11 +118,15 @@ def descomponer_en_empaques(producto_id: int, cantidad_solicitada: int, almacen_
         'cantidad_alcanzable': int,
       }
     """
-    # Busca el empaque de mayor factor (el nivel de empaque más grande disponible)
+    # Busca el empaque de mayor factor (el nivel de empaque más grande disponible).
+    # Solo los que se pueden ESCANEAR: desde el 2026-10-02 el sync guarda también
+    # paquetes sin código de barras (sirven para pedir). Un CAJ × 144 sin código
+    # le diría al operario «cada scan = 144 und» sobre LPNs de 12.
     empaque = (ProductoEmpaque.query
                .filter_by(producto_id=producto_id, activo=True)
                .filter(ProductoEmpaque.factor_conversion > 1)
                .filter(ProductoEmpaque.origen == 'SIESA_GS1')
+               .filter(ProductoEmpaque.codigo_barras.isnot(None))
                .order_by(ProductoEmpaque.factor_conversion.desc())
                .first())
 

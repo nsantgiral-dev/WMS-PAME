@@ -905,17 +905,9 @@ class MobileService:
 
     @staticmethod
     def _entero_no_negativo(valor, campo: str) -> int:
-        """Un entero ≥ 0 que llega por JSON, o `ValueError`. Un booleano no es
-        un número (en Python `True == 1`)."""
-        if isinstance(valor, bool) or valor is None:
-            raise ValueError(f'{campo} debe ser un número entero')
-        if isinstance(valor, float) and valor.is_integer():
-            valor = int(valor)
-        if isinstance(valor, str) and valor.strip().isdigit():
-            valor = int(valor.strip())
-        if not isinstance(valor, int) or valor < 0:
-            raise ValueError(f'{campo} debe ser un número entero mayor o igual a 0')
-        return valor
+        """Un entero ≥ 0 que llega por JSON — `utils.entero_json`, la única."""
+        from app.utils.entero_json import entero_no_negativo
+        return entero_no_negativo(valor, campo)
 
     @staticmethod
     def _sesion_conteo_para_contar(tarea_id: int, operario_id: int) -> SesionConteo:
