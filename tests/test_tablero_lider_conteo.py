@@ -619,7 +619,32 @@ const d = {
   rezago: { hay_aviso: true, a_cancelar: 3, pendientes_vivas: 9, cupo_diario: 2, dias_de_cupo_pendientes: 4.5,
     por_antiguedad_dias: { [X]: 3 } },
 };
+if (modo === 'otra-pestana') vm.runInContext("_LIDER_PESTANA = 'ajustes';", ctx);
 const html = vm.runInContext('liderTableroHtml', ctx)(d);
+// La barra de pestañas repite nombres de sección («📅 Hoy», «Fuera del plan»):
+// el orden de las secciones se mide en el cuerpo, sin la barra.
+const barra = (html.match(/<!--lider-pestanas-->[\s\S]*?<!--\/lider-pestanas-->/) || [''])[0];
+const cuerpo = html.replace(barra, '');
+const pestanas = [...barra.matchAll(/class="lider-pestana" data-pestana="([a-z]+)" onclick="liderPestana\('([a-z]+)'\)"/g)]
+  .map(m => [m[1], m[2]]);
+const panes = [...html.matchAll(/class="lider-pane" data-pestana="([a-z]+)" style="display:(block|none);"/g)]
+  .map(m => [m[1], m[2]]);
+// Cambiar de pestaña sobre un DOM de mentira: lo que liderPestana toca.
+const el = (k, d) => ({ dataset: { pestana: k }, style: { display: d }, attrs: {},
+  setAttribute(a, v) { this.attrs[a] = v; } });
+const domPanes = ['bloqueados', 'ajustes', 'recogido'].map(k => el(k, 'none'));
+const domBotones = ['bloqueados', 'ajustes', 'recogido'].map(k => el(k));
+ctx.document.getElementById = (id) => id === 'inv-panel-lider'
+  ? { querySelectorAll: (q) => q === '.lider-pane' ? domPanes : domBotones } : null;
+vm.runInContext("liderPestana('recogido')", ctx);
+const cambio = {
+  visibles: domPanes.filter(p => p.style.display === 'block').map(p => p.dataset.pestana),
+  activos: domBotones.filter(b => b.attrs['aria-selected'] === 'true').map(b => b.dataset.pestana),
+  estiloActivo: domBotones[2].attrs.style || '',
+  elegida: vm.runInContext('_LIDER_PESTANA', ctx),
+};
+vm.runInContext("liderPestana('no-existe')", ctx);
+cambio.desconocida = vm.runInContext('_LIDER_PESTANA', ctx);
 const handlers = [...new Set([...html.matchAll(/onclick="([A-Za-z_$][\w$]*)\(/g)].map(m => m[1]))];
 const sinDefinir = handlers.filter(h => typeof ctx[h] !== 'function');
 const anchos = [...html.matchAll(/(?:^|[;"\s])(?:min-)?width:\s*(\d+)px/g)].map(m => +m[1]);
@@ -628,7 +653,8 @@ console.log(JSON.stringify({
   escapados: (html.match(/&lt;img/g) || []).length,
   titulos: ['Conteos bloqueados', 'Mercancía sin código', 'Conteos definitivos por contar', 'Ajustes esperando decisión',
     'Auditorías por faltante', 'Ajustes rechazados por Siesa', 'Fuera del plan', '📅 Hoy',
-    'generador está detenido'].map(t => html.indexOf(t)),
+    'generador está detenido'].map(t => cuerpo.indexOf(t)),
+  pestanas, panes, cambio,
   handlers, sinDefinir, anchoMax: Math.max(0, ...anchos),
   botonAprobar: html.includes('liderAprobarAjuste('), botonRezago: html.includes('liderCancelarRezago('),
   botonDefinitivo: html.includes('liderContarDefinitivo('),
@@ -675,6 +701,34 @@ class TestLaPestana:
         con, sin = _render(), _render('sin-permisos')
         assert con['botonAprobar'] and con['botonRezago'] and con['botonDefinitivo']
         assert not sin['botonAprobar'] and not sin['botonRezago'] and not sin['botonDefinitivo']
+
+    def test_una_pestana_por_seccion_y_abre_en_la_primera(self):
+        """Las 9 secciones van en pestañas dentro del panel (2026-10-02): un
+        botón por sección, cada uno abre la suya, y por defecto Bloqueados."""
+        r = _render()
+        ids = ['bloqueados', 'novedades', 'definitivos', 'ajustes', 'auditorias',
+               'rechazados', 'fuera', 'recogido', 'hoy']
+        assert [a for a, _ in r['pestanas']] == ids, r['pestanas']
+        assert all(a == b for a, b in r['pestanas']), 'cada botón abre su propia sección'
+        # «Recogido» vive en index.html (su propio endpoint): no es pane del tablero.
+        assert [k for k, _ in r['panes']] == [i for i in ids if i != 'recogido']
+        assert [k for k, v in r['panes'] if v == 'block'] == ['bloqueados']
+
+    def test_la_pestana_elegida_sobrevive_al_repintado(self):
+        """Aprobar o ↻ repintan el tablero: no se vuelve a Bloqueados."""
+        r = _render('otra-pestana')
+        assert [k for k, v in r['panes'] if v == 'block'] == ['ajustes']
+
+    def test_cambiar_de_pestana_muestra_una_y_marca_su_boton(self):
+        c = _render()['cambio']
+        assert c['visibles'] == ['recogido'] and c['activos'] == ['recogido']
+        assert c['elegida'] == 'recogido'
+        assert 'var(--pm-fill)' in c['estiloActivo'] and 'min-height:48px' in c['estiloActivo']
+        assert c['desconocida'] == 'bloqueados', 'una pestaña que no existe cae en la primera'
+
+    def test_la_seccion_recogido_es_una_pestana_mas(self):
+        html = (RAIZ / 'app' / 'static' / 'pwa' / 'index.html').read_text(encoding='utf-8')
+        assert re.search(r'class="lider-pane" data-pestana="recogido"[^>]*>[\s\S]*?id="inv-recogido-lista"', html)
 
     def test_cabe_en_un_celular(self):
         """Nada con ancho fijo mayor que una pantalla de 360 px."""

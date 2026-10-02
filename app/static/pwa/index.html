@@ -2080,13 +2080,16 @@
       <!-- Pedidos recogidos que no salieron: sin la declaración de regreso,
            sus productos quedan fuera del plan de conteo (conteo.js).
            Vive acá, al lado de «Fuera del plan», que es donde el servidor
-           manda a declararlo (ConteoService.DONDE_DECLARAR_REGRESO). -->
-      <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin:18px 0 6px;">📦 Recogido sin despachar</div>
-      <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;line-height:1.5;">
-        Pedidos que se recogieron y no salieron: el empaque se canceló sin remisión o nunca se empacó.
-        Mientras no confirme que la mercancía volvió al estante, esos productos no se programan para contar.
+           manda a declararlo (ConteoService.DONDE_DECLARAR_REGRESO).
+           Es la pestaña 📦 Recogido del tablero: liderPestana (conteo.js) la muestra. -->
+      <div class="lider-pane" data-pestana="recogido" style="display:none;">
+        <div style="font-size:var(--fs-sm);font-weight:700;color:var(--tx);margin:18px 0 6px;">📦 Recogido sin despachar</div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);margin-bottom:8px;line-height:1.5;">
+          Pedidos que se recogieron y no salieron: el empaque se canceló sin remisión o nunca se empacó.
+          Mientras no confirme que la mercancía volvió al estante, esos productos no se programan para contar.
+        </div>
+        <div id="inv-recogido-lista" style="min-height:40px;"></div>
       </div>
-      <div id="inv-recogido-lista" style="min-height:40px;"></div>
     </div>
 
     <!-- Panel Estadísticas — lo llena conteoEstIniciar (conteo.js) desde GET /api/conteo/estadisticas -->

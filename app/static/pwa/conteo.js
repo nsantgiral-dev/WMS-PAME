@@ -2401,6 +2401,7 @@ async function cargarConteoRecogidoSinDespachar(almacenId) {
     subtab: 'lider', canal: 'lider:recogido', el, params: qs, cargando: false,
     pedir: () => get('/api/conteo/recogido-sin-despachar' + qs),
     html: (d) => _recogidoHtml(d),
+    despues: () => _liderContadorRecogido(),
     error: () => '<div style="text-align:center;padding:14px;color:var(--err-tx);font-size:var(--fs-sm);">Error cargando lo recogido sin despachar</div>',
   });
 }
@@ -2921,16 +2922,93 @@ function liderTableroHtml(d) {
     <div style="font-size:20px;font-weight:800;color:${r.decisiones_pendientes ? 'var(--yellow)' : 'var(--green)'};margin-top:4px;">${r.decisiones_pendientes ? `${_lNum(r.decisiones_pendientes)} ${r.decisiones_pendientes === 1 ? 'cosa espera' : 'cosas esperan'} por usted` : 'Nada pendiente ✓'}</div>
     ${r.decisiones_pendientes ? `<div style="margin-top:6px;">${chip('Bloqueados', pb.bloqueados)}${chip('Sin código', pb.novedades)}${chip('Definitivos', pb.definitivos)}${chip('Ajustes', pb.ajustes)}${chip('Rechazos Siesa', pb.rechazados_siesa)}</div>` : '<div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">Nadie espera una decisión suya en este almacén.</div>'}
   </div>`;
-  return _lRezago(d.rezago, p) + cabecera
-    + _lBloqueados(dec.bloqueados || {}, p)
-    + _lNovedades(dec.novedades || {}, p)
-    + _lDefinitivos(dec.definitivos || {}, p)
-    + _lAjustes(dec.ajustes || {}, p)
-    + _lAuditorias(dec.auditorias || {})
-    + _lRechazados(dec.rechazados_siesa || {}, p)
-    + _lFueraDelPlan(d.fuera_del_plan || {})
-    + _lHoy(d.hoy || {})
+  const aj = dec.ajustes || {};
+  const totales = {
+    bloqueados: (dec.bloqueados || {}).total,
+    novedades: (dec.novedades || {}).total,
+    definitivos: (dec.definitivos || {}).total,
+    ajustes: ((aj.aprobables || {}).total || 0) + ((aj.bloqueados || {}).total || 0),
+    auditorias: (dec.auditorias || {}).total,
+    rechazados: (dec.rechazados_siesa || {}).total,
+    fuera: (d.fuera_del_plan || {}).skus_sin_fecha,
+    recogido: _RECOGIDO_SIN_DESPACHAR.length,
+  };
+  return _lRezago(d.rezago, p) + cabecera + _lPestanas(totales)
+    + _lPane('bloqueados', _lBloqueados(dec.bloqueados || {}, p))
+    + _lPane('novedades', _lNovedades(dec.novedades || {}, p))
+    + _lPane('definitivos', _lDefinitivos(dec.definitivos || {}, p))
+    + _lPane('ajustes', _lAjustes(dec.ajustes || {}, p))
+    + _lPane('auditorias', _lAuditorias(dec.auditorias || {}))
+    + _lPane('rechazados', _lRechazados(dec.rechazados_siesa || {}, p))
+    + _lPane('fuera', _lFueraDelPlan(d.fuera_del_plan || {}))
+    + _lPane('hoy', _lHoy(d.hoy || {}))
     + `<div style="font-size:var(--fs-xs);color:var(--tx3);text-align:center;margin:8px 0 16px;">${esc(d.fuente || '')}</div>`;
+}
+
+// ── Pestañas de 📥 Por decidir ──────────────────────────────────────────────
+// Una sección a la vez, en el mismo lugar: todas se pintan y solo la elegida
+// se ve. «Recogido» vive en index.html (su propio endpoint) y es un pane más.
+
+/** Las pestañas, en el orden de la cola. Sin `total` (Hoy), el botón va sin número. */
+const LIDER_PESTANAS = [
+  ['bloqueados', '🔍 Bloqueados'], ['novedades', '🏷 Sin código'], ['definitivos', '🎯 Definitivos'],
+  ['ajustes', '⚖️ Ajustes'], ['auditorias', '🚨 Auditorías'], ['rechazados', '⛔ Rechazos Siesa'],
+  ['fuera', '🧾 Fuera del plan'], ['recogido', '📦 Recogido'], ['hoy', '📅 Hoy'],
+];
+
+/** La pestaña elegida: sobrevive a ↻, a cada acción y al cambio de almacén. */
+let _LIDER_PESTANA = 'bloqueados';
+
+function _lPane(id, html) {
+  return `<div class="lider-pane" data-pestana="${id}" style="display:${id === _LIDER_PESTANA ? 'block' : 'none'};">${html}</div>`;
+}
+
+/** Lo fijo de un botón de pestaña: grande (mínimo táctil), parejo en 3 columnas y con wrap en celular. */
+const LIDER_PESTANA_BASE = 'flex:1 1 30%;min-height:48px;padding:10px 8px;border:none;border-right:1px solid var(--brd);border-bottom:1px solid var(--brd);font-size:var(--fs-sm);cursor:pointer;';
+
+/** El estilo de un botón de pestaña: el mismo par activo que la sub-nav de Inventario. */
+function _lPestanaEstilo(activo) {
+  return activo
+    ? 'background:var(--pm-fill);color:#fff;font-weight:700;'
+    : 'background:transparent;color:var(--tx2);font-weight:500;';
+}
+
+/** El contador de una pestaña: amarillo si algo espera, suave si no. */
+function _lPestanaNum(n) {
+  if (n === null || n === undefined) return '';
+  const estilo = n > 0 ? 'background:var(--warn-bg);color:var(--warn-tx);' : 'background:var(--bg-input);color:var(--tx3);';
+  return `<span style="display:inline-block;margin-left:6px;padding:1px 8px;border-radius:10px;font-size:var(--fs-xs);font-weight:800;${estilo}">${_lNum(n)}</span>`;
+}
+
+/** La fila de botones. `totales` = {pestaña: n}. Los marcadores `lider-pestanas` delimitan la barra. */
+function _lPestanas(totales) {
+  const botones = LIDER_PESTANAS.map(([id, texto]) =>
+    `<button type="button" role="tab" aria-selected="${id === _LIDER_PESTANA}" class="lider-pestana" data-pestana="${id}" onclick="liderPestana('${id}')"
+      style="${LIDER_PESTANA_BASE}${_lPestanaEstilo(id === _LIDER_PESTANA)}">${esc(texto)}<span class="lider-pestana-n">${_lPestanaNum(totales[id])}</span></button>`).join('');
+  return `<!--lider-pestanas--><div role="tablist" style="display:flex;flex-wrap:wrap;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin:4px 0 4px;">${botones}</div><!--/lider-pestanas-->`;
+}
+
+/** Muestra una sección de 📥 Por decidir y oculta las demás. No pide nada al servidor. */
+function liderPestana(id) {
+  if (!LIDER_PESTANAS.some(([k]) => k === id)) id = 'bloqueados';
+  _LIDER_PESTANA = id;
+  const panel = document.getElementById('inv-panel-lider');
+  if (!panel || !panel.querySelectorAll) return;
+  panel.querySelectorAll('.lider-pane').forEach(el => {
+    el.style.display = el.dataset.pestana === id ? 'block' : 'none';
+  });
+  panel.querySelectorAll('.lider-pestana').forEach(el => {
+    const activo = el.dataset.pestana === id;
+    el.setAttribute('style', LIDER_PESTANA_BASE + _lPestanaEstilo(activo));
+    el.setAttribute('aria-selected', activo ? 'true' : 'false');
+  });
+}
+
+/** Pone en la pestaña 📦 Recogido el número de la última carga de su lista. */
+function _liderContadorRecogido() {
+  const panel = document.getElementById('inv-panel-lider');
+  const n = panel && panel.querySelector && panel.querySelector('.lider-pestana[data-pestana="recogido"] .lider-pestana-n');
+  if (n) n.innerHTML = _lPestanaNum(_RECOGIDO_SIN_DESPACHAR.length);
 }
 
 /** El almacén del tablero: el del selector propio, o el de la pestaña ABC. */
@@ -2966,6 +3044,8 @@ async function liderCargar() {
     // _LIDER_DATOS solo cambia con lo que se pinta: los botones buscan su fila
     // ahí, y una respuesta vieja descartada no puede dejarlos desalineados.
     html: (d) => { _LIDER_DATOS = d; return liderTableroHtml(d); },
+    // El pane de 📦 Recogido está fuera del tablero: se alinea con la pestaña.
+    despues: () => liderPestana(_LIDER_PESTANA),
     error: (e) => `<div style="text-align:center;padding:30px;color:var(--red);">${esc(e.message || 'Error cargando el tablero')}</div>`,
   });
 }
