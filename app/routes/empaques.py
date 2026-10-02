@@ -21,7 +21,7 @@ from app.services.empaques_service import (
     scan_barcode, descomponer_en_empaques, generar_lpn, consumir_lpn
 )
 from app.services import empaques_sync_service
-from app.routes._auth_helpers import Roles, _es_personal_almacen, _es_gestion
+from app.routes._auth_helpers import Roles, _es_personal_almacen, _es_gestion, _es_compras
 
 empaques_bp = Blueprint('empaques', __name__)
 
@@ -201,3 +201,18 @@ def sync_estado():
     if not _es_gestion():
         return jsonify({'error': 'Sin permiso para consultar estado del sync'}), 403
     return jsonify(empaques_sync_service.get_estado()), 200
+
+
+@empaques_bp.route('/revisar', methods=['GET'])
+@jwt_required()
+def paquetes_por_revisar():
+    """Productos cuyo paquete hay que completar en Siesa (solo lectura).
+
+    Ver `empaque_producto.paquetes_por_revisar`. Es la lista que se le entrega
+    a compras para que cargue en Siesa la unidad de empaque y su factor; el
+    WMS la vuelve a leer sola cada noche (sync de empaques, 02:30).
+    """
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver los paquetes por revisar'}), 403
+    from app.services.empaque_producto import paquetes_por_revisar as _revisar
+    return jsonify(_revisar()), 200

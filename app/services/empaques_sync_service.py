@@ -96,6 +96,64 @@ def _cargar_factores_q35():
     return factores
 
 
+def _sincronizar_paquetes_sin_codigo(factores_q35, prods_por_siesa, prods_por_codigo,
+                                     unidades_con_codigo):
+    """Paquetes de q35 (unidad ≠ UND, factor > 1) sin código de barras propio.
+
+    · Si el producto ya tiene ese paquete CON código (`unidades_con_codigo`, de
+      esta corrida, o una fila activa con código), no se crea nada y una fila
+      vieja sin código de esa unidad se apaga: el paquete ya está, con código.
+    · Si no, se crea o se actualiza una fila con `codigo_barras` NULL.
+
+    `factores_q35` es la única entrada: una corrida que no pudo leer q35 ya
+    abortó antes de llegar acá (Paso C).
+    """
+    insertados = 0
+    desactivados = 0
+    filas = (ProductoEmpaque.query
+             .filter(ProductoEmpaque.activo.is_(True),
+                     ProductoEmpaque.origen != 'WMS_LPN',
+                     ProductoEmpaque.factor_conversion > 1)
+             .all())
+    con_codigo = set(unidades_con_codigo)
+    sin_codigo = {}
+    for e in filas:
+        clave = (e.producto_id, (e.unidad_medida or '').strip().upper())
+        if e.codigo_barras:
+            con_codigo.add(clave)
+        else:
+            sin_codigo[clave] = e
+
+    for clave, e in sin_codigo.items():
+        if clave in con_codigo:
+            e.activo = False
+            desactivados += 1
+
+    for (referencia, unidad), factor in factores_q35.items():
+        unidad = (unidad or '').strip().upper()
+        if not unidad or unidad == 'UND' or not factor or factor <= 1:
+            continue
+        prod = prods_por_siesa.get(referencia) or prods_por_codigo.get(referencia)
+        if not prod:
+            continue
+        clave = (prod.id, unidad)
+        if clave in con_codigo:
+            continue
+        existente = sin_codigo.get(clave)
+        if existente is not None:
+            if existente.factor_conversion != factor:
+                existente.factor_conversion = factor
+            continue
+        db.session.add(ProductoEmpaque(
+            producto_id=prod.id, referencia_item=referencia, codigo_barras=None,
+            unidad_medida=unidad, factor_conversion=factor,
+            origen='SIESA_GS1', activo=True,
+        ))
+        sin_codigo[clave] = True
+        insertados += 1
+    return {'insertados': insertados, 'desactivados': desactivados}
+
+
 def _run_sync(app):
     global _sync_estado
     with app.app_context():
@@ -103,6 +161,12 @@ def _run_sync(app):
         actualizados = 0
         sin_producto = 0
         sin_factor = 0
+        sin_factor_refs = []
+        desactivados_sin_factor = 0
+        sin_codigo_insertados = 0
+        sin_codigo_desactivados = 0
+        # (producto_id, unidad) de paquetes que SÍ tienen código en q28.
+        unidades_con_codigo = set()
         errores = 0
 
         # Advisory lock de PostgreSQL — protege contra ejecución simultánea entre workers
@@ -206,10 +270,24 @@ def _run_sync(app):
                                 # Intentar con variantes de la referencia
                                 factor = factores_q35.get((referencia.upper(), unidad_raw))
                             if factor is None:
+                                # Antes caía a factor 1 «fallback seguro». No lo
+                                # era: escanear el paquete contaba 1 unidad. Un
+                                # paquete sin factor en q35 NO se registra como
+                                # paquete; si quedó de una corrida vieja, se
+                                # apaga. Se cuenta y se declara (2026-10-02).
                                 sin_factor += 1
-                                factor = 1  # fallback seguro
+                                if len(sin_factor_refs) < 200:
+                                    sin_factor_refs.append(f'{referencia} {unidad_raw}')
+                                _ed_viejo = empaques_existentes.get((prod.id, codigo_barras))
+                                if (_ed_viejo and _ed_viejo.origen != 'WMS_LPN'
+                                        and _ed_viejo.orm.activo):
+                                    _ed_viejo.orm.activo = False
+                                    desactivados_sin_factor += 1
+                                continue
 
                         unidad = unidad_raw if unidad_raw else 'UND'
+                        if unidad != 'UND':
+                            unidades_con_codigo.add((prod.id, unidad))
 
                         clave = (prod.id, codigo_barras)
                         if clave in empaques_existentes:
@@ -261,11 +339,27 @@ def _run_sync(app):
                     f'sin_factor={sin_factor}'
                 )
 
+            # ── Paso E: paquetes que q35 declara sin código de barras propio ──
+            # Antes no entraban: solo se guardaba lo que q28 traía con EAN, y un
+            # PQ × 12 sin código no existía para el WMS (26 productos en
+            # producción con `unidad_empaque` PQ y sin factor, 2026-10-02). Se
+            # guardan con `codigo_barras` NULL: sirven para mostrar y pedir por
+            # paquete, nunca para escanear.
+            sin_codigo = _sincronizar_paquetes_sin_codigo(
+                factores_q35, prods_por_siesa, prods_por_codigo, unidades_con_codigo)
+            sin_codigo_insertados = sin_codigo['insertados']
+            sin_codigo_desactivados = sin_codigo['desactivados']
+            db.session.commit()
+
             resultado = {
                 'insertados': insertados,
                 'actualizados': actualizados,
                 'sin_producto_local': sin_producto,
                 'sin_factor_q35': sin_factor,
+                'sin_factor_q35_refs': sin_factor_refs,
+                'desactivados_sin_factor': desactivados_sin_factor,
+                'paquetes_sin_codigo_insertados': sin_codigo_insertados,
+                'paquetes_sin_codigo_desactivados': sin_codigo_desactivados,
                 'errores': errores,
                 'factores_q35_cargados': len(factores_q35),
                 'timestamp': datetime.utcnow().isoformat(),

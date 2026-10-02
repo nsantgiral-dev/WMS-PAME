@@ -20,7 +20,11 @@ class ProductoEmpaque(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     producto_id = db.Column(db.Integer, db.ForeignKey('productos.id', ondelete='CASCADE'), nullable=False)
     referencia_item = db.Column(db.String(50), nullable=False)  # codigo_siesa — para re-sync
-    codigo_barras = db.Column(db.String(50), nullable=False)    # lo que lee el scanner
+    #: Lo que lee el scanner. NULL = paquete que Siesa declara (q35) sin un
+    #: código de barras propio (m053pedirpaquete): sirve para MOSTRAR y PEDIR
+    #: por paquete, nunca para escanear — `buscar_*_por_barcode` no matchean
+    #: un vacío.
+    codigo_barras = db.Column(db.String(50), nullable=True)
     unidad_medida = db.Column(db.String(20), nullable=False)    # CAJ, PACA, PAQ, UND
     factor_conversion = db.Column(db.Integer, nullable=False)   # UNDs base que contiene
     origen = db.Column(db.String(20), nullable=False, default='SIESA_GS1')
@@ -35,6 +39,8 @@ class ProductoEmpaque(db.Model):
     @classmethod
     def buscar_por_barcode(cls, codigo_barras: str):
         """Lookup principal: dado un código escaneado, retorna el empaque activo."""
+        if not (codigo_barras or '').strip():
+            return None
         return cls.query.filter_by(
             codigo_barras=codigo_barras.strip(),
             activo=True
@@ -43,6 +49,8 @@ class ProductoEmpaque(db.Model):
     @classmethod
     def buscar_todos_por_barcode(cls, codigo_barras: str):
         """Retorna todos los empaques que coinciden con ese código (para detectar ambigüedad)."""
+        if not (codigo_barras or '').strip():
+            return []
         return cls.query.filter_by(
             codigo_barras=codigo_barras.strip(),
             activo=True

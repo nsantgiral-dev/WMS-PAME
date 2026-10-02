@@ -205,8 +205,9 @@ class MobileService:
                 'cantidad_requerida': tarea_activa.cantidad_solicitada,
                 'cantidad_escaneada': tarea_activa.cantidad_recogida,
                 'empaques_escaneados': tarea_activa.empaques_escaneados or 0,
-                'factor_conversion': (tarea_activa.producto.factor_conversion or 1) if tarea_activa.producto else 1,
-                'unidad_empaque': (tarea_activa.producto.unidad_empaque or '').upper() if tarea_activa.producto else '',
+                # El paquete lo decide `empaque_producto` (una política): el
+                # HUD pinta «2 PQ + 5 und»; lo recogido sigue en unidades.
+                **MobileService._empaque_hud(tarea_activa.producto),
                 'estado': tarea_activa.estado,
                 'referencia': tarea_activa.referencia_documento,
                 'lote': tarea_activa.lote,
@@ -659,8 +660,7 @@ class MobileService:
             _tarea_cantidad_requerida = tarea.cantidad_solicitada
             _tarea_cantidad_escaneada = tarea.cantidad_recogida
             _tarea_empaques_escaneados = tarea.empaques_escaneados or 0
-            _tarea_factor = tarea.producto.factor_conversion or 1 if tarea.producto else 1
-            _tarea_unidad_empaque = (tarea.producto.unidad_empaque or '').upper() if tarea.producto else ''
+            _tarea_empaque_hud = MobileService._empaque_hud(tarea.producto)
             _tarea_referencia = tarea.referencia_documento
             _tarea_lote = tarea.lote
             _tarea_tipo_documento = tarea.tipo_documento or 'PEDIDO'
@@ -688,8 +688,7 @@ class MobileService:
                 'cantidad_requerida': _tarea_cantidad_requerida,
                 'cantidad_escaneada': _tarea_cantidad_escaneada,
                 'empaques_escaneados': _tarea_empaques_escaneados,
-                'factor_conversion': _tarea_factor,
-                'unidad_empaque': _tarea_unidad_empaque,
+                **_tarea_empaque_hud,
                 'estado': 'EN_PROCESO',
                 'referencia': _tarea_referencia,
                 'lote': _tarea_lote,
@@ -851,6 +850,19 @@ class MobileService:
         logger.info('[MOBILE] Conteo pre-asignado %s activado para picker %s',
                     sesion.codigo, operario_id)
         return MobileService._conteo_a_dict(sesion)
+
+    @staticmethod
+    def _empaque_hud(producto) -> dict:
+        """`factor_conversion` + `unidad_empaque` que pinta el HUD de picking.
+
+        De `empaque_producto.empaque_de`, no del producto: `Producto.factor_
+        conversion` está en 1 para casi todo el catálogo y el HUD nunca
+        mostraba un paquete (2026-10-02). Solo es lo que se VE: el escaneo
+        cuenta con `_unidades_del_escaneo`, que no cambia."""
+        from app.services.empaque_producto import empaque_de
+        emp = empaque_de(producto)
+        return {'factor_conversion': emp.factor if emp else 1,
+                'unidad_empaque': emp.unidad if emp else ''}
 
     @staticmethod
     def _normalizar(codigo: str) -> str:

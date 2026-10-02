@@ -21,7 +21,6 @@ from app.extensions import db
 from app.models.traslado import (SolicitudTraslado, ItemSolicitudTraslado,
                                 EstadoTraslado, ClaseTraslado)
 from app.models.producto import Producto
-from app.models.producto_empaque import ProductoEmpaque
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
@@ -74,23 +73,17 @@ def traslado_usa_rit() -> bool:
 
 
 def _resolver_empaque(prod):
-    """Retorna (unidad_empaque, factor) desde Producto o ProductoEmpaque."""
-    if prod and prod.unidad_empaque and (prod.factor_conversion or 1) > 1:
-        logger.info('[EMPAQUE] %s resuelto desde Producto: uom=%s factor=%s',
-                     prod.codigo_siesa, prod.unidad_empaque, prod.factor_conversion)
-        return prod.unidad_empaque, prod.factor_conversion
-    if prod:
-        emp = ProductoEmpaque.query.filter(
-            ProductoEmpaque.producto_id == prod.id,
-            ProductoEmpaque.factor_conversion > 1,
-            ProductoEmpaque.activo.is_(True),
-        ).order_by(ProductoEmpaque.factor_conversion).first()
-        if emp:
-            logger.info('[EMPAQUE] %s resuelto desde ProductoEmpaque: uom=%s factor=%s',
-                         prod.codigo_siesa, emp.unidad_medida, emp.factor_conversion)
-            return emp.unidad_medida, emp.factor_conversion
-        logger.warning('[EMPAQUE] %s (id=%s) sin empaque en Producto ni ProductoEmpaque',
-                        prod.codigo_siesa, prod.id)
+    """`(unidad_empaque, factor)` para el payload del STS/ETS, o `('', 1)`.
+
+    Delegada en `empaque_producto.empaque_de` — la única que decide el paquete
+    de un producto (2026-10-02). Antes tenía su propia política, distinta de la
+    del HUD de picking. El STS y el ETS de un traslado la llaman las dos, así
+    que salida y entrada viajan en la misma unidad.
+    """
+    from app.services.empaque_producto import empaque_de
+    emp = empaque_de(prod)
+    if emp:
+        return emp.unidad, emp.factor
     return '', 1
 
 
@@ -292,15 +285,28 @@ class TrasladoService:
         db.session.add(solicitud)
         db.session.flush()
 
+        from app.services.empaque_producto import empaque_de, unidades_de_linea
         for item_data in items:
             producto = Producto.query.get(item_data['producto_id'])
             if not producto:
                 raise ValueError(f"Producto {item_data['producto_id']} no encontrado")
+            # Paquetes + sueltas → unidades, con el factor vigente: la cantidad
+            # la calcula el servidor, no la pantalla (2026-10-02).
+            empaque = empaque_de(producto)
+            cantidad, paquetes, sueltas = unidades_de_linea(
+                item_data, empaque, 'cantidad_solicitada', producto.nombre)
+            if cantidad < 1:
+                raise ValueError(f'Pida al menos una unidad de {producto.nombre}')
             item = ItemSolicitudTraslado(
                 solicitud_id=solicitud.id,
                 producto_id=producto.id,
                 producto_codigo_siesa=producto.codigo_siesa or producto.codigo,
-                cantidad_solicitada=item_data['cantidad_solicitada'],
+                cantidad_solicitada=cantidad,
+                paquetes_pedidos=paquetes if empaque and paquetes is not None else None,
+                sueltas_pedidas=sueltas if empaque and paquetes is not None else None,
+                factor_al_pedir=empaque.factor if empaque and paquetes is not None else None,
+                unidad_empaque_al_pedir=(empaque.unidad
+                                         if empaque and paquetes is not None else None),
                 disponible_siesa=item_data.get('disponible_siesa'),
                 # El motivo solo viaja en un traslado de averías. En uno normal
                 # no hay avería que motivar, y dejarlo entrar convertiría el
@@ -420,9 +426,30 @@ class TrasladoService:
 
         # Actualizar cantidades aprobadas
         if items_aprobados:
-            aprobados_map = {i['id']: i['cantidad_aprobada'] for i in items_aprobados}
+            # Quien aprueba también puede ajustar en paquetes + sueltas; el
+            # total en unidades lo calcula el servidor con el factor vigente.
+            from app.services.empaque_producto import empaques_de, unidades_de_linea
+            _emps = empaques_de([i.producto for i in s.items if i.producto])
+            _por_id = {i.id: i for i in s.items}
+            aprobados_map = {}
+            for i in items_aprobados:
+                _it = _por_id.get(i.get('id'))
+                if _it is None:
+                    continue
+                aprobados_map[_it.id] = unidades_de_linea(
+                    i, _emps.get(_it.producto_id), 'cantidad_aprobada',
+                    _it.producto.nombre if _it.producto else '')[0]
             for item in s.items:
                 item.cantidad_aprobada = aprobados_map.get(item.id, item.cantidad_solicitada)
+                # El CHECK `ck_traslado_cadena_no_crece` lo rechazaría al
+                # commitear; decirlo acá es lo que hace que el mensaje llegue a
+                # quien apretó el botón (en paquetes es fácil pasarse).
+                if item.cantidad_aprobada > item.cantidad_solicitada:
+                    raise ValueError(
+                        f'No se puede aprobar más de lo pedido: '
+                        f'{item.producto.nombre if item.producto else item.producto_codigo_siesa} '
+                        f'pidió {item.cantidad_solicitada} und y se aprobaron '
+                        f'{item.cantidad_aprobada}.')
         else:
             for item in s.items:
                 item.cantidad_aprobada = item.cantidad_solicitada

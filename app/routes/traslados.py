@@ -1332,6 +1332,17 @@ def stock_disponible():
         inicio = (page - 1) * per_page
         items_pagina = items_filtrados[inicio:inicio + per_page]
 
+        # El paquete de cada producto de la página (2026-10-02): la pantalla
+        # pinta «1.368 und · 114 PQ×12» y ofrece pedir en paquetes. Copias de
+        # cada fila — las del cache las leen todas las peticiones.
+        from app.services.empaque_producto import empaques_por_id
+        _emps = empaques_por_id(it.get('producto_id') for it in items_pagina)
+        items_pagina = [
+            {**it, 'empaque': (_emps[it['producto_id']].a_dict()
+                               if it.get('producto_id') in _emps else None)}
+            for it in items_pagina
+        ]
+
         resultado = dict(cacheado)
         resultado['items'] = items_pagina
         resultado['pagina'] = page

@@ -265,6 +265,10 @@ class SolicitudTraslado(db.Model):
             not consec_cierre and
             self.estado not in estados_sin_cierre_esperado
         )
+        # El paquete vigente de cada producto, en una consulta para todas las
+        # líneas (no una por línea).
+        from app.services.empaque_producto import empaques_de
+        _emps = empaques_de([i.producto for i in self.items if i.producto])
         return {
             'id': self.id,
             'codigo': self.codigo,
@@ -303,7 +307,7 @@ class SolicitudTraslado(db.Model):
             'averia_veredicto_at': (self.averia_veredicto_at.isoformat()
                                     if self.averia_veredicto_at else None),
             'averia_veredicto_nota': self.averia_veredicto_nota,
-            'items': [i.to_dict() for i in self.items],
+            'items': [i.to_dict(empaque=_emps.get(i.producto_id)) for i in self.items],
             'total_items': len(self.items),
             'picking_progreso': self._picking_progreso(),
             'packing_info': self._packing_info(),
@@ -382,6 +386,17 @@ class ItemSolicitudTraslado(db.Model):
     #: el documento entero.)
     motivo_averia = db.Column(db.String(200))
 
+    #: Cómo lo pidió la persona (m053pedirpaquete, 2026-10-02). La verdad sigue
+    #: siendo `cantidad_solicitada`, en unidades: estas cuatro solo dicen que
+    #: esas unidades se pidieron como «2 PQ × 12 + 5 sueltas», para que bodega
+    #: y tienda lean lo mismo que se pidió. NULL = se pidió en unidades (o la
+    #: línea es de antes). El factor se guarda porque el del producto puede
+    #: cambiar mañana y la línea de hoy tiene que seguir diciendo lo que dijo.
+    paquetes_pedidos = db.Column(db.Integer, nullable=True)
+    sueltas_pedidas = db.Column(db.Integer, nullable=True)
+    factor_al_pedir = db.Column(db.Integer, nullable=True)
+    unidad_empaque_al_pedir = db.Column(db.String(20), nullable=True)
+
     producto = db.relationship('Producto', backref='items_traslado', lazy=True)
 
     __table_args__ = (
@@ -410,7 +425,7 @@ class ItemSolicitudTraslado(db.Model):
             name='ck_traslado_cadena_no_crece'),
     )
 
-    def to_dict(self):
+    def to_dict(self, empaque=None):
         return {
             'id': self.id,
             'solicitud_id': self.solicitud_id,
@@ -424,4 +439,14 @@ class ItemSolicitudTraslado(db.Model):
             'cantidad_recibida': self.cantidad_recibida,
             'disponible_siesa': self.disponible_siesa,
             'motivo_averia': self.motivo_averia,
+            # El paquete vigente del producto (`empaque_producto`), para que la
+            # pantalla pinte «29 und · 2 PQ×12 + 5 und». Lo calcula
+            # `SolicitudTraslado.to_dict` en una consulta para todas las líneas.
+            'empaque': empaque.a_dict() if empaque else None,
+            'pedido_como': ({
+                'paquetes': self.paquetes_pedidos,
+                'sueltas': self.sueltas_pedidas,
+                'factor': self.factor_al_pedir,
+                'unidad': self.unidad_empaque_al_pedir,
+            } if self.factor_al_pedir else None),
         }
