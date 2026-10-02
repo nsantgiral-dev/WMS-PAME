@@ -780,13 +780,30 @@ class ConnektaConsultasGateway:
         return barras
 
     def get_items_catalogo(self, pagina: int = 1):
-        """API_v2_Items — catálogo completo de productos Siesa (para sync)."""
+        """API_v2_Items — catálogo de productos Siesa **de la compañía propia**
+        (para sync).
+
+        **Filtrado por `f120_id_cia`** (2026-10-02). Sin filtro, API_v2_Items de
+        producción trae dos compañías: la 1 (la real, 29.880 ítems) y la 2, una
+        copia hecha por el usuario «Duplicacion» el 2024-02-08 con el MISMO
+        `f120_id` y las referencias viejas (ítem 17173 = P197_006 en la 1 y
+        PAPELSP8985 en la 2). El sync importaba las dos: ~3.600 productos de la
+        compañía 2 convivían con sus pares reales, compartían código de barras
+        —el escáner daba «ambiguo» en ~4.000 códigos— y el conteo cíclico los
+        programaba sobre referencias que Siesa no puede ajustar. Mismo criterio
+        que `buscar_item_por_referencia` y que `compras_oc_sync._de_otra_compania`.
+
+        Pasado el final del catálogo filtrado, Siesa responde 400 «No se
+        encontraron registros»; `core._get` lo convierte en tabla vacía, que el
+        sync lee como fin de catálogo.
+        """
         import os
 
         core = self._core
         api_items = os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items')
         return core._get(api_items, {
-            'paginacion': f'numPag={pagina}|tamPag=100'
+            'paginacion': f'numPag={pagina}|tamPag=100',
+            'parametros': f'f120_id_cia = {int(core.id_cia_siesa)}',
         })
 
     def _get_items_filtrado(self, parametros: str):

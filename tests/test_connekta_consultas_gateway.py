@@ -109,6 +109,32 @@ def test_get_pedido_rowid_map_usa_llamada_intra_dominio(app, monkeypatch):
         assert mapa == {'PAPELSP9218': 555}
 
 
+def test_get_items_catalogo_trae_solo_la_compania_propia(app, monkeypatch):
+    """API_v2_Items de producción trae la compañía 1 y la 2 (copia con las
+    referencias viejas, mismo f120_id). El catálogo que alimenta el sync tiene
+    que pedir solo la propia: sin filtro, el WMS importaba las dos."""
+    with app.app_context():
+        from app.services.connekta_gateway import connekta
+
+        capturado = {}
+
+        def _fake_get(nombre_api, params=None, **kw):
+            capturado['nombre_api'] = nombre_api
+            capturado['params'] = params
+            return {'detalle': {'Table': []}}
+
+        monkeypatch.setattr(connekta, '_get', _fake_get)
+        monkeypatch.setattr(connekta, 'id_cia_siesa', '1')
+        connekta.get_items_catalogo(7)
+        assert capturado['nombre_api'] == 'API_v2_Items'
+        assert capturado['params']['paginacion'] == 'numPag=7|tamPag=100'
+        assert capturado['params']['parametros'] == 'f120_id_cia = 1'
+
+        monkeypatch.setattr(connekta, 'id_cia_siesa', '3')
+        connekta.get_items_catalogo(1)
+        assert capturado['params']['parametros'] == 'f120_id_cia = 3'
+
+
 def test_buscar_item_por_referencia_encuentra_por_referencia_sin_probar_id(app, monkeypatch):
     """Caso normal: referencia exacta encuentra el ítem en el primer intento
     — nunca debe intentar un segundo GET por f120_id."""
