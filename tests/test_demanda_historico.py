@@ -368,7 +368,11 @@ class TestElHistorico:
         sigue lo cubre la reciente (14 días), así que no vuelve a la lista."""
         from app.services import demanda_fuentes as dfu
         hoy = _hoy()
-        v0 = dfu.ventanas_historicas(hoy)[0]
+        # Del 2 al 6 de cada trimestre el período en curso tiene menos de 5
+        # días: su `hasta` − 5 caería antes de su `desde`. Se toma el más
+        # reciente que alcanza (2026-10-02: el CI se puso rojo ese día).
+        v0 = next(v for v in dfu.ventanas_historicas(hoy)
+                  if (v['hasta'] - v['desde']).days > 5)
         registrado_hasta = v0['hasta'] - timedelta(days=5)
         gw = SiesaVentas({v0['consulta']: (_filas(v0['desde'], registrado_hasta, refs=('A',),
                                                   bodegas=('NB1',)),
