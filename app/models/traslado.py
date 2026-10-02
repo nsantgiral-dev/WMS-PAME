@@ -78,6 +78,10 @@ def _faltante_de(solicitud):
     return faltante_de_recepcion(solicitud)
 
 
+#: «Calcúlelo usted»: `None` es un valor válido de picking/packing.
+_SIN_CALCULAR = object()
+
+
 class SolicitudTraslado(db.Model):
     __tablename__ = 'solicitudes_traslado'
 
@@ -236,7 +240,24 @@ class SolicitudTraslado(db.Model):
         """
         return self.clase_traslado == ClaseTraslado.AVERIAS
 
-    def to_dict(self):
+    @classmethod
+    def lista_a_dict(cls, solicitudes) -> list:
+        """`to_dict` de una LISTA sin una consulta por solicitud: el paquete de
+        todos los productos, las tareas de picking y las de packing se leen
+        una vez para toda la lista (antes eran 1-3 consultas por solicitud más
+        un `producto` perezoso por línea)."""
+        from app.services.empaque_producto import empaques_de
+        from app.services import traslado_actividad
+        solicitudes = list(solicitudes)
+        if not solicitudes:
+            return []
+        emps = empaques_de([i.producto for s in solicitudes for i in s.items if i.producto])
+        picking = traslado_actividad.picking_de(solicitudes)
+        packing = traslado_actividad.packing_de(solicitudes)
+        return [s.to_dict(_empaques=emps, _picking=picking[s.id], _packing=packing[s.id])
+                for s in solicitudes]
+
+    def to_dict(self, _empaques=None, _picking=_SIN_CALCULAR, _packing=_SIN_CALCULAR):
         # El error de Siesa es relevante (requiere acción) solo cuando no hay
         # consecutivo de cierre — significa que el movimiento nunca llegó a Siesa.
         consec_cierre = (self.siesa_entrada_consec if self.modo_transferencia == 'EN_TRANSITO'
@@ -267,8 +288,10 @@ class SolicitudTraslado(db.Model):
         )
         # El paquete vigente de cada producto, en una consulta para todas las
         # líneas (no una por línea).
-        from app.services.empaque_producto import empaques_de
-        _emps = empaques_de([i.producto for i in self.items if i.producto])
+        if _empaques is None:
+            from app.services.empaque_producto import empaques_de
+            _empaques = empaques_de([i.producto for i in self.items if i.producto])
+        _emps = _empaques
         return {
             'id': self.id,
             'codigo': self.codigo,
@@ -309,49 +332,21 @@ class SolicitudTraslado(db.Model):
             'averia_veredicto_nota': self.averia_veredicto_nota,
             'items': [i.to_dict(empaque=_emps.get(i.producto_id)) for i in self.items],
             'total_items': len(self.items),
-            'picking_progreso': self._picking_progreso(),
-            'packing_info': self._packing_info(),
+            'picking_progreso': (self._picking_progreso() if _picking is _SIN_CALCULAR
+                                 else _picking),
+            'packing_info': (self._packing_info() if _packing is _SIN_CALCULAR
+                             else _packing),
         }
 
     def _picking_progreso(self):
-        """Progreso de TareasPicking — solo relevante en EN_PICKING/PREPARADO.
-        [M9] Single query with conditional count instead of 2 separate COUNT queries.
-        """
-        if self.estado not in (EstadoTraslado.EN_PICKING, EstadoTraslado.PREPARADO):
-            return None
-        from sqlalchemy import func as _func, case as _case
-        from app.extensions import db as _db
-        row = _db.session.query(
-            _func.count().label('total'),
-            _func.count(_case((TareaPicking.estado == 'COMPLETADO', 1))).label('completadas'),
-        ).select_from(TareaPicking).filter(
-            TareaPicking.referencia_documento == self.codigo,
-            TareaPicking.tipo_documento == 'TRASLADO',
-        ).first()
-        total, completadas = row.total, row.completadas
-        if total == 0:
-            return {'total': 0, 'completadas': 0, 'sin_tareas': True}
-        return {
-            'total': total,
-            'completadas': completadas,
-            'sin_tareas': False,
-            'porcentaje': round(completadas / total * 100),
-        }
+        """Progreso y actividad real del picking — `traslado_actividad`."""
+        from app.services import traslado_actividad
+        return traslado_actividad.picking_de([self])[self.id]
 
     def _packing_info(self):
-        """TareaPacking activa — relevante en EN_PACKING y PREPARADO (despacho pendiente)."""
-        if self.estado not in (EstadoTraslado.EN_PACKING, EstadoTraslado.PREPARADO):
-            return None
-        tareas = self.tareas_packing
-        if not tareas:
-            return None
-        t = tareas[0]
-        return {
-            'id': t.id,
-            'codigo': t.codigo,
-            'estado': t.estado,
-            'empacador': t.empacador.nombre if t.empacador else None,
-        }
+        """Tarea de packing y su actividad real — `traslado_actividad`."""
+        from app.services import traslado_actividad
+        return traslado_actividad.packing_de([self])[self.id]
 
 
 class ItemSolicitudTraslado(db.Model):

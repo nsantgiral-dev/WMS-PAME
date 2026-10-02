@@ -15,14 +15,21 @@ logger = logging.getLogger(__name__)
 from app.routes._auth_helpers import _solo_admin
 
 
-def _picking_listo_batch(numeros_pedido: list) -> tuple[dict, dict]:
+def _picking_listo_batch(numeros_pedido: list) -> tuple[dict, dict, dict]:
     """
     Consulta en UNA sola query si el picking está completo para cada pedido,
     y si el motivo de no estarlo es que hay una tarea BLOQUEADA esperando
     auditoría (no que nadie la haya tomado todavía).
 
-    Devuelve (listo, bloqueado): {numero_pedido: bool} cada uno.
-    Evita el N+1 de _enriquecer_picking_listo que hacía 1 query por packing.
+    Devuelve (listo, bloqueado, actividad): {numero_pedido: bool} los dos
+    primeros; `actividad` {numero_pedido: dict} es quién tiene el picking y
+    cuándo se movió por última vez (`traslado_actividad.actividad_picking`,
+    la misma regla de Requisiciones). Evita el N+1 de
+    _enriquecer_picking_listo que hacía 1 query por packing.
+
+    `listo=False` no significa «alguien está pickeando»: también lo es una
+    tarea PENDIENTE que nadie tomó. La pantalla decía «El operario aún está
+    pickeando» en los dos casos (2026-10-02); `actividad` los separa.
 
     La distinción importa para la pantalla del empacador: "Esperando
     picking" invita a que alguien la pickee — pero una tarea BLOQUEADA
@@ -32,7 +39,7 @@ def _picking_listo_batch(numeros_pedido: list) -> tuple[dict, dict]:
     nunca va a pasar solo.
     """
     if not numeros_pedido:
-        return {}, {}
+        return {}, {}, {}
 
     pickings = TareaPicking.query.filter(
         TareaPicking.referencia_documento.in_(numeros_pedido),
@@ -53,6 +60,15 @@ def _picking_listo_batch(numeros_pedido: list) -> tuple[dict, dict]:
         if p.estado == EstadoPicking.BLOQUEADO:
             por_pedido[num]['bloqueados'] += 1
 
+    from datetime import datetime as _dt
+    from app.services.traslado_actividad import actividad_picking, nombres_de
+    _ahora = _dt.utcnow()
+    _nombres = nombres_de([p.operario_id for p in pickings] + [p.ultimo_operario_id for p in pickings])
+    _por_num = {}
+    for p in pickings:
+        _por_num.setdefault(p.referencia_documento, []).append(p)
+    actividad = {num: actividad_picking(ts, _nombres, _ahora) for num, ts in _por_num.items()}
+
     listo = {}
     bloqueado = {}
     for num in numeros_pedido:
@@ -63,7 +79,7 @@ def _picking_listo_batch(numeros_pedido: list) -> tuple[dict, dict]:
         else:
             listo[num] = datos['completados'] == datos['total']
             bloqueado[num] = datos['bloqueados'] > 0
-    return listo, bloqueado
+    return listo, bloqueado, actividad
 
 
 @packing_bp.route('/', methods=['GET'])
@@ -113,7 +129,7 @@ def listar_tareas():
 
     # Una sola query para todos los pickings de la página — sin N+1
     numeros = [t.numero_pedido_siesa for t in tareas.items]
-    picking_listo_map, picking_bloqueado_map = _picking_listo_batch(numeros)
+    picking_listo_map, picking_bloqueado_map, picking_actividad_map = _picking_listo_batch(numeros)
     # Retenido por cartera en el cierre: la caja queda VERIFICADA sin Siesa y
     # no es un «Reintentar Siesa» (`cartera_service.compuerta_cierre`).
     from app.services.cartera_service import resumen_por_pedido as _retenidos_cartera
@@ -130,6 +146,7 @@ def listar_tareas():
         d = t.to_dict()
         d['picking_listo'] = picking_listo_map.get(t.numero_pedido_siesa, True)
         d['picking_bloqueado'] = picking_bloqueado_map.get(t.numero_pedido_siesa, False)
+        d['picking_actividad'] = picking_actividad_map.get(t.numero_pedido_siesa)
         d['retencion_cartera'] = retenidos.get(t.numero_pedido_siesa)
         d['estado_emision'] = emision.get(t.id)
         items.append(d)
@@ -156,9 +173,10 @@ def obtener_tarea(id):
     if u.almacen_id and tarea.almacen_id and u.almacen_id != tarea.almacen_id and u.rol not in ('admin', 'supervisor', 'gerente'):
         return jsonify({'error': 'Sin acceso a esta tarea'}), 403
     d = tarea.to_dict()
-    _listo_map, _bloqueado_map = _picking_listo_batch([tarea.numero_pedido_siesa])
+    _listo_map, _bloqueado_map, _actividad_map = _picking_listo_batch([tarea.numero_pedido_siesa])
     d['picking_listo'] = _listo_map.get(tarea.numero_pedido_siesa, True)
     d['picking_bloqueado'] = _bloqueado_map.get(tarea.numero_pedido_siesa, False)
+    d['picking_actividad'] = _actividad_map.get(tarea.numero_pedido_siesa)
     from app.services.documento_fiscal import estado_emision
     d['estado_emision'] = estado_emision(tarea)
     return jsonify(d), 200

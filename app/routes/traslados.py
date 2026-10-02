@@ -93,7 +93,7 @@ def listar_solicitudes():
 
     pag = query.paginate(page=page, per_page=30, error_out=False)
     return jsonify({
-        'solicitudes': [s.to_dict() for s in pag.items],
+        'solicitudes': SolicitudTraslado.lista_a_dict(pag.items),
         'total': pag.total,
         'paginas': pag.pages or 1,
         'pagina': page,
@@ -330,6 +330,8 @@ def averias_pendientes():
     # `is_(None)` y no `.isnot(True)`: un veredicto `False` («no estaba
     # averiada») es una decisión tomada, no un pendiente.
     q = (SolicitudTraslado.query
+         .options(subqueryload(SolicitudTraslado.items)
+                  .joinedload(ItemSolicitudTraslado.producto))
          .filter(
              SolicitudTraslado.clase_traslado == ClaseTraslado.AVERIAS,
              SolicitudTraslado.estado == EstadoTraslado.ENTREGADA,
@@ -341,7 +343,7 @@ def averias_pendientes():
     # algún día son tantas que hay que paginarlas, el problema no es la lista.
     solicitudes = q.all()
     return jsonify({
-        'solicitudes': [s.to_dict() for s in solicitudes],
+        'solicitudes': SolicitudTraslado.lista_a_dict(solicitudes),
         'total': len(solicitudes),
     }), 200
 
@@ -1134,7 +1136,7 @@ def pendientes_recepcion():
         .order_by(SolicitudTraslado.fecha_creacion.desc())
         .all()
     )
-    return jsonify({'solicitudes': [s.to_dict() for s in solicitudes]}), 200
+    return jsonify({'solicitudes': SolicitudTraslado.lista_a_dict(solicitudes)}), 200
 
 
 @traslados_bp.route('/mis-traslados', methods=['GET'])
@@ -1165,7 +1167,7 @@ def mis_traslados():
     else:
         solicitudes = base.filter(filtro_asignado)
     solicitudes = solicitudes.order_by(SolicitudTraslado.fecha_aprobacion.desc()).all()
-    return jsonify({'traslados': [s.to_dict() for s in solicitudes]}), 200
+    return jsonify({'traslados': SolicitudTraslado.lista_a_dict(solicitudes)}), 200
 
 
 @traslados_bp.route('/operarios-disponibles', methods=['GET'])
