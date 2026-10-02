@@ -8484,3 +8484,63 @@ que maneja `UbicacionProducto`, toda función que cambia `.cantidad` (`=`,
 Inventario de excepciones vacío, solo encoge; meta-tests y piso. **No ve:** un
 cambio de `.cantidad` de `UbicacionProducto` en un módulo que no nombra la
 clase (hoy ninguno) ni SQL crudo.
+
+---
+
+## Paquetes al pedir (2026-10-02)
+
+**Decisiones del dueño:** si el producto viene en paquete, la casilla de pedir
+**arranca en paquetes** (si no alcanza uno completo, en unidades); siempre se ve
+cuántas unidades trae el paquete y cuántas suman los elegidos; y se pueden pedir
+**unidades sueltas junto con los paquetes** (2 PQ + 5 und = 29 und). El
+inventario, Siesa, el conteo y el picking siguen en **unidades**: el paquete
+solo cambia cómo se ve y cómo se pide.
+
+**La clase que se cerró:** *dos funciones contestaban «en qué paquete viene este
+producto» con dos políticas.* `traslado_service._resolver_empaque` caía a
+`producto_empaques`; el HUD de picking leía solo `Producto.factor_conversion`,
+que está en 1 para casi todo el catálogo — el picking casi nunca mostraba un
+paquete aunque el dato existiera.
+
+| | Ahora |
+|---|---|
+| La política | `app/services/empaque_producto.py` — `empaque_de` / `empaques_de` (lote) / `empaques_por_id`: `producto_empaques` activo, factor > 1, **de Siesa** (una paca `WMS_LPN` no es la unidad comercial y su unidad no existe en Siesa); con varios, el que coincide con `Producto.unidad_empaque` (la que Siesa declara), si no el menor; sin filas, el dato viejo del producto (`FUENTE_PRODUCTO`). `_resolver_empaque` (STS/ETS) y el HUD de picking (`MobileService._empaque_hud`) le preguntan a ella |
+| Pedir | Tienda → Pedir y Traslados → Pedir del admin: dos casillas `[PQ] + [und]` con «PQ × 12 und» y «= N und» en vivo (`util.js`: `empaqueCasillasHtml`, `empaqueLeer`, `empaqueTexto`, `empaqueResumen`, `empaqueDeLinea`). Más que lo disponible se dice y no entra. La pantalla manda `paquetes`, `sueltas` y el total; **el servidor recalcula** con el factor vigente (`unidades_de_linea`) y rechaza si no cuadra. Sin paquete, una casilla como siempre |
+| Aprobar | Los dos modales del admin (traslado y requisición) arrancan en lo pedido (como lo pidió la persona si el factor no cambió) y admiten cero; el servidor no deja aprobar más de lo pedido (mensaje antes del CHECK) |
+| Verlo | `GET /api/traslados/stock-disponible` trae `empaque` por fila (copias: el cache no se toca); `ItemSolicitudTraslado.to_dict` trae `empaque` (vigente, una consulta por solicitud) y `pedido_como`. «1.368 und · 114 PQ×12» en Pedir, Mis pedidos, la tarjeta del admin, el operario, Recibir traslado (tienda y CD) y el HUD de picking («de 2 PQ + 5 und», con los paquetes derivados de las unidades: el escaneo del paquete ya llega convertido) |
+| Guardado | m053pedirpaquete (aditiva): `items_solicitud_traslado.paquetes_pedidos / sueltas_pedidas / factor_al_pedir / unidad_empaque_al_pedir` (NULL = pedido en unidades o línea vieja); `producto_empaques.codigo_barras` nullable |
+| Datos | El sync de empaques guarda los paquetes que q35 declara **sin código de barras propio** (`codigo_barras` NULL: se piden, nunca se escanean — `buscar_*_por_barcode` no matchean un vacío); un código de paquete cuyo factor no está en q35 **ya no se registra con factor 1** («fallback seguro» que contaba 1 por paquete) y la fila vieja se apaga. Compras → 🧾 Fuentes → «📦 Paquetes por completar en Siesa» (`GET /api/empaques/revisar`, solo lectura): declarados sin factor y paquetes sin código |
+
+**Medido el 2026-10-02 (solo lectura).** Producción (`metro`): 34.113 productos
+activos, **436 con paquete** con la política nueva (el HUD viejo veía 6); de
+4.596 con existencia en NB1, **196**; 27 declarados en Siesa sin factor; una
+fila PQ con factor 1 que el sync va a apagar. QA (`altaria`): 233 y 140 de
+4.842. *El 2-oct se informaron como de producción las cifras de QA.*
+
+**Trinquetes:** `tests/test_empaque_una_politica.py` — la política, pedir y
+aprobar por el servicio, la lista, el sync; y por AST, **ninguna función nueva
+lee `factor_conversion`/`unidad_empaque`** fuera de la política
+(`LECTORES_DECLARADOS`, 29 con su porqué, solo encoge; meta-tests y piso).
+`tests/test_empaque_pedir_js.py` (Node con `util.js` real: arranca en paquetes
+o en unidades, total en vivo, carrito y payload, más de lo disponible, aprobar,
+tarjeta, HUD, escapado). **20 mutaciones, 19 rojas**; la viva
+(`item_data.get('cantidad_solicitada') or cantidad`) es equivalente: el total
+que no cuadra ya se rechazó antes.
+
+**Lo que NO cubre, dicho:**
+- **El payload a Siesa no cambió**: el STS/ETS sigue mandando el paquete
+  fraccionado (5 und de un PQ×12 = 0,4167 PQ). Probar en Siesa QA que entran 5 y
+  no 5,0004 antes de usarlo en tiendas (tarea del dueño). Única diferencia: los
+  productos cuyo único «paquete» era una paca `WMS_LPN` salen ahora en UND (la
+  unidad PACA no existe en Siesa).
+- **Lo declarado en el inventario sigue leyendo el dato viejo**: los `to_dict`
+  de picking/packing/recepción, el escaneo del EAN del paquete
+  (`_es_escaneo_empaque`, `_unidades_del_escaneo`: el código escaneado define su
+  factor; cambiarle la fuente cambiaría lo que cuenta un escaneo) y la
+  heurística de packing en PQ, el conteo (`vista_hud`, fuera de alcance), y los
+  payloads de pedidos de Siesa (doble unidad).
+- **Averías** sigue en unidades (fuera de alcance).
+- **El MOQ y el «solo paquete completo»** no existen: se puede pedir cualquier
+  combinación.
+- **«Paquetes por completar»** solo lista: completarlos es en Siesa (la unidad
+  de empaque del ítem y su factor); el WMS los lee en el sync de las 02:30.
