@@ -96,8 +96,41 @@ async function fuentesCargar() {
     fuentesHtmlLeadTime(d.lead_time || {}),
     fuentesHtmlKardex(d.kardex_auto || {}),
     fuentesHtmlCarga(),
+    fuentesHtmlPaquetes(),
     fuentesHtmlContenedores(conts),
   ].join('');
+}
+
+/** Paquetes por completar en Siesa (2026-10-02). El WMS solo los lee: la
+ *  lista dice qué le falta a cada producto para poder pedirlo por paquete. */
+function fuentesHtmlPaquetes() {
+  return fuentesTarjeta('📦 Paquetes por completar en Siesa',
+    `<div style="font-size:var(--fs-sm);color:var(--tx2);margin-bottom:8px;">Productos que Siesa declara en paquete pero sin cuántas unidades trae, o paquetes sin código de barras propio. Se completan en Siesa; el WMS los lee cada noche.</div>
+    <button class="btn" onclick="fuentesPaquetesVer(event)">Ver la lista</button>
+    <div id="fuentes-paquetes"></div>`);
+}
+
+async function fuentesPaquetesVer(event) {
+  const el = document.getElementById('fuentes-paquetes');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--tx3);padding:8px 0;">Cargando…</div>';
+  let d;
+  try {
+    d = await get('/api/empaques/revisar');
+  } catch (e) {
+    el.innerHTML = fuentesAviso(e.message || 'No se pudo leer la lista de paquetes', 'err');
+    return;
+  }
+  const sinFactor = d.declarado_sin_factor || { total: 0, productos: [] };
+  const sinCodigo = d.paquete_sin_codigo || { total: 0, productos: [] };
+  const fila = (p, extra) => `<div style="padding:4px 0;border-bottom:1px solid var(--brd);font-size:var(--fs-sm);">
+      <b>${esc(p.codigo_siesa || p.codigo)}</b> · ${esc(p.nombre || '')} <span style="color:var(--tx3);">${extra}</span></div>`;
+  el.innerHTML = `
+    <div style="font-weight:700;margin:10px 0 4px;">Sin cuántas unidades trae el paquete: ${esc(fuentesNum(sinFactor.total))}</div>
+    ${sinFactor.productos.map(p => fila(p, '— Siesa dice ' + esc(p.unidad_empaque || '') + ', sin factor')).join('') || '<div style="color:var(--tx3);font-size:var(--fs-sm);">Ninguno.</div>'}
+    <div style="font-weight:700;margin:10px 0 4px;">Paquete sin código de barras propio: ${esc(fuentesNum(sinCodigo.total))}</div>
+    ${sinCodigo.productos.map(p => fila(p, '— ' + esc(p.unidad) + ' × ' + esc(p.factor) + ' und (se puede pedir, no escanear)')).join('') || '<div style="color:var(--tx3);font-size:var(--fs-sm);">Ninguno.</div>'}
+    ${(sinFactor.total > sinFactor.productos.length || sinCodigo.total > sinCodigo.productos.length) ? fuentesAviso('La lista muestra los primeros ' + d.limite + ' de cada grupo.') : ''}`;
 }
 
 /** De dónde salen las ventas: la cascada la decide el servidor

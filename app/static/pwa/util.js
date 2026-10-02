@@ -114,3 +114,143 @@ function hoyBogota(fecha, desplazamientoDias) {
     return `${b.getUTCFullYear()}-${dos(b.getUTCMonth() + 1)}-${dos(b.getUTCDate())}`;
   }
 }
+
+/* ── Paquetes (2026-10-02) ──────────────────────────────────────────────────
+ *
+ * El inventario, Siesa, el conteo y el picking siguen en UNIDADES: el paquete
+ * solo cambia cómo se ve y cómo se pide. `emp` es lo que manda el servidor
+ * (`empaque_producto.Empaque.a_dict`): `{unidad, factor}`, o `null` si el
+ * producto no viene en paquete. El total que cuenta lo recalcula el servidor
+ * (`unidades_de_linea`): la pantalla solo ayuda a pedir.
+ *
+ * Decisiones del dueño: si viene en paquete, la casilla ARRANCA en paquetes
+ * (salvo que no alcance uno completo: entonces en unidades); se ve cuántas
+ * unidades trae el paquete y cuántas suman los elegidos; y se pueden pedir
+ * unidades sueltas junto con los paquetes.
+ */
+
+/** Factor del paquete, o 0 si el producto no viene en paquete. */
+function empaqueFactor(emp) {
+  const f = Number(emp && emp.factor);
+  return Number.isInteger(f) && f > 1 ? f : 0;
+}
+
+function _empNum(n) {
+  return Number(n).toLocaleString('es-CO', { maximumFractionDigits: 0 });
+}
+
+/** «PQ × 12 und»: cuántas unidades trae el paquete. */
+function empaqueEtiqueta(emp) {
+  const f = empaqueFactor(emp);
+  return f ? `${String(emp.unidad || 'Paquete')} × ${_empNum(f)} und` : '';
+}
+
+/** `{paquetes, sueltas}` de una cantidad en unidades. */
+function empaqueDescomponer(unidades, emp) {
+  const u = Math.max(0, Math.trunc(Number(unidades) || 0));
+  const f = empaqueFactor(emp);
+  if (!f) return { paquetes: 0, sueltas: u };
+  return { paquetes: Math.floor(u / f), sueltas: u % f };
+}
+
+/** «1.368 und · 114 PQ×12», «29 und · 2 PQ×12 + 5 und»,
+ *  «5 und · no alcanza un PQ×12». Sin paquete: «1.368 und». Texto plano:
+ *  quien lo pinta lo escapa. */
+function empaqueTexto(unidades, emp) {
+  const u = Math.max(0, Math.trunc(Number(unidades) || 0));
+  const f = empaqueFactor(emp);
+  const base = `${_empNum(u)} und`;
+  if (!f) return base;
+  const unidad = String(emp.unidad || 'Paquete');
+  const { paquetes, sueltas } = empaqueDescomponer(u, emp);
+  if (!paquetes) return `${base} · no alcanza un ${unidad}×${_empNum(f)}`;
+  return `${base} · ${_empNum(paquetes)} ${unidad}×${_empNum(f)}` + (sueltas ? ` + ${_empNum(sueltas)} und` : '');
+}
+
+/** «2 PQ + 5 und = 29 und» (o «29 und» sin paquete). Texto plano. */
+function empaqueResumen(paquetes, sueltas, emp) {
+  const f = empaqueFactor(emp);
+  const p = Math.max(0, Math.trunc(Number(paquetes) || 0));
+  const s = Math.max(0, Math.trunc(Number(sueltas) || 0));
+  if (!f || !p) return `${_empNum(s)} und`;
+  const unidad = String(emp.unidad || 'Paquete');
+  const masSueltas = s ? ` + ${_empNum(s)} und` : '';
+  return `${_empNum(p)} ${unidad}${masSueltas} = ${_empNum(p * f + s)} und`;
+}
+
+/** Cómo se pidió una línea de traslado ya guardada: lo que la persona eligió
+ *  (`pedido_como`) si lo hay, si no la cantidad descompuesta con el paquete
+ *  vigente. `item` es `ItemSolicitudTraslado.to_dict()`. */
+function empaqueDeLinea(item, unidades) {
+  const pc = item && item.pedido_como;
+  const u = unidades != null ? unidades : (item && item.cantidad_solicitada);
+  if (pc && empaqueFactor(pc) && Number(u) === Number(item.cantidad_solicitada)) {
+    return empaqueResumen(pc.paquetes, pc.sueltas, pc);
+  }
+  return empaqueTexto(u, item && item.empaque);
+}
+
+/** Lo que se precarga al pintar las casillas: paquetes si alcanza uno
+ *  completo, si no unidades. `inicial` (`{paquetes, sueltas}`) manda. */
+function empaqueInicial(emp, disponible, inicial) {
+  if (inicial) return { paquetes: inicial.paquetes || 0, sueltas: inicial.sueltas || 0 };
+  const f = empaqueFactor(emp);
+  if (f && Number(disponible) >= f) return { paquetes: 1, sueltas: 0 };
+  return { paquetes: 0, sueltas: 1 };
+}
+
+/** Las casillas para pedir una línea. `id` solo con [A-Za-z0-9-] (va en un
+ *  atributo y dentro de un `onclick`). Con paquete: [PQ] + [und] y el total en
+ *  vivo; sin paquete: una casilla en unidades, como siempre. `minimo` = 0
+ *  donde se puede aprobar cero (el ajuste del admin). */
+function empaqueCasillasHtml(id, emp, disponible, inicial, minimo) {
+  const min = minimo === 0 ? 0 : 1;
+  const seguro = String(id).replace(/[^A-Za-z0-9-]/g, '-');
+  const f = empaqueFactor(emp);
+  const ini = empaqueInicial(emp, disponible, inicial);
+  const caja = 'width:58px;padding:7px;background:var(--bg-s);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);text-align:center;';
+  if (!f) {
+    return `<input type="number" min="${min}" value="${esc(ini.sueltas)}" id="${seguro}-und" aria-label="Unidades" style="${caja}">`;
+  }
+  const alcanza = Number(disponible) >= f;
+  return `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;">
+    <div style="display:flex;align-items:center;gap:4px;">
+      <input type="number" min="0" value="${esc(ini.paquetes)}" id="${seguro}-pq" aria-label="Paquetes"
+        oninput="empaqueActualizarTotal('${seguro}', ${f})" style="${caja}">
+      <span style="font-size:var(--fs-xs);color:var(--tx2);">${esc(String(emp.unidad || 'Paquete'))}</span>
+      <span style="font-size:var(--fs-xs);color:var(--tx3);">+</span>
+      <input type="number" min="0" value="${esc(ini.sueltas)}" id="${seguro}-und" aria-label="Unidades sueltas"
+        oninput="empaqueActualizarTotal('${seguro}', ${f})" style="${caja}">
+      <span style="font-size:var(--fs-xs);color:var(--tx2);">und</span>
+    </div>
+    <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(empaqueEtiqueta(emp))}${alcanza ? '' : ' · no alcanza un paquete completo'}</div>
+    <div id="${seguro}-total" style="font-size:var(--fs-xs);font-weight:700;color:var(--ok-tx);">= ${esc(_empNum(ini.paquetes * f + ini.sueltas))} und</div>
+  </div>`;
+}
+
+/** Lo que dicen las casillas: `{paquetes, sueltas, total}` (enteros ≥ 0). */
+function empaqueLeer(id, emp) {
+  const seguro = String(id).replace(/[^A-Za-z0-9-]/g, '-');
+  const leer = (suf) => {
+    const el = typeof document !== 'undefined' ? document.getElementById(`${seguro}-${suf}`) : null;
+    const n = Math.trunc(Number(el && el.value));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const f = empaqueFactor(emp);
+  const paquetes = f ? leer('pq') : 0;
+  const sueltas = leer('und');
+  return { paquetes, sueltas, total: paquetes * (f || 1) + sueltas };
+}
+
+/** Reescribe «= N und» mientras la persona escribe. */
+function empaqueActualizarTotal(id, factor) {
+  const seguro = String(id).replace(/[^A-Za-z0-9-]/g, '-');
+  const f = Math.max(1, Math.trunc(Number(factor) || 1));
+  const v = (suf) => {
+    const el = document.getElementById(`${seguro}-${suf}`);
+    const n = Math.trunc(Number(el && el.value));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const el = document.getElementById(`${seguro}-total`);
+  if (el) el.textContent = `= ${_empNum(v('pq') * f + v('und'))} und`;
+}

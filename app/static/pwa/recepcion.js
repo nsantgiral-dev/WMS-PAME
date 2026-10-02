@@ -1097,7 +1097,7 @@ async function recepCargarTraslados(silencioso = false) {
         <div style="font-size:var(--fs-xs);color:${_acento};margin-bottom:8px;">📦 ${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsp} und esperadas</div>
         ${(s.items || []).slice(0, 3).map(i => `
           <div style="font-size:var(--fs-xs);color:var(--tx2);padding:2px 0;">
-            ${i.producto_nombre || i.producto_codigo} · ${i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0} und
+            ${esc(i.producto_nombre || i.producto_codigo)} · ${esc(empaqueTexto(i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0, i.empaque))}
             ${i.motivo_averia ? `<div style="color:var(--warn-tx);padding-left:8px;">${esc(i.motivo_averia)}</div>` : ''}
           </div>`).join('')}
         ${(s.items || []).length > 3 ? `<div style="font-size:var(--fs-xs);color:var(--tx3);padding:2px 0;">+ ${s.items.length - 3} más...</div>` : ''}
@@ -1223,7 +1223,8 @@ function _recepRenderItemsTraslado(items) {
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="min-width:0;flex:1;">
             <div style="font-size:var(--fs-sm);font-weight:600;color:${completo ? 'var(--ok-tx)' : 'var(--tx)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${i.producto_nombre || i.producto_codigo}</div>
-            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${i.producto_codigo_siesa || i.producto_codigo}</div>
+            <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(i.producto_codigo_siesa || i.producto_codigo)}</div>
+            ${empaqueFactor(i.empaque) ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px;">Llegan ${esc(empaqueTexto(esperado, i.empaque))}</div>` : ''}
             ${i.motivo_averia ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:3px;">⚠ ${esc(i.motivo_averia)}</div>` : ''}
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding-left:8px;">

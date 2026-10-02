@@ -117,6 +117,7 @@ async function tiendaCargarSolicitudes() {
           <span style="background:${col};color:#fff;font-size:var(--fs-xs);font-weight:700;padding:3px 8px;border-radius:8px;">${esc(s.estado)}</span>
         </div>
         <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(s.total_items)} ítem${s.total_items !== 1 ? 's' : ''} · ${s.fecha_creacion ? new Date(s.fecha_creacion).toLocaleDateString('es-CO') : ''}</div>
+        ${(s.items || []).map(i => `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px;">${esc(i.producto_codigo_siesa || i.producto_codigo)} — ${esc(empaqueDeLinea(i))}</div>`).join('')}
         ${s.motivo_rechazo ? `<div style="font-size:var(--fs-xs);color:var(--err-tx);margin-top:4px;">Motivo: ${esc(s.motivo_rechazo)}</div>` : ''}
         ${s.es_averia ? `<div style="font-size:var(--fs-xs);color:var(--warn-tx);margin-top:4px;">⚠ Avería · hacia ${esc(s.bodega_destino_siesa)}</div>` : ''}
         ${s.estado === 'BORRADOR' ? `
@@ -460,12 +461,10 @@ function tiendaRenderStock() {
     <div style="background:var(--bg-s);border:1px solid ${enCarrito?'#4ade80':'var(--brd)'};border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:12px;">
       <div style="flex:1;min-width:0;">
         <div style="font-size:var(--fs-sm);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(item.nombre || '—')}</div>
-        <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(item.codigo_siesa || '')} · Disponible: <span style="color:var(--ok-tx);font-weight:700;">${esc(item.disponible)}</span></div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(item.codigo_siesa || '')} · Disponible: <span style="color:var(--ok-tx);font-weight:700;">${esc(empaqueTexto(item.disponible, item.empaque))}</span></div>
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-        <input type="number" min="1" max="${esc(item.disponible)}" value="${enCarrito?.cantidad || 1}"
-          id="${qid}"
-          style="width:56px;padding:7px;background:var(--bg-s);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);text-align:center;">
+        ${empaqueCasillasHtml(qid, item.empaque, item.disponible, enCarrito ? { paquetes: enCarrito.paquetes, sueltas: enCarrito.sueltas } : null)}
         <button onclick="tiendaAgregarCarrito('${esc(item.codigo_siesa)}','${nombreEsc}',${esc(item.disponible)},${esc(item.producto_id||'null')})"
           style="padding:8px 12px;background:${enCarrito?'#4ade80':'#fff'};color:#000;border:none;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">
           ${enCarrito ? '✓' : '+'}
@@ -483,15 +482,22 @@ function tiendaRenderStock() {
  */
 function tiendaAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
   const inputId = `qty-${codigoSiesa.replace(/[^a-zA-Z0-9]/g,'-')}`;
-  const cantidadInput = document.getElementById(inputId);
-  const cantidad = Math.min(parseInt(cantidadInput?.value || 1), disponible);
-  if (cantidad < 1) return;
+  // El paquete del producto lo trae la lista (`item.empaque`, del servidor).
+  const item = _TIENDA_STOCK.find(i => i.codigo_siesa === codigoSiesa) || {};
+  const emp = item.empaque || null;
+  const { paquetes, sueltas, total } = empaqueLeer(inputId, emp);
+  if (total < 1) { alerta('Escriba cuántos paquetes o unidades necesita', 'error'); return; }
+  if (total > disponible) {
+    alerta(`Pidió ${empaqueResumen(paquetes, sueltas, emp)} y en la bodega hay ${empaqueTexto(disponible, emp)}`, 'error');
+    return;
+  }
+  const linea = { cantidad: total, paquetes, sueltas, empaque: emp };
 
   const idx = _TIENDA_CARRITO.findIndex(c => c.codigo_siesa === codigoSiesa);
   if (idx >= 0) {
-    _TIENDA_CARRITO[idx].cantidad = cantidad;
+    Object.assign(_TIENDA_CARRITO[idx], linea);
   } else {
-    _TIENDA_CARRITO.push({ codigo_siesa: codigoSiesa, nombre, disponible, cantidad, producto_id: productoId });
+    _TIENDA_CARRITO.push({ codigo_siesa: codigoSiesa, nombre, disponible, producto_id: productoId, ...linea });
   }
   tiendaActualizarCarrito();
   tiendaRenderStock();
@@ -507,7 +513,7 @@ function tiendaActualizarCarrito() {
   itemsEl.innerHTML = _TIENDA_CARRITO.map(c =>
     `<div style="display:flex;justify-content:space-between;padding:3px 0;">
       <span>${esc(c.nombre)}</span>
-      <span style="color:var(--ok-tx);font-weight:700;">${esc(c.cantidad)} und
+      <span style="color:var(--ok-tx);font-weight:700;">${esc(empaqueResumen(c.paquetes, c.sueltas, c.empaque))}
         <button onclick="tiendaQuitarCarrito('${esc(c.codigo_siesa)}')" style="background:none;border:none;color:var(--err-tx);cursor:pointer;font-size:var(--fs-xs);margin-left:4px;">✕</button>
       </span>
     </div>`
@@ -533,6 +539,9 @@ async function tiendaEnviarSolicitud(event) {
     .map(c => ({
       producto_id: c.producto_id,
       cantidad_solicitada: c.cantidad,
+      // Cómo lo pidió: el servidor recalcula el total con el factor vigente
+      // y rechaza si no cuadra (`empaque_producto.unidades_de_linea`).
+      ...(empaqueFactor(c.empaque) ? { paquetes: c.paquetes, sueltas: c.sueltas } : {}),
       disponible_siesa: c.disponible,
     }));
 
@@ -758,6 +767,7 @@ function _tiendaRenderItemsPickingTraslado(items) {
           <div style="min-width:0;flex:1;">
             <div style="font-size:var(--fs-sm);font-weight:600;color:${completo ? 'var(--ok-tx)' : 'var(--tx)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(i.producto_nombre || i.producto_codigo)}</div>
             <div style="font-size:var(--fs-xs);color:var(--tx3);margin-top:2px;">${esc(i.producto_codigo_siesa || i.producto_codigo)}</div>
+            ${empaqueFactor(i.empaque) ? `<div style="font-size:var(--fs-xs);color:var(--tx2);margin-top:2px;">Llegan ${esc(empaqueTexto(esperado, i.empaque))}</div>` : ''}
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding-left:8px;">
             <button onclick="tiendaContarItem(${esc(i.producto_id)}, -1)"

@@ -92,6 +92,17 @@ async function pickingYaVolvi() {
  * Renderiza la tarea activa en el HUD del operario.
  * @param {{tipo: string, producto_codigo: string, producto_nombre: string, cantidad_requerida: number, cantidad_escaneada: number, ubicacion: string, referencia: string, lote: string, factor_conversion: number, unidad_empaque: string, empaques_escaneados: number, conteo_intercalado: Object|null}} t
  */
+/**
+ * «+5 und · de 2 PQ + 5 und»: lo recogido (paquetes en grande, las sueltas
+ * acá) contra lo pedido, en paquetes completos más sueltas. Texto plano.
+ */
+function _pickingTextoPaquetes(pkgs, sueltas, req, factor, unidad) {
+  const reqP = Math.floor(req / factor);
+  const reqS = req % factor;
+  const tengo = sueltas > 0 ? `+${sueltas} und · ` : '';
+  return `${tengo}de ${reqP} ${unidad}${reqS > 0 ? ` + ${reqS} und` : ''}`;
+}
+
 function renderTarea(t) {
   // El conteo tiene su propio HUD (conteo.js), compartido con el Conteo
   // Definitivo: producto en grande, cantidad tecleable, cierres explícitos.
@@ -104,14 +115,17 @@ function renderTarea(t) {
   const pct = t.cantidad_requerida ? Math.min((t.cantidad_escaneada / t.cantidad_requerida) * 100, 100) : 0;
   const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
 
-  // Empaque
+  // Empaque — solo cómo se VE: lo recogido sigue en unidades. El factor lo
+  // decide el servidor (`empaque_producto`); los paquetes se derivan de las
+  // unidades (el PWA manda el escaneo de un paquete ya convertido a unidades,
+  // así que `empaques_escaneados` no los cuenta). Con menos de un paquete
+  // pedido, el contador de unidades de siempre.
   const factor       = t.factor_conversion || 1;
-  const tieneEmpaque = esPicking && factor > 1;
-  const unidadLabel  = (t.unidad_empaque || 'PKG').toUpperCase();
-  const pkgs         = t.empaques_escaneados || 0;
   const unds         = t.cantidad_escaneada || 0;
   const req          = t.cantidad_requerida || 0;
-  const pkgsReq      = factor > 1 ? Math.ceil(req / factor) : req;
+  const tieneEmpaque = esPicking && factor > 1 && req >= factor;
+  const unidadLabel  = (t.unidad_empaque || 'PKG').toUpperCase();
+  const pkgs         = factor > 1 ? Math.floor(unds / factor) : 0;
   const sueltas      = factor > 1 ? unds % factor : 0;
 
   // "Disponible en Siesa" (PD1447, 2026-09-02): lo que Siesa seguía
@@ -135,8 +149,8 @@ function renderTarea(t) {
           <div style="font-size:var(--fs-xs);color:var(--tx3);padding-top:6px;letter-spacing:1px;">CANTIDAD</div>
           <div style="text-align:right;">
             <div id="contador-pkg" style="font-size:80px;font-weight:900;color:var(--ok-tx);line-height:1;">${pkgs}</div>
-            <div id="contador-und" style="font-size:20px;font-weight:700;color:var(--ok-tx);margin-top:2px;">de ${pkgsReq} ${unidadLabel}${sueltas > 0 ? ` +${sueltas} und` : ''}</div>
-            <div id="contador-factor" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">${unds}/${req} und totales</div>
+            <div id="contador-und" style="font-size:20px;font-weight:700;color:var(--ok-tx);margin-top:2px;">${esc(_pickingTextoPaquetes(pkgs, sueltas, req, factor, unidadLabel))}</div>
+            <div id="contador-factor" style="font-size:var(--fs-xs);color:var(--tx3);margin-top:4px;">${esc(unds)}/${esc(req)} und totales · ${esc(unidadLabel)} × ${esc(factor)} und</div>
           </div>
         </div>
         <div style="height:8px;background:var(--bg-s2);border-radius:4px;margin-top:12px;">
@@ -465,15 +479,14 @@ function _actualizarContadorPicking(r) {
   if (pkgEl && undEl) {
     const factor   = TAREA_ACTUAL.factor_conversion || 1;
     const unidad   = (TAREA_ACTUAL.unidad_empaque || 'PKG').toUpperCase();
-    const pkgs     = r.empaques_escaneados || 0;
     const unds     = r.cantidad_actual || 0;
     const req      = r.cantidad_requerida || 0;
-    const pkgsReq  = factor > 1 ? Math.ceil(req / factor) : req;
+    const pkgs     = factor > 1 ? Math.floor(unds / factor) : 0;
     const sueltas  = factor > 1 ? unds % factor : 0;
     pkgEl.textContent = pkgs;
-    undEl.textContent = `de ${pkgsReq} ${unidad}${sueltas > 0 ? ` +${sueltas} und` : ''}`;
+    undEl.textContent = _pickingTextoPaquetes(pkgs, sueltas, req, factor, unidad);
     const factorEl = document.getElementById('contador-factor');
-    if (factorEl) factorEl.textContent = `${unds}/${req} und totales`;
+    if (factorEl) factorEl.textContent = `${unds}/${req} und totales · ${unidad} × ${factor} und`;
     if (r.puede_confirmar) { pkgEl.style.color = 'var(--ok-tx)'; undEl.style.color = 'var(--ok-tx)'; }
   } else {
     // Vista simple (unidades sueltas)

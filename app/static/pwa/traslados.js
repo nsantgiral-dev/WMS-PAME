@@ -138,10 +138,10 @@ function _renderTrasladoCard(s) {
 
   const itemsResumen = (s.items || []).map(i => {
     const aprobado = i.cantidad_aprobada && i.cantidad_aprobada !== i.cantidad_solicitada
-      ? ` <span style="color:var(--warn-tx);">(aprobado: ${esc(i.cantidad_aprobada)})</span>` : '';
+      ? ` <span style="color:var(--warn-tx);">(aprobado: ${esc(empaqueTexto(i.cantidad_aprobada, i.empaque))})</span>` : '';
     const enviado = i.cantidad_enviada > 0
-      ? ` <span style="color:var(--ok-tx);">→ enviado: ${esc(i.cantidad_enviada)}</span>` : '';
-    return `<div style="font-size:var(--fs-md);color:var(--tx3);">${esc(i.producto_codigo || i.producto_nombre)} · ${esc(i.cantidad_solicitada)} und${aprobado}${enviado}</div>`;
+      ? ` <span style="color:var(--ok-tx);">→ enviado: ${esc(empaqueTexto(i.cantidad_enviada, i.empaque))}</span>` : '';
+    return `<div style="font-size:var(--fs-md);color:var(--tx3);">${esc(i.producto_codigo || i.producto_nombre)} · ${esc(empaqueDeLinea(i))}${aprobado}${enviado}</div>`;
   }).join('');
 
   // Barra de progreso picking
@@ -533,11 +533,10 @@ function adminPedirRenderStock() {
     return `<div style="background:var(--bg-s);border:1px solid ${enCarrito?'#4ade80':'var(--brd)'};border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:12px;">
       <div style="flex:1;min-width:0;">
         <div style="font-size:var(--fs-sm);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(item.nombre||'—')}</div>
-        <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(item.codigo_siesa||'')} · Disponible: <span style="color:var(--ok-tx);font-weight:700;">${esc(item.disponible)}</span></div>
+        <div style="font-size:var(--fs-xs);color:var(--tx3);">${esc(item.codigo_siesa||'')} · Disponible: <span style="color:var(--ok-tx);font-weight:700;">${esc(empaqueTexto(item.disponible, item.empaque))}</span></div>
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-        <input type="number" min="1" max="${esc(item.disponible)}" value="${enCarrito?.cantidad||1}" id="${qid}"
-          style="width:56px;padding:7px;background:var(--bg-s);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);text-align:center;">
+        ${empaqueCasillasHtml(qid, item.empaque, item.disponible, enCarrito ? { paquetes: enCarrito.paquetes, sueltas: enCarrito.sueltas } : null)}
         <button onclick="adminPedirAgregarCarrito('${esc(item.codigo_siesa)}','${nombreEsc}',${esc(item.disponible)},${esc(item.producto_id||'null')})"
           style="padding:8px 12px;background:${enCarrito?'#4ade80':'#fff'};color:#000;border:none;border-radius:8px;font-size:var(--fs-xs);font-weight:700;cursor:pointer;">${enCarrito?'✓':'+'}</button>
       </div>
@@ -553,12 +552,20 @@ function adminPedirRenderStock() {
  * @param {number|null} productoId - WMS product ID.
  */
 function adminPedirAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
-  const inp = document.getElementById(`ap-qty-${codigoSiesa.replace(/[^a-zA-Z0-9]/g,'-')}`);
-  const cantidad = Math.min(parseInt(inp?.value || 1), disponible);
-  if (cantidad < 1) return;
+  const qid = `ap-qty-${codigoSiesa.replace(/[^a-zA-Z0-9]/g,'-')}`;
+  // El paquete del producto lo trae la página (`item.empaque`, del servidor).
+  const item = _AP_STOCK.find(i => i.codigo_siesa === codigoSiesa) || {};
+  const emp = item.empaque || null;
+  const { paquetes, sueltas, total } = empaqueLeer(qid, emp);
+  if (total < 1) { alerta('Escriba cuántos paquetes o unidades necesita', 'error'); return; }
+  if (total > disponible) {
+    alerta(`Pidió ${empaqueResumen(paquetes, sueltas, emp)} y en la bodega hay ${empaqueTexto(disponible, emp)}`, 'error');
+    return;
+  }
+  const linea = { cantidad: total, paquetes, sueltas, empaque: emp };
   const idx = _AP_CARRITO.findIndex(c => c.codigo_siesa === codigoSiesa);
-  if (idx >= 0) _AP_CARRITO[idx].cantidad = cantidad;
-  else _AP_CARRITO.push({ codigo_siesa: codigoSiesa, nombre, disponible, cantidad, producto_id: productoId });
+  if (idx >= 0) Object.assign(_AP_CARRITO[idx], linea);
+  else _AP_CARRITO.push({ codigo_siesa: codigoSiesa, nombre, disponible, producto_id: productoId, ...linea });
   adminPedirActualizarCarrito();
   adminPedirRenderStock();
 }
@@ -573,7 +580,7 @@ function adminPedirActualizarCarrito() {
   items.innerHTML = _AP_CARRITO.map(c =>
     `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--brd);">
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-xs);color:var(--tx);">${esc(c.nombre)}</span>
-      <span style="flex-shrink:0;color:var(--ok-tx);font-weight:700;font-size:var(--fs-sm);">${esc(c.cantidad)}</span>
+      <span style="flex-shrink:0;color:var(--ok-tx);font-weight:700;font-size:var(--fs-sm);">${esc(empaqueResumen(c.paquetes, c.sueltas, c.empaque))}</span>
       <button onclick="adminPedirQuitarCarrito('${esc(c.codigo_siesa)}')" style="flex-shrink:0;background:none;border:none;color:var(--err-tx);cursor:pointer;font-size:var(--fs-sm);padding:2px 4px;">✕</button>
     </div>`
   ).join('');
@@ -597,6 +604,7 @@ async function adminPedirEnviarSolicitud() {
   const items = _AP_CARRITO.filter(c => c.producto_id).map(c => ({
     producto_id: c.producto_id,
     cantidad_solicitada: c.cantidad,
+    ...(empaqueFactor(c.empaque) ? { paquetes: c.paquetes, sueltas: c.sueltas } : {}),
     disponible_siesa: c.disponible,
   }));
   if (!items.length) { alerta('No se encontraron productos válidos', 'error'); return; }
@@ -654,7 +662,7 @@ async function cargarTrasladosOperario() {
 function _renderTrasladoOperario(t) {
   const itemsHtml = (t.items || []).map(i => {
     const cant = i.cantidad_aprobada || i.cantidad_solicitada;
-    return `<div style="font-size:var(--fs-xs);color:var(--tx2);">${esc(i.producto_codigo)} — <b style="color:var(--tx);">${cant} und</b></div>`;
+    return `<div style="font-size:var(--fs-xs);color:var(--tx2);">${esc(i.producto_codigo)} — <b style="color:var(--tx);">${esc(empaqueDeLinea(i, cant))}</b></div>`;
   }).join('');
   return `
     <div style="background:var(--lila-bg);border:1px solid var(--lila-brd);border-radius:12px;padding:14px;margin-bottom:10px;">
@@ -760,6 +768,30 @@ async function trasReasignarOperario(id) {
  * Open the approval modal to approve quantities and assign an operario.
  * @param {number} id - Traslado solicitud ID.
  */
+/**
+ * Casillas para ajustar lo aprobado de una línea (paquetes + sueltas si el
+ * producto viene en paquete). Arranca en lo pedido: como lo pidió la persona
+ * si el factor sigue igual, si no la cantidad descompuesta.
+ * @param {Object} i - ItemSolicitudTraslado.to_dict()
+ * @param {string} prefijo - prefijo del id de las casillas
+ */
+function _trasCasillasAprobar(i, prefijo) {
+  const pc = i.pedido_como;
+  const mismoFactor = pc && empaqueFactor(pc) && empaqueFactor(pc) === empaqueFactor(i.empaque);
+  const inicial = mismoFactor
+    ? { paquetes: pc.paquetes, sueltas: pc.sueltas }
+    : empaqueDescomponer(i.cantidad_solicitada, i.empaque);
+  return empaqueCasillasHtml(`${prefijo}${i.id}`, i.empaque, i.disponible_siesa, inicial, 0);
+}
+
+/** Lo aprobado de una línea para el servidor, que recalcula el total. */
+function _trasLeerAprobado(i, prefijo) {
+  const { paquetes, sueltas, total } = empaqueLeer(`${prefijo}${i.id}`, i.empaque);
+  return empaqueFactor(i.empaque)
+    ? { cantidad_aprobada: total, paquetes, sueltas }
+    : { cantidad_aprobada: total };
+}
+
 async function trasAprobar(id) {
   // Carga solicitud y operarios en paralelo
   let solicitud, operariosData;
@@ -777,12 +809,11 @@ async function trasAprobar(id) {
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
       <div style="flex:1;font-size:var(--fs-xs);">
         <div style="font-weight:600;">${esc(i.producto_codigo)}</div>
-        <div style="color:var(--tx3);font-size:var(--fs-xs);">Solicitado: ${esc(i.cantidad_solicitada)} · Disp. Siesa: ${i.disponible_siesa ?? '—'}</div>
+        <div style="color:var(--tx3);font-size:var(--fs-xs);">Solicitado: ${esc(empaqueDeLinea(i))} · Disp. Siesa: ${esc(i.disponible_siesa != null ? empaqueTexto(i.disponible_siesa, i.empaque) : '—')}</div>
       </div>
       <div style="display:flex;align-items:center;gap:4px;">
         <label style="font-size:var(--fs-xs);color:var(--tx2);">Aprobar:</label>
-        <input type="number" id="apr-${esc(i.id)}" value="${esc(i.cantidad_solicitada)}" min="0"
-          style="width:70px;padding:6px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);text-align:center;">
+        ${_trasCasillasAprobar(i, 'apr-')}
       </div>
     </div>
   `).join('');
@@ -816,7 +847,7 @@ async function trasAprobar(id) {
   modal.querySelector('#btn-apr-ok').onclick = async () => {
     const items_aprobados = items.map(i => ({
       id: i.id,
-      cantidad_aprobada: Number(document.getElementById(`apr-${i.id}`).value) || 0
+      ..._trasLeerAprobado(i, 'apr-')
     }));
     const operario_id = document.getElementById('apr-operario').value
       ? Number(document.getElementById('apr-operario').value) : null;
@@ -1353,12 +1384,11 @@ async function reqEditarAprobar(id) {
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
       <div style="flex:1;font-size:var(--fs-xs);">
         <div style="font-weight:600;">${esc(i.producto_nombre || i.producto_codigo)}</div>
-        <div style="color:var(--tx3);font-size:var(--fs-xs);">Solicitado: ${esc(i.cantidad_solicitada)} · Disp. Siesa: ${i.disponible_siesa ?? '—'}</div>
+        <div style="color:var(--tx3);font-size:var(--fs-xs);">Solicitado: ${esc(empaqueDeLinea(i))} · Disp. Siesa: ${esc(i.disponible_siesa != null ? empaqueTexto(i.disponible_siesa, i.empaque) : '—')}</div>
       </div>
       <div style="display:flex;align-items:center;gap:4px;">
         <label style="font-size:var(--fs-xs);color:var(--tx2);">Aprobar:</label>
-        <input type="number" id="req-apr-${esc(i.id)}" value="${esc(i.cantidad_solicitada)}" min="0"
-          style="width:70px;padding:6px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:var(--fs-sm);text-align:center;">
+        ${_trasCasillasAprobar(i, 'req-apr-')}
       </div>
     </div>
   `).join('');
@@ -1392,7 +1422,7 @@ async function reqEditarAprobar(id) {
   modal.querySelector('#btn-req-apr-ok').onclick = async () => {
     const items_aprobados = items.map(i => ({
       id: i.id,
-      cantidad_aprobada: Number(document.getElementById(`req-apr-${i.id}`).value) || 0
+      ..._trasLeerAprobado(i, 'req-apr-')
     }));
     const operario_id = document.getElementById('req-apr-operario').value
       ? Number(document.getElementById('req-apr-operario').value) : null;
