@@ -231,7 +231,9 @@ class TestLosMapasDelJSCoinciden:
     #: (archivo, etiqueta, patrón que aísla ESE mapa). El patrón recorta el
     #: bloque; después se buscan códigos de bodega solo adentro.
     _MAPAS = (
-        ('traslados.js', '_REQ_BODEGA_NOMBRES', r'_REQ_BODEGA_NOMBRES\s*=\s*\{(.*?)\}'),
+        # Salió de traslados.js (`_REQ_BODEGA_NOMBRES`) el 2026-10-02: una sola
+        # función `nombreBodega` para todo traslado.
+        ('util.js', 'BODEGA_NOMBRES', r'const BODEGA_NOMBRES\s*=\s*\{(.*?)\}'),
         ('tienda.js', '_BODEGAS_ORIGEN', r'_BODEGAS_ORIGEN\s*=\s*\[(.*?)\]'),
         ('app.js', '_USR_NOMBRES_BOD', r'_USR_NOMBRES_BOD\s*=\s*\{(.*?)\}'),
         ('app.js', 'onchange nombres={}', r'const nombres=\{(.*?)\}'),
